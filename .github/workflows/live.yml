@@ -1,0 +1,39 @@
+name: Live check
+
+# Runs the README's example against production: on every push and pull request,
+# and daily, so a production change that breaks the example is noticed without
+# waiting for the next commit here. An outage is a warning (tests/live.sh exits
+# 0); a document that does not verify, a revoked or unknown status, or a 404 on
+# the example fail.
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: live-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live check (production example)
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install openssl, python3, jq, curl
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates
+      # An outage is a warning (exit 0); a document that does not verify, a
+      # revoked or unknown status, or a 404 on the README's example fail.
+      - name: tests/live.sh
+        run: bash tests/live.sh
