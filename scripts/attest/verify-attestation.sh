@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2317 # cleanup() is invoked only indirectly via
+# shellcheck disable=SC2317,SC2329 # cleanup() is invoked only indirectly via
 # `trap cleanup EXIT`, not by a direct call shellcheck can see, so it
-# misreads the function body as unreachable. File-wide, one rule, documented.
+# misreads the function body as unreachable. File-wide, one rule (SC2329 is its name from ShellCheck 0.11), documented.
 # =============================================================================
 # verify-attestation.sh — verify a HodeiShield posture attestation OFFLINE.
 #
@@ -32,8 +32,9 @@
 # TWO SERIALISATIONS, both supported:
 #
 #   ATTACHED   protected.payload.signature
-#              The canonical ENVELOPE bytes travel inside the token. Verifiable
-#              with OpenSSL alone.
+#              The canonical ENVELOPE bytes travel inside the token. Without
+#              --claims, they are decoded back into the claims they encode, and
+#              those get every check a detached document gets (python3 needed).
 #
 #   DETACHED   protected..signature        (RFC 7515 Appendix F)
 #              The payload segment is EMPTY; you are handed the claims as JSON
@@ -171,6 +172,11 @@ MIN_SEQ=''; EXPECT_ISSUER=''
 # it is a rejection regardless of how good the signature is.
 MAX_TTL_SECONDS=3600
 
+# How far in the future `generatedAt` may sit before the document is rejected as
+# `not_yet_valid` (posture.ts DEFAULT_CLOCK_SKEW_MS / 1000, the house NTP
+# allowance). Without it, a document dated a year ahead stays "fresh" all year.
+POSTURE_CLOCK_SKEW_SECONDS=300
+
 # The verifier-side ceiling on a status list's own `nextUpdate - issuedAt`
 # (status-list.ts MAX_STATUS_LIST_VALIDITY_SECONDS). Re-checked here for the
 # same reason posture.ts's ttl_exceeded is re-checked above: a producer-side
@@ -204,7 +210,8 @@ while [ $# -gt 0 ]; do
     --check-kid)            CHECK_KID="${2:?}"; shift 2 ;;
     --check-subject)        CHECK_SUBJECT="${2:?}"; shift 2 ;;
     --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; shift 2 ;;
-    --min-seq)              MIN_SEQ="${2:?}"; shift 2 ;;
+    --min-seq)              MIN_SEQ="${2:?}"; shift 2
+      [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || { printf 'error: --min-seq must be a non-negative integer\n' >&2; exit 2; } ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
     -h|--help)      sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
@@ -519,6 +526,56 @@ elif what == "posture":  sys.stdout.buffer.write(posture_bytes(claims.get("postu
 else: raise SystemExit("canonical: unknown target %r" % what)
 '
 
+# The inverse of CANON_PY's envelope encoder, for an ATTACHED JWS handed over
+# without its claims JSON. Before 2026-09-29 that path verified the signature
+# and then skipped freshness, --expect-slug, --expect-issuer, --expect-nonce and
+# the subject-revocation rule, because there was no JSON to read them from; any
+# public detached document could be re-wrapped as attached to reach it. Now the
+# payload is decoded into the claims it encodes, strictly (every byte consumed),
+# and those claims go through exactly the same checks as a detached document.
+# Section 4 then re-encodes them and requires the result to equal the payload.
+#   argv[1]  the decoded payload bytes;  stdout: the claims JSON
+DECODE_PY='
+import json, struct, sys
+b = open(sys.argv[1], "rb").read()
+pos = 0
+def take(n):
+    global pos
+    if n < 0 or pos + n > len(b): raise SystemExit("decode: truncated payload")
+    out = b[pos:pos + n]; pos += n; return out
+def lit(x):
+    if take(len(x)) != x: raise SystemExit("decode: wrong domain separator")
+def u64be(): return struct.unpack(">Q", take(8))[0]
+def raw():
+    n = u64be()
+    if n > len(b): raise SystemExit("decode: length out of range")
+    return take(n)
+def st(): return raw().decode("utf-8", "strict")
+def opt():
+    t = take(1)
+    if t == b"\x00": return None
+    if t == b"\x01": return st()
+    raise SystemExit("decode: bad option tag")
+def u64():
+    v = raw()
+    if len(v) != 8: raise SystemExit("decode: bad u64")
+    return struct.unpack(">Q", v)[0]
+lit(b"hodei-shield.attest.attestation.v1")
+c = {"docVersion": st(), "iss": st(), "kid": st(), "jti": opt(), "nonce": opt(), "overallBand": opt()}
+nested = raw()
+if pos != len(b): raise SystemExit("decode: trailing bytes after the envelope")
+b, pos = nested, 0
+lit(b"hodei-shield.attest.posture.v1")
+p = {"version": st(), "slug": st(), "orgName": st(), "visibility": st(), "generatedAt": st(),
+     "expiresAt": opt(), "lastCheckedAt": opt()}
+n = u64()
+if n > 64: raise SystemExit("decode: too many frameworks")
+p["frameworks"] = [{"code": st(), "label": st(), "band": st()} for _ in range(n)]
+if pos != len(b): raise SystemExit("decode: trailing bytes after the posture")
+c["posture"] = p
+json.dump(c, sys.stdout, indent=2)
+'
+
 # Document surgery: pull the pieces out of whatever JSON the caller handed us.
 # Kept separate from the encoders above so the code that decides WHICH bytes to
 # hash stays readable, and so no JSON-shaped convenience can leak into the
@@ -556,8 +613,10 @@ elif mode == "split":
     json.dump(c, open(sys.argv[3], "w"), indent=2)
     if isinstance(sig, str): sys.stdout.write(sig)
 elif mode == "posture":
-    c = doc.get("claims", claims_of(doc))
-    p = c.get("posture")
+    # The SAME member the canonical encoder reads (claims["posture"]), never a
+    # "claims"/"attestation" wrapper found inside the claims: those are not
+    # what the signature covers.
+    p = doc.get("posture") if isinstance(doc, dict) else None
     if not isinstance(p, dict): raise SystemExit("document: claims.posture is missing")
     json.dump(p, open(sys.argv[3], "w"), indent=2)
 elif mode == "field":
@@ -566,6 +625,22 @@ elif mode == "field":
     elif v is not None: sys.stdout.write(json.dumps(v))
 elif mode == "has":
     sys.stdout.write("0" if doc.get(sys.argv[3]) is None else "1")
+elif mode == "unsigned":
+    # Every member the canonical encoders do NOT read, one path per line. Those
+    # bytes are outside the signature, so a document carrying them is showing
+    # you facts nobody signed.
+    SIGNED_CLAIMS    = {"docVersion", "iss", "kid", "jti", "nonce", "overallBand", "posture"}
+    SIGNED_POSTURE   = {"version", "slug", "orgName", "visibility", "generatedAt",
+                        "expiresAt", "lastCheckedAt", "frameworks"}
+    SIGNED_FRAMEWORK = {"code", "label", "band"}
+    extra = ["claims." + k for k in doc if k not in SIGNED_CLAIMS]
+    p = doc.get("posture")
+    if isinstance(p, dict):
+        extra += ["posture." + k for k in p if k not in SIGNED_POSTURE]
+        for i, f in enumerate(p.get("frameworks") or []):
+            if isinstance(f, dict):
+                extra += ["posture.frameworks[%d].%s" % (i, k) for k in f if k not in SIGNED_FRAMEWORK]
+    sys.stdout.write("\n".join(extra))
 else: raise SystemExit("document: unknown mode %r" % mode)
 '
 
@@ -594,6 +669,11 @@ def rs(s):
 
 L = json.load(open(sys.argv[1]))
 if L.get("docVersion") != "attest.statuslist.v1": raise SystemExit("canonical: unsupported docVersion")
+# Typed strictly, because sections 8-9 read these with jq and bash: a truncated
+# flag that is truthy but not true would skip the truncated => unknown rule, and
+# a seq that bash cannot compare would skip the --min-seq rollback check.
+if not isinstance(L.get("truncated"), bool): raise SystemExit("canonical: truncated must be a boolean")
+if type(L.get("seq")) is not int or not 0 <= L["seq"] < 2**63: raise SystemExit("canonical: seq must be an integer in [0, 2^63)")
 ke = sorted(L["keys"],     key=lambda e: e["kid"].encode("utf-8"))          # S2
 se = sorted(L["subjects"], key=lambda e: e["subjectHash"].encode("utf-8"))  # S2
 if len({e["kid"] for e in ke}) != len(ke):         raise SystemExit("canonical: duplicate kid")       # S3
@@ -655,6 +735,27 @@ if [ -n "$POSTURE_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
       die "could not tell what ${POSTURE_FILE} is. Pass --attestation or --claims."
       ;;
   esac
+fi
+
+# An attached JWS with no claims JSON: decode its payload into claims (see
+# DECODE_PY). A payload that does not decode as the envelope is evidence
+# against the document, not a tooling problem: section 4 FAILS it (exit 1), and
+# it is never verified as opaque bytes.
+ATTACHED_UNDECODABLE=''
+if [ -n "$JWS_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
+  ATT_PAYLOAD="$(tr -d '[:space:]' < "$JWS_FILE" | cut -d. -f2)"
+  if [ -n "$ATT_PAYLOAD" ]; then
+    command -v python3 >/dev/null 2>&1 \
+      || die "python3 is needed to decode the attached payload into the claims it signs."
+    if b64url_decode "$ATT_PAYLOAD" > "$WORKDIR/attached-payload.bin" 2>/dev/null \
+       && python3 -c "$DECODE_PY" "$WORKDIR/attached-payload.bin" > "$WORKDIR/claims.json" \
+            2>"$WORKDIR/decode_err"; then
+      CLAIMS_FILE="$WORKDIR/claims.json"
+    else
+      ATTACHED_UNDECODABLE="$(cat "$WORKDIR/decode_err" 2>/dev/null || true)"
+      : "${ATTACHED_UNDECODABLE:=payload segment is not valid base64url}"
+    fi
+  fi
 fi
 
 # One posture view for sections 6 and 7, always sliced out of the claims we are
@@ -730,6 +831,20 @@ if grep -q '"crit"' "$WORKDIR/header.json"; then
   bad "header carries 'crit' — RFC 7515 §4.1.11 requires rejection of extensions we do not implement"
 else
   ok "no 'crit' header extension"
+fi
+# The same closed set the platform verifier (jws.ts ALLOWED_HEADER_MEMBERS) and
+# section 8 below enforce: a member nothing examines must not be able to carry
+# meaning. Not a JSON object at all counts as a mismatch too.
+command -v python3 >/dev/null 2>&1 || die "python3 is needed to check the protected header's member set."
+HEADER_MEMBERS="$(python3 -c '
+import json, sys
+h = json.load(open(sys.argv[1]))
+print(",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)")
+' "$WORKDIR/header.json" 2>/dev/null || printf '(not JSON)')"
+if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
+  ok "header is the closed set {alg, kid, typ}"
+else
+  bad "malformed_document — header members are '${HEADER_MEMBERS}', expected exactly alg,kid,typ"
 fi
 
 # --- 3. Public key -----------------------------------------------------------
@@ -833,6 +948,10 @@ if [ -n "$CLAIMS_FILE" ]; then
     bad "kid_mismatch — the header says '${KID}', the signed body says '${CLAIMS_KID}'.
           A document cannot name one key in its body and be signed by another."
   fi
+elif [ -n "$ATTACHED_UNDECODABLE" ]; then
+  bad "malformed_document — the attached payload is not a hodei-shield.attest.attestation.v1
+          envelope (${ATTACHED_UNDECODABLE}). There are no claims to check, so nothing here verifies."
+  PAYLOAD_B64="$P"
 else
   ok "using the payload embedded in the attached JWS"
   b64url_decode "$P" > "$WORKDIR/canon.bin" || die "payload segment is not valid base64url"
@@ -860,10 +979,17 @@ fi
 printf '\n%s[6] Freshness%s\n' "$BOLD" "$RESET"
 NOW="${NOW_OVERRIDE:-$(date -u +%s)}"
 if [ -n "$POSTURE_FILE" ]; then
-  GENERATED="$(json_str "$POSTURE_FILE" generatedAt)"
-  EXPIRES="$(json_str "$POSTURE_FILE" expiresAt)"
-  CHECKED="$(json_str "$POSTURE_FILE" lastCheckedAt)"
-  SLUG="$(json_str "$POSTURE_FILE" slug)"
+  # Read as JSON, by TOP-LEVEL member — never with json_str(). json_str() takes
+  # the FIRST line anywhere in the file that looks like `"slug": "..."`, nested
+  # objects included, and the canonical encoder ignores members it does not
+  # read. Before 2026-09-29 that meant an unsigned nested member could decide
+  # the slug, freshness and subject-revocation checks while the signature still
+  # verified over the genuine fields. Section 7 now also refuses any member the
+  # signature does not cover; tests/run.sh holds the rejection cases.
+  GENERATED="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field generatedAt)"
+  EXPIRES="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field expiresAt)"
+  CHECKED="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field lastCheckedAt)"
+  SLUG="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field slug)"
 
   # epoch_of() is defined globally (near b64url_encode) so --status-list mode
   # can use it too without a --jws having run.
@@ -874,16 +1000,23 @@ if [ -n "$POSTURE_FILE" ]; then
     if [ -n "$G" ]; then
       AGE=$(( NOW - G ))
       printf '        generatedAt: %s  (age %ss)\n' "$GENERATED" "$AGE"
-      if [ "$AGE" -gt "$MAX_AGE_SECONDS" ]; then
+      if [ $(( G - POSTURE_CLOCK_SKEW_SECONDS )) -gt "$NOW" ]; then
+        bad "not_yet_valid — generatedAt is $(( G - NOW ))s in the future, beyond the
+          ${POSTURE_CLOCK_SKEW_SECONDS}s clock-skew allowance"
+      elif [ "$AGE" -gt "$MAX_AGE_SECONDS" ]; then
         bad "posture is ${AGE}s old, beyond --max-age-seconds ${MAX_AGE_SECONDS}"
       else
         ok "within the ${MAX_AGE_SECONDS}s freshness window"
       fi
     else
-      warn "could not parse generatedAt '${GENERATED}'"
+      # A FAIL, as posture.ts rejects it (`malformed_document`): a document whose
+      # age cannot be read has not had its age checked, and until 2026-09-29 this
+      # was a warning that let it through with freshness unchecked.
+      bad "could not parse generatedAt '${GENERATED}' — freshness was NOT checked.
+          Do not read this as 'fresh'. Upgrade date(1) or install python3."
     fi
   else
-    warn "no generatedAt claim — cannot judge freshness"
+    bad "no generatedAt — every genuine HodeiShield attestation carries one"
   fi
 
   if [ -n "$EXPIRES" ]; then
@@ -976,6 +1109,19 @@ if [ -n "$CLAIMS_FILE" ]; then
     bad "unsupported_version — docVersion is '${CLAIMS_DOCVERSION:-$MISSING_LABEL}'"
   fi
 
+  # The canonical encoders read a CLOSED set of members and silently skip the
+  # rest, so anything else in the JSON verifies without being signed. Such a
+  # member is not harmless noise: it is exactly how a decoy `slug` or
+  # `generatedAt` got in front of sections 6 and 9 (see section 6).
+  UNSIGNED_MEMBERS="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" unsigned)"
+  if [ -z "$UNSIGNED_MEMBERS" ]; then
+    ok "every member of the claims JSON is covered by the signature"
+  else
+    bad "unsigned_member — the claims JSON carries members the signature does not cover:
+          $(printf '%s' "$UNSIGNED_MEMBERS" | tr '\n' ' ')
+          Nobody signed them. Someone added them after signing; reject the document."
+  fi
+
   # `iss` is who VOUCHES. It decides which key set is authoritative, so a
   # verifier that never pins it can be handed a perfectly valid document signed
   # by somebody else's HodeiShield deployment.
@@ -1035,7 +1181,7 @@ PY
   # The gated-redaction contract, enforced at the RELYING PARTY: a `gated`
   # posture that still carries coverage, a heartbeat or an overall band is a
   # leak, and a signature must not make a leak look authoritative.
-  VISIBILITY="$(json_str "$POSTURE_FILE" visibility)"
+  VISIBILITY="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field visibility)"
   if [ "$VISIBILITY" = 'gated' ]; then
     FW_COUNT="$(python3 - "$POSTURE_FILE" <<'PY'
 import json, sys
@@ -1444,7 +1590,7 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
       printf '%s%sGOOD%s — not revoked, per a verified status list.\n\n' "$GREEN" "$BOLD" "$RESET"
       printf '%sThat is all it proves.%s It does not prove the claims inside are true, that the key\n' "$BOLD" "$RESET"
       printf 'belongs to who you think, or that nothing else about the document is wrong. Read\n'
-      printf 'docs/architecture/specs/2026-07-30-attest-revocation-design.md §9 before relying on it.\n\n'
+      printf 'docs/security/attest-verification.md §6 and §7 before relying on it.\n\n'
       exit 0
       ;;
     revoked)
