@@ -159,6 +159,17 @@ verifier therefore **rejects** such a document; `verify-attestation.sh` reports
 `unsigned_member`, listing the offending paths, and fails. §4.6 step 5a does the
 same by hand, and §4.7 experiment D is a test you can run.
 
+**A member may appear only once.** JSON leaves duplicate member names undefined,
+and parsers disagree about which copy they keep: `python3` and `jq` keep the
+last, other tools the first. The signed value can be only one of them, so a
+document that repeats a member — anywhere, including the `attestation` wrapper,
+or `claims` both beside and inside it — is rejected as `duplicate_key`, and the
+"every member … is covered by the signature" line is not printed for it. Before
+v1.0.1 the verdict was already decided on the last copy, the signed one, but the
+first copy could be printed under a PASS line; that output is what changed. The
+same rule applies to the key documents (a duplicated member there is exit 2) and
+to the status list (unknown, exit 3).
+
 An **attached** form also exists (`protected.payload.signature`, the canonical
 envelope bytes embedded) for contexts where carrying two files is awkward. Both
 verify the same way; the tooling here handles either, and cross-checks them
@@ -715,6 +726,14 @@ ML-DSA-65 Public-Key:
 #     The encoder of §4.5 reads only the members below and skips the rest, so an
 #     extra member would verify without being signed. Any output here means:
 #     reject the document (verify-attestation.sh reports `unsigned_member`).
+#     jq silently keeps the last of a duplicated member, so check the file as you
+#     received it for duplicates first (§4.0); any output means reject it too:
+#       python3 -c 'import json,sys
+#       def h(p):
+#           ks = [k for k, _ in p]
+#           if len(set(ks)) != len(ks): print("duplicate member:", ks)
+#           return dict(p)
+#       json.load(open(sys.argv[1]), object_pairs_hook=h)' att.json
 jq -r '
     (keys - ["docVersion","iss","kid","jti","nonce","overallBand","posture"]
        | map("claims." + .)),

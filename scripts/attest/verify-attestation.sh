@@ -576,6 +576,43 @@ c["posture"] = p
 json.dump(c, sys.stdout, indent=2)
 '
 
+# Duplicate object members, anywhere in a JSON file: one path per line, nothing
+# when there are none. Every python json.load in this script keeps the LAST of
+# a duplicated member and so does jq, which is why the verdict was never
+# decided by a duplicate. But a reader or another program that keeps the FIRST
+# sees a value nobody signed, printed under this script's own PASS lines. RFC
+# 8259 leaves duplicates undefined, so a signed document must not carry any.
+#
+# It parses STRICTLY (UTF-8, no BOM, nothing after the value) and walks without
+# recursion. If it cannot do either it exits non-zero, and every caller treats
+# that as a malformed document, never as "no duplicates found".
+DUPKEY_PY='
+import json, sys
+class Obj(list): pass
+with open(sys.argv[1], "rb") as fh: raw = fh.read()
+doc = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=Obj)
+out = []
+stack = [(doc, "")]
+while stack:
+    v, path = stack.pop()
+    if isinstance(v, Obj):
+        seen = set()
+        for k, x in v:
+            here = path + "." + k if path else k
+            if k in seen: out.append(here)
+            seen.add(k)
+            stack.append((x, here))
+    elif isinstance(v, list):
+        stack.extend((x, "%s[%d]" % (path, i)) for i, x in enumerate(v))
+# The same member at two levels is the same ambiguity: a document that carries
+# "claims" (or "signature") both beside and inside "attestation" offers two.
+if isinstance(doc, Obj):
+    top = [k for k, _ in doc]
+    if "attestation" in top:
+        out += [k + " (beside and inside attestation)" for k in ("claims", "signature") if k in top]
+sys.stdout.write("\n".join(sorted(set(out))))
+'
+
 # Document surgery: pull the pieces out of whatever JSON the caller handed us.
 # Kept separate from the encoders above so the code that decides WHICH bytes to
 # hash stays readable, and so no JSON-shaped convenience can leak into the
@@ -758,6 +795,17 @@ if [ -n "$JWS_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
   fi
 fi
 
+# Duplicate members in the document as the caller handed it over — the raw
+# file, before any re-serialisation hides them. Section 7 FAILS on them.
+DUPLICATE_KEYS=''
+for dup_src in "$ATTESTATION_FILE" "$CLAIMS_FILE"; do
+  [ -n "$dup_src" ] || continue
+  dup_found="$(python3 -c "$DUPKEY_PY" "$dup_src" 2>/dev/null)" \
+    || dup_found="(the file could not be parsed strictly: $dup_src)"
+  [ -z "$dup_found" ] || DUPLICATE_KEYS="${DUPLICATE_KEYS:+$DUPLICATE_KEYS
+}$dup_found"
+done
+
 # One posture view for sections 6 and 7, always sliced out of the claims we are
 # about to verify — never a second file the caller supplied, which could differ
 # from the one inside the signature.
@@ -838,8 +886,11 @@ fi
 command -v python3 >/dev/null 2>&1 || die "python3 is needed to check the protected header's member set."
 HEADER_MEMBERS="$(python3 -c '
 import json, sys
-h = json.load(open(sys.argv[1]))
-print(",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)")
+pairs = []
+h = json.load(open(sys.argv[1]), object_pairs_hook=lambda p: (pairs.append([k for k, _ in p]), dict(p))[1])
+dups = sorted({k for ks in pairs for k in ks if ks.count(k) > 1})
+if dups: print("duplicated: " + ",".join(dups))
+else: print(",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)")
 ' "$WORKDIR/header.json" 2>/dev/null || printf '(not JSON)')"
 if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
   ok "header is the closed set {alg, kid, typ}"
@@ -851,16 +902,25 @@ fi
 printf '\n%s[3] Public key%s\n' "$BOLD" "$RESET"
 if [ -z "$PUB_B64URL" ]; then
   [ -r "$JWKS_FILE" ] || die "cannot read ${JWKS_FILE}"
-  # `|| true` is load-bearing under `set -euo pipefail`: when the kid is absent
-  # `grep -F` exits 1, pipefail propagates it, and the assignment aborts the
-  # whole script — silently, exit 1, with nothing printed after "[3] Public
-  # key". That is the WORST outcome available, because it is indistinguishable
-  # from a failed signature. Absorb it here so the diagnosis below can run.
-  PUB_B64URL="$(tr -d '\n' < "$JWKS_FILE" \
-    | sed 's/}[[:space:]]*,[[:space:]]*{/}\n{/g' \
-    | grep -F "\"${KID}\"" \
-    | grep -o '"pub"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | sed 's/.*"pub"[[:space:]]*:[[:space:]]*"//;s/"$//' | head -1 || true)"
+  # A key document with a duplicated member is malformed: which `pub` or `kid`
+  # counts would depend on the parser. Not evidence against the attestation,
+  # so exit 2, like the unknown-kid stop below.
+  JWKS_DUPS="$(python3 -c "$DUPKEY_PY" "$JWKS_FILE" 2>/dev/null)" \
+    || die "the key document ${JWKS_FILE} is not strict JSON (UTF-8, no BOM, one value).
+       Re-fetch it; do not edit it by hand."
+  [ -z "$JWKS_DUPS" ] || die "the key document ${JWKS_FILE} repeats members ($(printf '%s' "$JWKS_DUPS" | tr '\n' ' ')).
+       Which key it names depends on the parser. Re-fetch it; do not edit it by hand."
+  # Selected as JSON: the entry of `keys` whose `kid` is the header kid, and its
+  # `pub` — never the first line of text that looks like one. `|| true` is
+  # load-bearing under `set -euo pipefail`: with no match the assignment must
+  # not abort the script (a silent exit 1, indistinguishable from a failed
+  # signature), so that the unknown-kid diagnosis below can run.
+  PUB_B64URL="$(python3 -c '
+import json, sys
+for k in json.load(open(sys.argv[1])).get("keys") or []:
+    if isinstance(k, dict) and k.get("kid") == sys.argv[2] and isinstance(k.get("pub"), str):
+        sys.stdout.write(k["pub"]); break
+' "$JWKS_FILE" "$KID" 2>/dev/null || true)"
   if [ -z "$PUB_B64URL" ]; then
     # A HARD stop, never a fallback to keys[0] — the same rule the status-list
     # path applies to an unknown kid, and for the same reason. Guessing a key
@@ -1113,9 +1173,17 @@ if [ -n "$CLAIMS_FILE" ]; then
   # rest, so anything else in the JSON verifies without being signed. Such a
   # member is not harmless noise: it is exactly how a decoy `slug` or
   # `generatedAt` got in front of sections 6 and 9 (see section 6).
+  if [ -n "$DUPLICATE_KEYS" ]; then
+    bad "duplicate_key — the document repeats these members:
+          $(printf '%s' "$DUPLICATE_KEYS" | tr '\n' ' ')
+          Only one of each can be the signed value, and which one a reader sees depends on
+          the reader. Reject the document."
+  fi
   UNSIGNED_MEMBERS="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" unsigned)"
-  if [ -z "$UNSIGNED_MEMBERS" ]; then
+  if [ -z "$UNSIGNED_MEMBERS" ] && [ -z "$DUPLICATE_KEYS" ]; then
     ok "every member of the claims JSON is covered by the signature"
+  elif [ -z "$UNSIGNED_MEMBERS" ]; then
+    :
   else
     bad "unsigned_member — the claims JSON carries members the signature does not cover:
           $(printf '%s' "$UNSIGNED_MEMBERS" | tr '\n' ' ')
@@ -1228,7 +1296,16 @@ STATUS_LIST_VALID=0
 fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list'
 fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set'
 
-if jq -e 'type=="object" and has("statusList") and has("signature")' "$WORKDIR/status.json" >/dev/null 2>&1; then
+for dup_src in status.json status-keys.json; do
+  if ! dup_found="$(python3 -c "$DUPKEY_PY" "$WORKDIR/$dup_src" 2>/dev/null)"; then
+    stat_bad "malformed_document — ${dup_src} is not strict JSON (UTF-8, no BOM, one value)"
+  elif [ -n "$dup_found" ]; then
+    stat_bad "duplicate_key — ${dup_src} repeats members: \
+$(printf '%s' "$dup_found" | tr '\n' ' ')— which value counts depends on the parser"
+  fi
+done
+
+if [ "$STATUS_FAILURES" -eq 0 ] && jq -e 'type=="object" and has("statusList") and has("signature")' "$WORKDIR/status.json" >/dev/null 2>&1; then
   ok "status document has the expected {statusList, signature} shape"
   jq '.statusList' "$WORKDIR/status.json" > "$WORKDIR/list.json"
   STATUS_JWS="$(jq -r '.signature' "$WORKDIR/status.json")"
@@ -1283,6 +1360,13 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
 fi
 if [ "$STATUS_FAILURES" -eq 0 ] && ! jq -e 'type=="object"' "$WORKDIR/status_header.json" >/dev/null 2>&1; then
   stat_bad "malformed_document — protected header did not decode to a JSON object"
+fi
+if [ "$STATUS_FAILURES" -eq 0 ]; then
+  if ! SHDR_DUPS="$(python3 -c "$DUPKEY_PY" "$WORKDIR/status_header.json" 2>/dev/null)"; then
+    stat_bad "malformed_document — protected header is not strict JSON"
+  elif [ -n "$SHDR_DUPS" ]; then
+    stat_bad "duplicate_key — protected header repeats: $(printf '%s' "$SHDR_DUPS" | tr '\n' ' ')"
+  fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
   if jq -e 'has("crit")' "$WORKDIR/status_header.json" >/dev/null 2>&1; then
