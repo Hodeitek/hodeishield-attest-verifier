@@ -1,4 +1,4 @@
-![HodeiShield Attest Verifier, by Hodeitek](.github/banner.png)
+<p align="center"><img src=".github/banner.png" alt="HodeiShield Attest Verifier, by Hodeitek" width="720"></p>
 
 # Verify a HodeiShield attestation yourself
 
@@ -8,24 +8,9 @@
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 
 The offline verifier for [HodeiShield](https://app.hodeishield.com) posture
-attestations, published by [Hodeitek](https://hodeitek.com).
-
-This repository exists so that you do **not** have to take Hodeitek's word for a
-signed compliance-posture attestation. It contains a verifier you can read and
-run yourself, and the documentation that explains exactly what a `VERIFIED`
-result does and does not mean.
-
-Nothing here needs credentials, an account, or our cooperation.
-
-**What you are verifying.** A posture attestation is a short document, signed by
-HodeiShield, stating how far an organisation has got with frameworks such as
-ISO 27001 or NIS2 at a given moment. You would usually receive one from a
-supplier, from their Trust Center on HodeiShield, or attached to a security
-questionnaire. This tool tells you whether that document is genuine, unaltered,
-current and about the organisation you think; §6 of the documentation says what
-it cannot tell you.
-
----
+attestations, published by [Hodeitek](https://hodeitek.com), so that you do
+**not** have to take our word for one. No credentials, account or cooperation
+needed.
 
 ## The short version
 
@@ -47,6 +32,17 @@ so that you can try the tool. It is not a promise: a demo subject can be
 retired, and then the endpoint answers 404. Substitute the slug of whichever
 organisation's attestation you were given. Always pass `--expect-issuer`; the
 document names its own issuer, and only you can say which one you trust.
+
+## What you are verifying
+
+A posture attestation is a short document, signed by HodeiShield, stating how
+far an organisation has got with frameworks such as ISO 27001 or NIS2 at a given
+moment. You would usually receive one from a supplier, from their Trust Center
+on HodeiShield, or attached to a security questionnaire. This tool tells you
+whether that document is genuine, unaltered, current and about the organisation
+you think. It is a verifier you can read and run yourself, and the documentation
+here explains exactly what a `VERIFIED` result does and does not mean; §6 of it
+says what the tool cannot tell you.
 
 ## What you need installed
 
