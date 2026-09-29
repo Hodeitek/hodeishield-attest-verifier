@@ -11,7 +11,7 @@ security team validating a Trust Center badge, an evaluator asking to be shown
 the artefact rather than told about it.
 
 Nothing here requires our cooperation. Every check runs offline, against
-material you already hold, using OpenSSL. If a step needs you to trust us for
+material you already hold, using OpenSSL and a few common tools (§2). If a step needs you to trust us for
 anything other than "this key is Hodeitek's", we have written it down as a gap
 rather than glossed over it.
 
@@ -74,8 +74,9 @@ transport path is stated here rather than left for you to discover.
 | Requirement       | Why                                                                                                                                                                |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **OpenSSL ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Older builds cannot parse these artefacts at all — a failure there is a tooling limit, not evidence against the artefact. |
-| A POSIX shell     | No Node, no npm, no HodeiShield code.                                                                                                                              |
-| **`python3`**     | Needed on the path the endpoint actually serves. `GET /api/public/attest/<slug>` returns a **detached** JWS, so the canonical bytes have to be re-derived from the JSON you can read — which is the point, and which needs a JSON parser. `python3` is the only one used. The §4.6 by-hand path needs OpenSSL alone. |
+| **`bash` ≥ 4**   | `verify-attestation.sh` is bash, not POSIX `sh`. No Node, no npm, no HodeiShield code.                                                                             |
+| **`python3`**     | Needed on the path the endpoint actually serves. `GET /api/public/attest/<slug>` returns a **detached** JWS, so the canonical bytes have to be re-derived from the JSON you can read — which is the point, and which needs a JSON parser and the encoder of §4.5. Standard library only. |
+| **`jq`**          | Required by the script only for `--status-list` (§7.1). The §4.6 by-hand path uses it throughout, so that path needs **OpenSSL, `python3` and `jq`**, plus `xxd` or `python3` to turn one hex constant into bytes. It does not work with OpenSSL alone. |
 | Network access    | Only to _fetch_ the public key and the document. Verification itself is offline.                                                                                   |
 
 ```console
@@ -146,17 +147,35 @@ human-readable document claims it says — if they disagree, verification fails.
 > `overallBand` are all inside the signature too, and `jti` is a random UUID
 > nobody can reconstruct.
 
+**The signature covers a closed set of members, and nothing else.** The
+canonical encoders of §4.4 read exactly these members and skip any other: in
+`claims`, `docVersion`, `iss`, `kid`, `jti`, `nonce`, `overallBand` and
+`posture`; in the posture, `version`, `slug`, `orgName`, `visibility`,
+`generatedAt`, `expiresAt`, `lastCheckedAt` and `frameworks`; in each framework
+entry, `code`, `label` and `band`. A JSON member outside those sets is not signed,
+so a document that carries one is showing you a fact nobody signed, while the
+signature over the members that *are* covered still verifies. A conforming
+verifier therefore **rejects** such a document; `verify-attestation.sh` reports
+`unsigned_member`, listing the offending paths, and fails. §4.6 step 5a does the
+same by hand, and §4.7 experiment D is a test you can run.
+
 An **attached** form also exists (`protected.payload.signature`, the canonical
 envelope bytes embedded) for contexts where carrying two files is awkward. Both
 verify the same way; the tooling here handles either, and cross-checks them
-against each other when you supply both.
+against each other when you supply both. Given an attached JWS **alone**, the
+script decodes the embedded envelope back into the claims it encodes and holds
+them to every check a detached document gets: freshness, `--expect-slug`,
+`--expect-issuer`, `--expect-nonce` and revocation. A payload that does not
+decode as the envelope is "could not check" (exit 2), never a pass. The
+signature is over `protected.payload` in both forms, so anyone holding a
+detached document can re-serialise it as attached; neither form is weaker.
 
 The protected header is a **closed set** of exactly three members:
 
 ```json
 {
   "alg": "ML-DSA-65",
-  "kid": "eD9mA_oBxW8zKtCm6j0TIw",
+  "kid": "roeFReafBOA_WF3cqfilHA",
   "typ": "application/attest+jws"
 }
 ```
@@ -167,9 +186,11 @@ The protected header is a **closed set** of exactly three members:
 | `kid`  | 22 base64url chars       | Names which key signed. Derivable from the key bytes (§4.2), so a key document cannot mislabel itself.                                                                                                                                                                                                          |
 | `typ`  | `application/attest+jws` | RFC 8725 §3.11 explicit typing. It stops an attestation being replayed into any other JWS-consuming surface.                                                                                                                                                                                                    |
 
-A `crit` member, or any fourth member, is a rejection. If we ever need to add a
-header field, that is a new `typ` and a new document version, not a silent
-extension.
+A `crit` member, or any fourth member, is a rejection: the verifier reports
+`malformed_document` (the header members it found, against exactly `alg,kid,typ`)
+and fails, for a posture attestation and for a status list alike. If we ever need
+to add a header field, that is a new `typ` and a new document version, not a
+silent extension.
 
 > **Correction, 2026-07-30.** Between 2026-07-29 and 2026-07-30 this section and
 > `scripts/attest/verify-attestation.sh` documented and implemented only the
@@ -215,10 +236,10 @@ as-is:
 {
   "attestation": {
     "claims": { "docVersion": "attest.attestation.v1", "iss": "…", "kid": "…",
-                "jti": "…", "nonce": null, "overallBand": "basic",
+                "jti": "…", "nonce": null, "overallBand": "in_progress",
                 "posture": { "version": "attest.posture.v1", "…": "…" } },
-    "signature": "eyJhbGciOiJNTC1EU0EtNjUi….._8Zq…",
-    "digest": "e69184e585d24e81…"
+    "signature": "eyJhbGciOiJNTC1EU0EtNjUi…",
+    "digest": "05c4681633cea1ff…"
   },
   "verification": { "jwksUrl": "…", "signingBytes": "hodei-shield.attest.attestation.v1", "…": "…" }
 }
@@ -243,13 +264,17 @@ document).
     {
       "kty": "AKP",
       "alg": "ML-DSA-65",
-      "pub": "52LfRm6LmMqCxNWlY-Ta9vyl4h7z7bOR_BjC5e3eUf7TBy0629UqNTKeziLwMjGzELdAEl…",
-      "kid": "eD9mA_oBxW8zKtCm6j0TIw",
+      "pub": "G6eg_1aw7Yi6_tMuVcW5QSryYOTB0-hPibLwrKfp…",
+      "kid": "roeFReafBOA_WF3cqfilHA",
       "use": "sig"
     }
   ]
 }
 ```
+
+A key set can list more than one key (§7); the production set carried two when
+these examples were captured, and the one shown is the one that signed the
+document used throughout §4. Always select by `kid`.
 
 `pub` is base64url of the **raw 1952-byte FIPS 204 `pkEncode` public key** — no
 SPKI wrapper, no PEM, no `priv` member (there is no code path in the platform
@@ -273,7 +298,7 @@ the same input.
 ```
 
 ```
-eD9mA_oBxW8zKtCm6j0TIw
+roeFReafBOA_WF3cqfilHA
 ```
 
 ### 4.3 The short version
@@ -281,45 +306,50 @@ eD9mA_oBxW8zKtCm6j0TIw
 ```bash
 scripts/attest/verify-attestation.sh \
   --attestation att.json --jwks jwks.json \
-  --expect-slug meridian --expect-issuer https://app.hodeishield.com
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
 ```
 
 If you hold the two halves separately, pass them separately — same check:
 
 ```bash
 scripts/attest/verify-attestation.sh \
-  --jws att.jws --claims att.claims.json --jwks jwks.json --expect-slug meridian
+  --jws att.jws --claims att.claims.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
 ```
 
-Real output, run 2026-07-30 against a live, unmodified document from the
-`/api/public/attest/<slug>` endpoint of a running deployment — not a fixture:
+`talmaren-payments` is a demonstration organisation with fictitious data. Real
+output, run on 2026-09-29 against the unmodified document served by
+`/api/public/attest/talmaren-payments` — not a fixture (colour codes off,
+`NO_COLOR=1`). Every value below, including the `kid`, `jti` and digest, is from
+that run; a fresh fetch has a new `jti`, `generatedAt` and digest:
 
 ```
 HodeiShield posture attestation — offline verification
 
 [0] Environment
-  PASS  OpenSSL 3.5.6 (ML-DSA capable)
+  PASS  OpenSSL 3.5.7 (ML-DSA capable)
 
 [1] Structure
   PASS  detached JWS (RFC 7515 Appendix F): payload segment is empty
   PASS  signature is 3309 bytes — the ML-DSA-65 size
 
 [2] Header
-        {"alg":"ML-DSA-65","kid":"eD9mA_oBxW8zKtCm6j0TIw","typ":"application/attest+jws"}
+        {"alg":"ML-DSA-65","kid":"roeFReafBOA_WF3cqfilHA","typ":"application/attest+jws"}
   PASS  alg is ML-DSA-65 (RFC 9964, IANA-permanent)
   PASS  typ is application/attest+jws — cannot be replayed into another JWS surface
   PASS  no 'crit' header extension
+  PASS  header is the closed set {alg, kid, typ}
 
 [3] Public key
-  PASS  selected the JWKS key whose kid is 'eD9mA_oBxW8zKtCm6j0TIw'
+  PASS  selected the JWKS key whose kid is 'roeFReafBOA_WF3cqfilHA'
   PASS  public key is 1952 bytes — the ML-DSA-65 size
-  PASS  kid 'eD9mA_oBxW8zKtCm6j0TIw' is derivable from these key bytes
+  PASS  kid 'roeFReafBOA_WF3cqfilHA' is derivable from these key bytes
   PASS  loaded as an ML-DSA-65 public key
 
 [4] Payload — attestation envelope (E1..E7)
-  PASS  re-derived 715 canonical envelope bytes from the claims JSON you can read
-        of which E7 nests 517 bytes of hodei-shield.attest.posture.v1 (the posture itself)
-        sha-256: e69184e585d24e8141ded9241beedb890eae2effb4e823db4f01a272d2aba6c4
+  PASS  re-derived 750 canonical envelope bytes from the claims JSON you can read
+        of which E7 nests 548 bytes of hodei-shield.attest.posture.v1 (the posture itself)
+        sha-256: 05c4681633cea1ff8c2bf236b881a0aefea0187066c3b5d57f81d84043f09f89
         (compare with attestation.digest as the endpoint published it — a content id,
          never an authentication check: the signature below is the check)
   PASS  claims.kid (E3) equals the protected-header kid — one key, named twice, agreeing
@@ -328,43 +358,72 @@ HodeiShield posture attestation — offline verification
   PASS  ML-DSA-65 signature verifies over protected.payload
 
 [6] Freshness
-        generatedAt: 2026-07-30T11:17:52.596Z  (age 0s)
+        generatedAt: 2026-09-29T10:34:13.668Z  (age 2s)
   PASS  within the 3600s freshness window
-        expiresAt:   2026-07-30T11:32:52.596Z
+        expiresAt:   2026-09-29T10:49:13.668Z
   PASS  not expired
   PASS  validity window 900s is within the issuer's 3600s ceiling
-        lastCheckedAt: 2026-07-22T12:18:20.296Z  (freshness of the underlying data,
+        lastCheckedAt: 2026-09-08T12:56:35.697Z  (freshness of the underlying data,
                        which can be older than generatedAt)
-  PASS  posture is for slug 'meridian', as expected
+  PASS  posture is for slug 'talmaren-payments', as expected
 
 [7] Attested claims
         docVersion:  attest.attestation.v1
-        iss:         https://app.hodeishield.local
-        kid:         eD9mA_oBxW8zKtCm6j0TIw
-        jti:         6c2a52f1-cef5-4699-bc10-53accd7d6f8a
+        iss:         https://app.hodeishield.com
+        kid:         roeFReafBOA_WF3cqfilHA
+        jti:         3d9fbfe0-93a3-4f37-ac7a-39f78783c9ad
         nonce:       null  (no challenge — see --expect-nonce)
-        overallBand: basic
+        overallBand: in_progress
   PASS  docVersion (E1) is attest.attestation.v1 — and it is inside the signature, so it cannot be rewritten on the wire
-  PASS  iss (E2) is 'https://app.hodeishield.local', as expected
-  PASS  overallBand (E6) 'basic' equals the weakest attested band — recomputed, not trusted
+  PASS  every member of the claims JSON is covered by the signature
+  PASS  iss (E2) is 'https://app.hodeishield.com', as expected
+  PASS  overallBand (E6) 'in_progress' equals the weakest attested band — recomputed, not trusted
 
         posture (E7, the frozen v1 bytes):
         {
           "version": "attest.posture.v1",
-          "slug": "meridian",
-          "orgName": "Meridian Industrial",
+          "slug": "talmaren-payments",
+          "orgName": "Talmaren Payments",
           "visibility": "public",
-          "generatedAt": "2026-07-30T11:17:52.596Z",
-          "expiresAt": "2026-07-30T11:32:52.596Z",
-          "lastCheckedAt": "2026-07-22T12:18:20.296Z",
+          "generatedAt": "2026-09-29T10:34:13.668Z",
+          "expiresAt": "2026-09-29T10:49:13.668Z",
+          "lastCheckedAt": "2026-09-08T12:56:35.697Z",
           "frameworks": [
-            { "code": "dora",     "label": "DORA",     "band": "basic" },
-            { "code": "ens",      "label": "ENS",      "band": "basic" },
-            { "code": "gdpr",     "label": "GDPR",     "band": "substantial" },
-            { "code": "iso27001", "label": "ISO27001", "band": "basic" },
-            { "code": "iso42001", "label": "ISO42001", "band": "substantial" },
-            { "code": "nis2",     "label": "NIS2",     "band": "substantial" },
-            { "code": "soc2",     "label": "SOC2",     "band": "basic" }
+            {
+              "code": "dora",
+              "label": "DORA",
+              "band": "substantial"
+            },
+            {
+              "code": "ens",
+              "label": "ENS",
+              "band": "in_progress"
+            },
+            {
+              "code": "gdpr",
+              "label": "GDPR",
+              "band": "substantial"
+            },
+            {
+              "code": "iso27001",
+              "label": "ISO27001",
+              "band": "in_progress"
+            },
+            {
+              "code": "iso42001",
+              "label": "ISO42001",
+              "band": "in_progress"
+            },
+            {
+              "code": "nis2",
+              "label": "NIS2",
+              "band": "in_progress"
+            },
+            {
+              "code": "soc2",
+              "label": "SOC2",
+              "band": "in_progress"
+            }
           ]
         }
 
@@ -373,14 +432,15 @@ has not been altered since.
 
 That is all it proves. It does not prove the claims inside are true, that
 the key belongs to who you think, or that the document was meant to exist.
+Read docs/security/attest-verification.md §6 before relying on it.
 ```
 
-The `iss` in that transcript is `app.hodeishield.local` because it was produced
-against a local deployment. On a production document it is
-`https://app.hodeishield.com`, and `--expect-issuer` is how you pin it —
-**always pass it**: `iss` decides whose key set is authoritative, and a verifier
-that never checks it will happily accept a perfectly valid document signed by
-somebody else's deployment of this software.
+**Always pass `--expect-issuer`.** `iss` decides whose key set is
+authoritative, and a verifier that never checks it will happily accept a
+perfectly valid document signed by somebody else's deployment of this software.
+Without it the script still verifies, but prints a `WARN` that nothing pinned
+`iss`. A demonstration subject can be retired, in which case its endpoint
+answers 404; substitute the slug you were given.
 
 ### 4.4 The canonical encoding — what the signature actually covers
 
@@ -503,9 +563,15 @@ never be mistaken for a signed envelope, even with identical key material.
 ### 4.5 A complete independent implementation, in 35 lines
 
 That spec is meant to be sufficient on its own. Here is a Python encoder written
-from it, with no reference to our code — it is the same one embedded in
-`verify-attestation.sh`. Note it implements **both** formats: `posture_bytes`
-produces E7, `envelope_bytes` produces the bytes that are signed.
+from it, with no reference to our code. It is the encoder embedded in
+`verify-attestation.sh` **without its hardening**: the script's copy additionally
+enforces the 4096-byte cap on every string field, the 64-framework cap and the
+type checks (posture must be an object, every field a string) that §4.4.1 and
+rule R6 require, and it refuses a document that violates any of them. For a
+document that satisfies those rules the two produce the same bytes; if you
+implement your own verifier, include those checks. Note it implements **both**
+formats: `posture_bytes` produces E7, `envelope_bytes` produces the bytes that
+are signed.
 
 ```python
 import json, struct, sys
@@ -560,10 +626,10 @@ jq -r '.attestation.digest' att.json
 ```
 
 ```
-715
-517
-SHA2-256(canon.bin)= e69184e585d24e8141ded9241beedb890eae2effb4e823db4f01a272d2aba6c4
-e69184e585d24e8141ded9241beedb890eae2effb4e823db4f01a272d2aba6c4
+750
+548
+SHA2-256(canon.bin)= 05c4681633cea1ff8c2bf236b881a0aefea0187066c3b5d57f81d84043f09f89
+05c4681633cea1ff8c2bf236b881a0aefea0187066c3b5d57f81d84043f09f89
 ```
 
 That digest is byte-identical to the one the platform's TypeScript encoder
@@ -574,8 +640,8 @@ evidence that this format is genuinely specified rather than
 defined-by-implementation — and it is what makes third-party verification real
 rather than nominal.
 
-The 715/517 split is worth internalising: 517 of those bytes are the nested
-posture, and 198 are the envelope around it. A verifier that produces 517 is
+The 750/548 split is worth internalising: 548 of those bytes are the nested
+posture, and 202 are the envelope around it. A verifier that produces 548 is
 hashing the wrong document, however perfect its posture encoder.
 
 ### 4.6 The long version — verify by hand
@@ -605,12 +671,19 @@ b64url_decode "$H"
 ```
 
 ```
-{"alg":"ML-DSA-65","kid":"eD9mA_oBxW8zKtCm6j0TIw","typ":"application/attest+jws"}
+{"alg":"ML-DSA-65","kid":"roeFReafBOA_WF3cqfilHA","typ":"application/attest+jws"}
 ```
 
 ```bash
-# 3. Take the raw public key from the JWKS; confirm its length and its kid.
-PUB_B64URL=$(grep -o '"pub"[^"]*"[^"]*"' jwks.json | sed 's/.*"pub"[^"]*"//;s/"//')
+# 2b. The header is a closed set: exactly alg, kid, typ. Anything else — a fourth
+#     member, or `crit` — is a rejection, whatever the signature says.
+b64url_decode "$H" | jq -r 'keys | join(",")'       # must print: alg,kid,typ
+HDR_KID=$(b64url_decode "$H" | jq -r '.kid')
+
+# 3. Take the raw public key from the JWKS — the key whose kid is the header kid,
+#    not every key's `pub`; a published key set can hold more than one. Then
+#    confirm its length and that its kid is derivable from its bytes.
+PUB_B64URL=$(jq -r --arg kid "$HDR_KID" '.keys[] | select(.kid == $kid) | .pub' jwks.json)
 b64url_decode "$PUB_B64URL" > pub.raw
 wc -c < pub.raw                                     # must be exactly 1952
 { printf 'hodei-shield.attest.kid.v1'; cat pub.raw; } | openssl dgst -sha256 -binary \
@@ -619,7 +692,7 @@ wc -c < pub.raw                                     # must be exactly 1952
 
 ```
 1952
-eD9mA_oBxW8zKtCm6j0TIw
+roeFReafBOA_WF3cqfilHA
 ```
 
 ```bash
@@ -638,6 +711,22 @@ ML-DSA-65 Public-Key:
 ```
 
 ```bash
+# 5a. Reject anything in claims.json that the signature does not cover (§4.0).
+#     The encoder of §4.5 reads only the members below and skips the rest, so an
+#     extra member would verify without being signed. Any output here means:
+#     reject the document (verify-attestation.sh reports `unsigned_member`).
+jq -r '
+    (keys - ["docVersion","iss","kid","jti","nonce","overallBand","posture"]
+       | map("claims." + .)),
+    (.posture | (keys - ["version","slug","orgName","visibility","generatedAt",
+                         "expiresAt","lastCheckedAt","frameworks"]
+       | map("posture." + .))),
+    (.posture.frameworks | to_entries[] | (.value | keys - ["code","label","band"])
+       | map("posture.frameworks[]." + .))
+    | .[]' claims.json                              # must print nothing
+```
+
+```bash
 # 5. Re-derive the canonical ENVELOPE from the claims JSON (§4.5) — not from
 #    claims.posture, which is only field E7 of it — then rebuild the JWS signing
 #    input: ASCII( BASE64URL(protected) || "." || BASE64URL(payload) ).
@@ -645,14 +734,14 @@ ML-DSA-65 Public-Key:
 #    from the parsed header, or a sender could reorder the header JSON and have
 #    you verify over bytes that differ from the ones signed.
 python3 canon.py claims.json > canon.bin
-wc -c < canon.bin                                   # 715 for the document above
+wc -c < canon.bin                                   # 750 for the document above
 printf '%s.%s' "$H" "$(b64url_encode canon.bin)" > signing_input.bin
 b64url_decode "$S" > sig.bin
 wc -c < sig.bin                                     # must be exactly 3309
 ```
 
 ```
-715
+750
 3309
 ```
 
@@ -667,16 +756,20 @@ Signature Verified Successfully
 ```
 
 Only now read the claims as authoritative — after the signature checks out,
-never before.
+never before. The by-hand path stops at the signature: it does not check
+freshness, `iss`, the nonce or the derived `overallBand` (§4.8 and the script
+do), so do those yourself before relying on a document.
 
 ### 4.7 Convince yourself the check can fail
 
 A verification procedure that always passes is not a verification procedure.
-Three experiments, all worth running, all with real output from the document
-above.
+Four experiments, all worth running, all with real output from the document
+above (run 2026-09-29, `NO_COLOR=1`; lines that do not bear on the point are
+omitted, and nothing is added). The exit code of each is stated: run it and
+check yours.
 
-**A. A tampered claim must be caught.** Upgrade the ISO 27001 band from `basic`
-to `advanced` — exactly the lie a forged attestation would tell:
+**A. A tampered claim must be caught (exit 1).** Upgrade the ISO 27001 band from
+`in_progress` to `advanced` — exactly the lie a forged attestation would tell:
 
 ```bash
 python3 - <<'EOF'
@@ -688,24 +781,26 @@ json.dump(d, open('att-tampered.json','w'), indent=2)
 EOF
 
 scripts/attest/verify-attestation.sh --attestation att-tampered.json --jwks jwks.json
+echo "exit=$?"
 ```
 
 ```
 [4] Payload — attestation envelope (E1..E7)
-  PASS  re-derived 718 canonical envelope bytes from the claims JSON you can read
-        of which E7 nests 520 bytes of hodei-shield.attest.posture.v1 (the posture itself)
-        sha-256: 7d365e829c6d94a72c63099be6835b4cdb73040d377e6158dda29869cce070fc
+  PASS  re-derived 747 canonical envelope bytes from the claims JSON you can read
+        of which E7 nests 545 bytes of hodei-shield.attest.posture.v1 (the posture itself)
+        sha-256: 3143c82fa5737dd6fde9cdb56a173e6f58626fbfa4c17b8f29ccbf35a1e4c92a
 
 [5] Signature
   FAIL  SIGNATURE DOES NOT VERIFY — the document was altered, or it was not signed by this key
 
 VERIFICATION FAILED — 1 check(s) did not hold. Do not rely on this document.
+exit=1
 ```
 
-**B. A harmless reshuffle must _not_ be caught.** Rule R2 sorts frameworks by
-code, so reordering the array is a no-op. If this failed, the format would be
-fragile and every re-serialisation through a JSON library would be a false
-alarm:
+**B. A harmless reshuffle must _not_ be caught (exit 0).** Rule R2 sorts
+frameworks by code, so reordering the array is a no-op. If this failed, the
+format would be fragile and every re-serialisation through a JSON library would
+be a false alarm:
 
 ```bash
 python3 -c "
@@ -715,6 +810,7 @@ d['attestation']['claims']['posture']['frameworks'].reverse()
 json.dump(d, open('att-reordered.json','w'), indent=2)"
 
 scripts/attest/verify-attestation.sh --attestation att-reordered.json --jwks jwks.json
+echo "exit=$?"
 ```
 
 ```
@@ -722,13 +818,15 @@ scripts/attest/verify-attestation.sh --attestation att-reordered.json --jwks jwk
   PASS  ML-DSA-65 signature verifies over protected.payload
 ```
 
-Sensitive to meaning, insensitive to representation. That is the property you
-want, and you have just tested both halves of it.
+The exit code is 0 only while the document is still fresh (within the hour); the
+signature line is the point of the experiment. Sensitive to meaning,
+insensitive to representation. That is the property you want, and you have just
+tested both halves of it.
 
-**C. An envelope field must be caught too** — the experiment that distinguishes
-a verifier which hashes the envelope from one which only hashes the posture.
-Rewrite `iss`, the field that decides whose key set is authoritative, leaving
-the posture untouched:
+**C. An envelope field must be caught too (exit 1)** — the experiment that
+distinguishes a verifier which hashes the envelope from one which only hashes the
+posture. Rewrite `iss`, the field that decides whose key set is authoritative,
+leaving the posture untouched:
 
 ```bash
 python3 -c "
@@ -738,17 +836,52 @@ d['attestation']['claims']['iss'] = 'https://attacker.example'
 json.dump(d, open('att-issuer.json','w'), indent=2)"
 
 scripts/attest/verify-attestation.sh --attestation att-issuer.json --jwks jwks.json
+echo "exit=$?"
 ```
 
 ```
   FAIL  SIGNATURE DOES NOT VERIFY — the document was altered, or it was not signed by this key
 VERIFICATION FAILED — 1 check(s) did not hold. Do not rely on this document.
+exit=1
 ```
 
 `iss`, `kid`, `jti` and `nonce` live only in the envelope (E2..E5). A verifier
 that re-derives just the posture would pass this experiment — silently accepting
 a document whose issuer, key name and challenge had all been rewritten. **If your
 own implementation passes A and B but not C, it is hashing E7 instead of E1..E7.**
+
+**D. A member the signature does not cover must be caught (exit 1).** Add a
+member that no encoder reads. The signature over the covered members still
+verifies, which is exactly why a verifier must reject the document instead of
+ignoring the extra member:
+
+```bash
+python3 -c "
+import json
+d = json.load(open('att.json'))
+d['attestation']['claims']['note'] = 'not signed'
+json.dump(d, open('att-extra.json','w'), indent=2)"
+
+scripts/attest/verify-attestation.sh --attestation att-extra.json --jwks jwks.json
+echo "exit=$?"
+```
+
+```
+  PASS  ML-DSA-65 signature verifies over protected.payload
+  FAIL  unsigned_member — the claims JSON carries members the signature does not cover:
+          claims.note
+VERIFICATION FAILED — 1 check(s) did not hold. Do not rely on this document.
+exit=1
+```
+
+The same holds for an extra member inside `claims.posture` or inside a framework
+entry (the paths are reported as `posture.<member>` and
+`posture.frameworks[<i>].<member>`). If your own implementation prints
+`VERIFIED` for D, it can be shown facts nobody signed.
+
+If you want all of this, and more, as one command, `bash tests/run.sh` in this
+repository runs the offline rejection suite with throwaway keys and
+no network.
 
 ### 4.8 Freshness and replay
 
@@ -757,7 +890,7 @@ does not make a document current.
 
 | Field           | What to do with it                                                                                                                                                                                                                                                  |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `generatedAt`   | RFC 3339 instant the posture was computed. Reject anything older than your own tolerance; the reference verifier defaults to **1 hour**, matching the issuer's hard TTL ceiling.                                                                                    |
+| `generatedAt`   | RFC 3339 instant the posture was computed. Reject anything older than your own tolerance; the reference verifier defaults to **1 hour** (`--max-age-seconds`), matching the issuer's hard TTL ceiling. Reject anything **more than 300 seconds in the future** as well: the reference verifier fails it as `not_yet_valid`, because otherwise a document dated a year ahead would stay "fresh" for a year. **MUST be present and parseable:** a missing `generatedAt`, or one that cannot be parsed as RFC 3339, is a failure, never a skipped check — a document whose age was not read has not had its age checked. |
 | `expiresAt`     | After this, treat the document as stale by construction — re-fetch, do not accept "just this once". **MUST be present: reject a document without one.** We always set it, so a document lacking an expiry is not one of ours, and it must never be read as "never expires". Also reject `expiresAt - generatedAt > 1 hour` — that is above the ceiling we can issue, so it did not come from a conforming issuer whatever its signature says. |
 | `lastCheckedAt` | Freshest genuine monitoring heartbeat behind the posture. **Can legitimately be older than `generatedAt`** — that gap is the honest signal of how stale the underlying _data_ is, as distinct from the document. `null` means no heartbeat is being claimed at all. |
 | `slug`          | Binds the attestation to one trust center. Check it against the organisation you think you are evaluating. `--expect-slug` does this for you.                                                                                                                       |
@@ -798,14 +931,22 @@ and it is rejected, however well it verifies:
 
 ```
   PASS  ML-DSA-65 signature verifies over protected.payload
-  FAIL  nonce_mismatch — you challenged with 'ZZZZ-a-different-challenge-ZZZZ', the
-        document carries 'O2d82NvjTgu79kMc_9_UvlkFNahqWd_m'. A replayed or substituted
-        document, however well it verifies.
+  FAIL  nonce_mismatch — you challenged with 'ZZZZ-a-different-challenge-ZZZZ', the document carries 'yGNc4hhzO8LSLe9-FFNup1xCeHQCO9_W'. A replayed or substituted document, however well it verifies.
 ```
 
 Use `--expect-nonce ''` to assert the opposite — that a document carries **no**
-challenge. Passing neither means nothing compared the nonce, and the verifier
-says so rather than letting you believe otherwise.
+challenge. If you pass no `--expect-nonce` and the document *does* carry a nonce,
+nothing compared it, and the verifier says so with a warning:
+
+```
+  WARN  the document carries a nonce but you did not pass --expect-nonce, so nothing
+  WARN  compared it. Only the party that invented the challenge can check it.
+```
+
+If the document carries no nonce and you pass no `--expect-nonce`, the verifier
+prints `nonce: null  (no challenge — see --expect-nonce)` in its claims listing
+and no warning: there was no challenge to leave uncompared. Either way, a
+document you did not challenge gives you no replay protection beyond `expiresAt`.
 
 Rules worth knowing before you rely on it:
 
@@ -976,7 +1117,7 @@ If you are writing your own verifier, these are the numbers:
 | Private key seed | 32 bytes          | never transmitted; the expanded 4032-byte key is never used as the at-rest form                                  |
 | Signing context  | **empty, always** | RFC 9964 mandates it. Passing a non-empty context produces signatures our Rust side structurally cannot verify.  |
 | Signing input    | —                 | `ASCII(BASE64URL(protected) + "." + BASE64URL(payload))`, where `payload` is the canonical **envelope** bytes of §4.4.1 (E1..E7) — **not** the posture bytes, which are only field E7 |
-| Protected header | 3 members         | closed set `alg` / `kid` / `typ`; a fourth member or a `crit` is a rejection                                     |
+| Protected header | 3 members         | closed set `alg` / `kid` / `typ`; a fourth member or a `crit` is a rejection (`malformed_document`)              |
 | Detached form    | —                 | `BASE64URL(protected)                                                                                            |     | '..' |     | BASE64URL(signature)` — RFC 7515 Appendix F, empty payload segment |
 
 **Do not expect byte-identical signatures across implementations.** noble
@@ -996,10 +1137,13 @@ This section matters more than the commands.
 1. **Integrity.** Not one bit of the header or payload changed after signing.
 2. **Origin.** It was produced by whoever holds the private key matching the
    public key you verified against.
-3. **A point in time.** The `generatedAt` and `lastCheckedAt` values were what
-   they were when the document was signed; they cannot be back-dated after the
-   fact. (They can, of course, have been _wrong_ when signed — see below.)
-   The same goes for every envelope field: `iss`, `kid`, `jti` and your `nonce`
+3. **A point in time, as far as integrity goes.** The `generatedAt` and
+   `lastCheckedAt` values are the ones that were signed; they were not altered
+   after signing. That is all it says about them: the holder of the signing key
+   can sign **any** timestamp, including a false or a backdated one, and there is
+   no external timestamp authority or log behind them (item 8 below says who can
+   read that key). They can, of course, also have been _wrong_ when signed — see
+   below. The same integrity guarantee applies to every envelope field: `iss`, `kid`, `jti` and your `nonce`
    are inside the signature (§4.4.1), so none of them can be rewritten on a
    document after the fact either — which is what makes challenge-response
    worth doing.
@@ -1149,9 +1293,11 @@ If a HodeiShield attestation that previously verified suddenly does not:
    document may simply have aged out of the overlap window.
 2. **Fetch `/api/public/attest/status` and run the §7.1 procedure below**
    against the `kid` (and, if you know it, the trust-center slug). This is the
-   fastest way to learn *why* — `revoked` with a reason, versus `unknown`
-   because we publish no list, versus `good` (in which case the failure is
-   something else entirely and you should re-check §4).
+   fastest way to learn *why* — `revoked` with a reason (exit 1), versus
+   `unknown` because the list was fetched but does not verify (exit 3), versus
+   "could not check" because no list could be fetched at all, which includes a
+   deployment that publishes none (exit 2), versus `good` (in which case the
+   failure is something else entirely and you should re-check §4).
 3. Check this section and the Trust Center for a dated revocation notice naming
    the retired `kid` or the withdrawn subject. A revocation is announced; a
    silent disappearance is not.
@@ -1244,51 +1390,82 @@ curl -fsS "https://app.hodeishield.com/api/public/attest/<slug>?nonce=${NONCE}" 
 
 scripts/attest/verify-attestation.sh --status-list \
   --status status.json --status-keys status-jwks.json \
-  --attestation att.json --jwks jwks.json --expect-nonce "$NONCE"
+  --attestation att.json --jwks jwks.json \
+  --expect-slug <slug> --expect-issuer https://app.hodeishield.com \
+  --expect-nonce "$NONCE"
 ```
 
-Real output from a run against a live deployment (list `seq` 42, revoking a
-different key than the one that signed this document):
+Real output from a run on 2026-09-29 against the production deployment, for
+`talmaren-payments` (a demonstration organisation with fictitious data), with the
+list at `seq` 1564 carrying no revoked key and no revoked subject. Only the last
+section and the verdict are shown, exit 0; nothing is added:
 
 ```
 [9] Revocation check
-        subjectHash(meridian) = AOn5nxUXj74d9OHgjqn3hjgammzsKrMrznD4VTft_2E
+        subjectHash(talmaren-payments) = BrIFESLm9sK1SU_zjryKixn9vo58vbMKhKI4S_3nlKE
 
-GOOD — kid eD9mA_oBxW8zKtCm6j0TIw is not revoked, subject meridian carries no earlier
-withdrawal (list seq 42).
+GOOD — kid roeFReafBOA_WF3cqfilHA is not revoked, subject talmaren-payments carries no earlier withdrawal (list seq 1564).
+
+GOOD — not revoked, per a verified status list.
+
+That is all it proves. It does not prove the claims inside are true, that the key
+belongs to who you think, or that nothing else about the document is wrong. Read
+docs/security/attest-verification.md §6 and §7 before relying on it.
 ```
 
-and with the signing key itself on the list:
+and with the signing key itself on the list, the last lines have this form (the
+reason is whichever the list carries: `key_compromise`, `superseded`,
+`issuer_error`, `subject_withdrawn` or `unspecified`), with exit 1:
 
 ```
-REVOKED — via key, reason "key_compromise". Do not rely on this document.
+REVOKED — via key, reason "<reason>". Do not rely on this document.
 ```
 
 Given both `--attestation` (or `--jws`/`--claims`) and `--status-list`, the
 script runs the full §4 posture check first and then applies the status list to
 the resulting `kid`, slug and `generatedAt` — you do not supply
 `--check-kid`/`--check-subject` yourself in this mode; they are read from the
-verified document. Note `--jwks` and `--status-keys` are **different key sets**
-and the script never resolves one against the other; passing the attestation
-JWKS as `--status-keys` yields `unknown` (exit 3), not `good`.
+verified document. If the posture check fails, the run ends as a failure
+(exit 1) whatever the list says: an inauthentic document is not rescued by not
+being listed. Note `--jwks` and `--status-keys` are **different key sets** and the
+script never resolves one against the other; passing the attestation JWKS as
+`--status-keys` yields `unknown` (exit 3), not `good`.
+
+**What "revoked" means exactly.** The two rules of §7 are applied in this order,
+and the first that fires decides:
+
+- **Key rule.** `kid` (the header kid of the document, or `--check-kid`) is
+  listed in `keys[]` → revoked, with no timestamp compared.
+- **Subject rule.** The slug (from the document, or `--check-subject`) is listed
+  in `subjects[]` — matched by the hash `SHA-256("hodei-shield.attest.subject.v1"
+  || slug)`, base64url — and the document's `generatedAt` is **strictly earlier**
+  than the entry's `notBefore` → revoked. A `generatedAt` equal to or later than
+  `notBefore` is not revoked by this rule: the entry withdraws attestations
+  issued *before* that instant. If the subject is listed but no `generatedAt` is
+  available, or `generatedAt` or `notBefore` cannot be parsed, the outcome is
+  `unknown`, never `good`.
+- If the list is marked `truncated` (entries were dropped to fit a cap) and the
+  subject is not found, the outcome is `unknown` on the subject dimension:
+  "not found" does not mean "not listed".
 
 **Exit codes are distinct on purpose** — a caller scripting against this must
-not be able to collapse "revoked" and "we could not tell" into the same
-outcome by checking `$? -ne 0`:
+not be able to collapse "revoked", "we could not check" and "we could not tell"
+into one outcome by checking `$? -ne 0`:
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | `good` — the list verifies and the subject is not listed |
-| `1` | `revoked` — a key or subject entry matched |
-| `2` | usage/environment problem (bad flags, missing `curl`/`openssl`/`python3`) |
-| `3` | `unknown` — the list could not be fetched or does not verify (bad signature, stale past `nextUpdate`, wrong issuer, rolled-back `seq`, self-revoking). **Not** evidence of anything either way — see the "if you never fetch" paragraph above. |
+| `0` | `good` — if a document was given, its posture checks passed (§4) **and** the list verifies and neither rule fired; if only `--check-kid` / `--check-subject` were given, the list verifies and neither rule fired |
+| `1` | `revoked` — the key rule or the subject rule fired, **or** the posture check of the document you gave failed |
+| `2` | **could not check** — usage or environment problem (bad flags, missing `curl`/`openssl`/`python3`/`jq`, an unreadable file), **or a `--status` / `--status-keys` source that could not be fetched** (the script stops with `error: failed to fetch …`). Says nothing about the subject. |
+| `3` | `unknown` — the list was obtained but does not verify: bad signature, stale past `nextUpdate` (300 s skew allowance), rolled back (`--min-seq`), self-revoking, an unresolved or mislabelled `kid`, a malformed document; **or** the subject rule could not be decided (see above). The list's `iss` is compared to `--expect-issuer` **only if you pass it**; without it, a list from another issuer is not caught. **Not** evidence of anything either way — see the "if you never fetch" paragraph above. |
 
 A `404 status_list_unavailable` from `/api/public/attest/status` means this
 deployment publishes no list at all (unconfigured, or the publisher has never
 run) — the honest, cacheable non-answer, distinct from an empty *signed* list
 asserting "nothing is revoked". The script's `--status` fetch surfaces the 404
-as a usage error (exit 2); at that point you are simply back in the offline
-mode this document has always described.
+as "could not check" (exit 2: the fetch fails before any list exists to be
+`unknown`); at that point you are simply back in the offline mode this document
+has always described.
 
 **Revocation notices** (none to date):
 
@@ -1388,8 +1565,10 @@ as one.
 ### Related documents
 
 - [`scripts/attest/verify-attestation.sh`](../../scripts/attest/verify-attestation.sh)
-  — §4 and §7, automated. **In this repository**, byte-identical to the file we
-  run ourselves.
+  — §4 and §7, automated. **In this repository**, byte for byte the copy we
+  keep in our private repository, where CI checks the two never diverge. The
+  service itself verifies with its own TypeScript implementation, not with this
+  script.
 
 Referenced above but **not public**: the operator-side key-handling and rotation
 runbook, the transport mTLS notes, the revocation design specification, the

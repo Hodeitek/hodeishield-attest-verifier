@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The container jobs run on Debian 13, which ships OpenSSL 3.5, the first
+# release with ML-DSA (FIPS 204). The image is pinned by digest so a rebuilt
+# tag cannot change what the tests ran on.
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install shellcheck
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends shellcheck
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/live.sh
+
+  tests:
+    name: offline tests (valid + rejection)
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install openssl, python3, jq
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq
+      - name: Toolchain
+        run: |
+          openssl version
+          openssl list -signature-algorithms | grep -i ml-dsa-65
+          python3 --version
+          jq --version
+      - name: tests/run.sh
+        run: bash tests/run.sh
+
+  # The README says an OpenSSL without ML-DSA is "a limit of your tooling, not
+  # evidence against the document", i.e. exit 2, never 1. The hosted Ubuntu
+  # image still ships OpenSSL 3.0, which makes it the right place to hold the
+  # verifier to that.
+  old-openssl:
+    name: old OpenSSL is exit 2, not 1
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verifier refuses to judge with OpenSSL < 3.5
+        run: |
+          set -uo pipefail
+          openssl version
+          if openssl list -signature-algorithms | grep -qi ml-dsa; then
+            echo "::notice title=old-openssl::this runner's OpenSSL supports ML-DSA; nothing to check"
+            exit 0
+          fi
+          echo '{}' > att.json; echo '{"keys":[]}' > jwks.json
+          # The step shell runs with -e; capture the expected non-zero exit
+          # instead of letting it end the step.
+          rc=0
+          bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json > out 2>&1 || rc=$?
+          cat out
+          [ "$rc" -eq 2 ] || { echo "::error::expected exit 2, got $rc"; exit 1; }
+          grep -qF 'is too old' out || { echo "::error::no 'is too old' message"; exit 1; }

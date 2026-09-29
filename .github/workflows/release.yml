@@ -1,0 +1,96 @@
+name: Release
+
+# A pushed v* tag builds a DRAFT release: the verifier script, SHA256SUMS, and a
+# Sigstore keyless signature bundle for each. The owner reviews and publishes
+# the draft by hand; this workflow never publishes a non-draft release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: offline tests (valid + rejection)
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install openssl, python3, jq, shellcheck
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq shellcheck
+      - name: shellcheck
+        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/live.sh
+      - name: tests/run.sh
+        run: bash tests/run.sh
+
+  publish:
+    name: sign and draft release
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the draft release and upload assets
+      id-token: write # for cosign's Sigstore keyless (OIDC) signing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Stage the artefact and SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cp scripts/attest/verify-attestation.sh dist/
+          cd dist
+          sha256sum verify-attestation.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      # Keyless: cosign gets a short-lived Fulcio certificate for this job's
+      # GitHub OIDC identity and records the signature in the public Rekor log.
+      # No signing key or secret exists anywhere.
+      - name: Sign the script and SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          for f in verify-attestation.sh SHA256SUMS; do
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
+          done
+
+      # Run the exact check README.md tells a reader to run, so a draft whose
+      # published instructions would fail never reaches the owner.
+      - name: Verify the bundles as a reader would
+        working-directory: dist
+        env:
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          for f in verify-attestation.sh SHA256SUMS; do
+            cosign verify-blob --bundle "${f}.sigstore.json" \
+              --certificate-identity "$IDENTITY" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$f"
+          done
+
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --draft \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes \
+            dist/*
