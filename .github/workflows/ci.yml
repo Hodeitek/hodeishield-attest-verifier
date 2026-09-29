@@ -75,8 +75,10 @@ jobs:
             exit 0
           fi
           echo '{}' > att.json; echo '{"keys":[]}' > jwks.json
-          bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json > out 2>&1
-          rc=$?
+          # The step shell runs with -e; capture the expected non-zero exit
+          # instead of letting it end the step.
+          rc=0
+          bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json > out 2>&1 || rc=$?
           cat out
           [ "$rc" -eq 2 ] || { echo "::error::expected exit 2, got $rc"; exit 1; }
           grep -qF 'is too old' out || { echo "::error::no 'is too old' message"; exit 1; }
