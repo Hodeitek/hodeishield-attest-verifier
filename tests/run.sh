@@ -68,6 +68,17 @@ json.dump(d, open(sys.argv[2], "w"), indent=2)
 PY
 }
 
+# edit_text IN OUT PYTHON — rewrite the raw TEXT of a file; `t` is its content.
+# For what a JSON round-trip cannot express, such as duplicate members.
+edit_text() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+exec(sys.argv[3])
+open(sys.argv[2], "w").write(t)
+PY
+}
+
 # --- keys ---------------------------------------------------------------------
 "${MINT[@]}" keygen --out "$T/issuer.pem"  --jwks "$T/jwks.json"        >/dev/null
 "${MINT[@]}" keygen --out "$T/other.pem"   --jwks "$T/other-jwks.json"  >/dev/null
@@ -224,6 +235,64 @@ jq -r '.attestation.signature' "$T/att-garbage.json" > "$T/garbage.jws"
 expect 1 'is not a hodei-shield.attest.attestation.v1' 'an attached payload that is not an envelope is a failure (1), not "could not check" (2)' -- \
   --jws "$T/garbage.jws" "${COMMON[@]}"
 
+# Duplicate members. Every parser the script uses keeps the LAST value, which
+# is the signed one here, so these were never verdict-changing; the point is
+# that a reader who keeps the FIRST would have seen the decoy under a PASS.
+jq -c . "$T/att.json" > "$T/att-compact.json"
+edit_text "$T/att-compact.json" "$T/dup-posture.json" '
+t = t.replace("\"posture\":{", "\"posture\":{\"slug\":\"another-org\",\"expiresAt\":\"2099-01-01T00:00:00.000Z\",", 1)'
+expect 1 'duplicate_key' 'a duplicated slug/expiresAt inside posture is rejected' -- \
+  --attestation "$T/dup-posture.json" "${COMMON[@]}"
+edit_text "$T/att-compact.json" "$T/dup-claims.json" '
+t = t.replace("{\"attestation\":{", "{\"attestation\":{\"claims\":{\"iss\":\"x\"},", 1)'
+expect 1 'duplicate_key' 'a second claims inside attestation is rejected' -- \
+  --attestation "$T/dup-claims.json" "${COMMON[@]}"
+edit_text "$T/att-compact.json" "$T/dup-top-claims.json" '
+t = "{\"claims\":{\"iss\":\"x\"}," + t[1:]'
+expect 1 'duplicate_key' 'a claims member beside attestation at the top level is rejected' -- \
+  --attestation "$T/dup-top-claims.json" "${COMMON[@]}"
+edit_text "$T/att-compact.json" "$T/dup-attestation.json" '
+t = "{\"attestation\":{\"claims\":{}}," + t[1:]'
+expect 1 'duplicate_key' 'a duplicated attestation member is rejected' -- \
+  --attestation "$T/dup-attestation.json" "${COMMON[@]}"
+edit_text "$T/att-compact.json" "$T/dup-band.json" '
+t = t.replace("\"band\":", "\"band\":\"advanced\",\"band\":", 1)'
+expect 1 'duplicate_key' 'a duplicated framework band is rejected' -- \
+  --attestation "$T/dup-band.json" "${COMMON[@]}"
+expect 0 'every member of the claims JSON is covered by the signature' 'the same document, compact and without duplicates, verifies' -- \
+  --attestation "$T/att-compact.json" "${COMMON[@]}"
+jq -c . "$T/claims.json" > "$T/claims-compact.json"
+edit_text "$T/claims-compact.json" "$T/dup-claims-file.json" '
+t = t.replace("{", "{\"iss\":\"https://other-issuer.test\",", 1)'
+expect 1 'duplicate_key' 'a duplicated member in a --claims file is rejected' -- \
+  --jws "$T/att.jws" --claims "$T/dup-claims-file.json" "${COMMON[@]}"
+jq -c . "$T/jwks.json" > "$T/jwks-compact.json"
+edit_text "$T/jwks-compact.json" "$T/dup-jwks.json" '
+t = t.replace("\"pub\":", "\"pub\":\"AAAA\",\"pub\":", 1)'
+expect 2 'repeats members' 'a key document with duplicated members is "could not check" (2)' -- \
+  --attestation "$T/att.json" --jwks "$T/dup-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+# A scanner that crashes must not read as "no duplicates".
+edit_text "$T/att-compact.json" "$T/dup-deep.json" '
+deep = "[" * 990 + "]" * 990
+t = t.replace("\"posture\":{", "\"posture\":{\"slug\":\"another-org\",", 1)
+t = t.rstrip()[:-1] + ",\"verification\":" + deep + "}"'
+expect 1 'duplicate_key' 'a duplicate beside nesting too deep to walk recursively is still found' -- \
+  --attestation "$T/dup-deep.json" "${COMMON[@]}"
+edit_text "$T/jwks-compact.json" "$T/jwks-trailing.json" '
+t = t + " trailing"'
+expect 2 'is not strict JSON' 'a key document with text after the JSON is "could not check" (2)' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks-trailing.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+mint_attest --out "$T/dup-header.json" --header 'x=1'
+edit_text "$T/dup-header.json" "$T/dup-header.json" '
+import base64, json as j
+d = j.loads(t); h, p, s = d["attestation"]["signature"].split(".")
+raw = base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)).decode()
+raw = raw.replace("\"x\":\"1\"", "\"typ\":\"application/attest+jws\"")
+d["attestation"]["signature"] = ".".join([base64.urlsafe_b64encode(raw.encode()).rstrip(b"=").decode(), p, s])
+t = j.dumps(d)'
+expect 1 'header members are' 'a protected header with a duplicated member is rejected' -- \
+  --attestation "$T/dup-header.json" "${COMMON[@]}"
+
 echo '# revocation (--status-list)'
 
 LIST_AT='2026-01-01T00:00:00.000Z'
@@ -273,6 +342,15 @@ expect 1 'REVOKED — via subject' 'an attached JWS alone does not dodge a subje
 edit "$T/list-empty.json" "$T/list-truthy.json" 'd["statusList"]["truncated"] = "yes"'
 expect 3 'truncated must be a boolean' 'a list whose truncated flag is not a boolean is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-truthy.json"
+
+jq -c . "$T/list-key.json" > "$T/list-key-compact.json"
+edit_text "$T/list-key-compact.json" "$T/list-dup.json" '
+t = t.replace("\"keys\":", "\"keys\":[],\"keys\":", 1)'
+expect 3 'duplicate_key' 'a status list with a duplicated member is UNKNOWN' -- \
+  "${SL[@]}" --status "$T/list-dup.json"
+printf '\xef\xbb\xbf' > "$T/list-bom.json"; cat "$T/list-dup.json" >> "$T/list-bom.json"
+expect 3 'is not strict JSON' 'a status list jq accepts but a strict parser does not is UNKNOWN' -- \
+  "${SL[@]}" --status "$T/list-bom.json"
 
 edit "$T/att.json" "$T/decoy-revoked.json" '
 c = d["attestation"]["claims"]
