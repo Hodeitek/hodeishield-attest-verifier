@@ -303,7 +303,7 @@ mint_status() { "${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" \
   --issued-at "$LIST_AT" --next-update "$LIST_NEXT" "$@"; }
 
 mint_status --out "$T/list-empty.json" --seq 7
-mint_status --out "$T/list-key.json" --seq 8 --revoke-kid "$ISSUER_KID"
+mint_status --out "$T/list-key.json" --seq 8 --revoke-kid="$ISSUER_KID"
 mint_status --out "$T/list-subj-after.json" --seq 8 --revoke-subject "$SLUG@2026-01-01T00:10:00.000Z"
 mint_status --out "$T/list-subj-before.json" --seq 8 --revoke-subject "$SLUG@2025-12-31T23:00:00.000Z"
 "${MINT[@]}" status --key "$T/issuer.pem" --iss "$ISS" --issued-at "$LIST_AT" --next-update "$LIST_NEXT" \
