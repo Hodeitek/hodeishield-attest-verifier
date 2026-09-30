@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Reject commit messages that mention Claude (see CONTRIBUTING.md).
+set -euo pipefail
+
+msg_file="${1:?usage: commit-msg <message-file>}"
+
+hit=$(grep -v '^#' "$msg_file" | grep -Ein 'claude' | head -n 1 || true)
+if [ -n "$hit" ]; then
+  echo "commit-msg: commit messages must not mention Claude (matched: ${hit})" >&2
+  exit 1
+fi
