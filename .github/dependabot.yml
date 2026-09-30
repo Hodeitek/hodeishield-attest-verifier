@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
 # Keeps the SHA-pinned actions in .github/workflows current. Dependabot
 # rewrites both the pinned SHA and its trailing version comment.
 version: 2

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
 # =============================================================================
 # tests/run.sh — offline acceptance tests for scripts/attest/verify-attestation.sh
 #

@@ -229,8 +229,14 @@ we will treat it as one.
 
 ## Licence
 
-Apache License 2.0. It is a verifier; you should be free to read it, run it,
+Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Hodeitek S.L.;
+see [NOTICE](NOTICE). It is a verifier; you should be free to read it, run it,
 modify it and integrate it into your own due-diligence tooling without asking.
+
+HodeiShield® and Hodeitek® are registered trademarks of Hodeitek S.L.; the license grants no rights to them (Apache-2.0 §6).
+
+To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md) (commits carry a DCO
+sign-off). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## About
 

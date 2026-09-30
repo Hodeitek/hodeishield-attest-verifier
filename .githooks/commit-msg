@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
 # Reject commit messages that mention Claude (see CONTRIBUTING.md).
 set -euo pipefail
 
