@@ -1,0 +1,49 @@
+name: Attribution
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+# The rule applies from this commit on: history published before it is left
+# as is. It is the head of main (dev included) when the rule was adopted.
+env:
+  CUTOFF: 922332404a9e886142650ac25c860c029a1c0a56
+
+jobs:
+  no-ai-attribution:
+    name: no Claude attribution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Commits, PR title and PR body must not mention Claude
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_REF"
+          fail=0
+          while read -r sha; do
+            if git log -1 --format=%B "$sha" | grep -Eiq 'claude'; then
+              echo "::error::commit $sha mentions Claude"
+              fail=1
+            fi
+          done < <(git rev-list "origin/${BASE_REF}..${HEAD_SHA}" "^${CUTOFF}")
+          if printf '%s\n' "$PR_TITLE" | grep -Eiq 'claude'; then
+            echo "::error::PR title mentions Claude"
+            fail=1
+          fi
+          if printf '%s\n' "$PR_BODY" | grep -Eiq 'claude'; then
+            echo "::error::PR body mentions Claude"
+            fail=1
+          fi
+          exit "$fail"
