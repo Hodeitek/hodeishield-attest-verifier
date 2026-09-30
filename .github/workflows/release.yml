@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
 name: Release
 
 # A pushed v* tag builds a DRAFT release: the verifier script, SHA256SUMS, and a

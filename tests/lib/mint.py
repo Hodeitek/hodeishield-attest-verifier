@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
 """Mint signed ATTEST test documents with a throwaway ML-DSA-65 key.
 
 This is the issuer side the tests need and the verifier must never share code
