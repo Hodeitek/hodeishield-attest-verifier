@@ -225,7 +225,8 @@ claims and what you can independently establish:
 
 **security@hodeitek.com** — include the artefact, the exact command, and the
 full output. A verification failure you can reproduce is a security report and
-we will treat it as one.
+we will treat it as one. You can also report it privately through GitHub
+(**Security** tab, **Report a vulnerability**); see [SECURITY.md](SECURITY.md).
 
 ## Licence
 
