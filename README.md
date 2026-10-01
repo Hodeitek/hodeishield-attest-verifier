@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/Hodeitek/hodeishield-attest-verifier?display_name=tag)](https://github.com/Hodeitek/hodeishield-attest-verifier/releases)
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 
-The offline verifier for [HodeiShield](https://app.hodeishield.com) posture
+The offline verifier for [HodeiShield](https://hodeishield.com) posture
 attestations, published by [Hodeitek](https://hodeitek.com), so that you do
 **not** have to take our word for one. No credentials, account or cooperation
 needed.
@@ -241,5 +241,6 @@ sign-off). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## About
 
-- [app.hodeishield.com](https://app.hodeishield.com) — HodeiShield; where the attestations, keys and status list are served.
+- [hodeishield.com](https://hodeishield.com) — HodeiShield.
+- [app.hodeishield.com](https://app.hodeishield.com) — the HodeiShield application; where the attestations, keys and status list are served.
 - [hodeitek.com](https://hodeitek.com) — Hodeitek, who publishes this repository.
