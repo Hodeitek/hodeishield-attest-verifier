@@ -14,6 +14,13 @@ needed.
 
 ## The short version
 
+What an organisation shares with you is a **URL**, not a file:
+`https://app.hodeishield.com/api/public/attest/<slug>`, or just the `<slug>`,
+which is the last part of that URL. Fetch the document from it right before you
+verify: a document is valid for at most one hour, so a copy saved earlier, or
+one forwarded to you as a file, will fail the freshness check however genuine
+it is.
+
 The attestation and the signing key are served by
 [app.hodeishield.com](https://app.hodeishield.com). `-f` makes `curl` fail on an
 HTTP error instead of saving the error page as `att.json`.
@@ -37,10 +44,22 @@ document names its own issuer, and only you can say which one you trust.
 
 A posture attestation is a short document, signed by HodeiShield, stating how
 far an organisation has got with frameworks such as ISO 27001 or NIS2 at a given
-moment. You would usually receive one from a supplier, from their Trust Center
-on HodeiShield, or attached to a security questionnaire. This tool tells you
-whether that document is genuine, unaltered, current and about the organisation
-you think. It is a verifier you can read and run yourself, and the documentation
+moment. A supplier, their Trust Center on HodeiShield or their answer to a
+security questionnaire gives you the **link** to it,
+`https://app.hodeishield.com/api/public/attest/<slug>`, or the slug alone. The
+slug is the last part of that URL: in
+`https://app.hodeishield.com/api/public/attest/talmaren-payments` it is
+`talmaren-payments`, and it is the value you pass to `--expect-slug`. A Trust
+Center badge carries the same link in its `Link` response header (see
+[§4.9 of the verification document](docs/security/attest-verification.md#49-checking-an-embedded-badge-against-the-attestation)).
+
+Each document is valid for at most one hour after it is generated, so what you
+verify is the copy you fetch from that URL, not a file someone sent you: a file
+forwarded by email or attached to a questionnaire will usually be older than an
+hour by the time you check it, and the verifier rejects it as too old or
+expired. If you were sent only a file, ask for the link. This tool tells you
+whether the document you fetched is genuine, unaltered, current and about the
+organisation you think. It is a verifier you can read and run yourself, and the documentation
 here explains exactly what a `VERIFIED` result does and does not mean; §6 of it
 says what the tool cannot tell you.
 
