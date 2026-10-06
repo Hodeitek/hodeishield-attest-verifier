@@ -339,7 +339,7 @@ that run; a fresh fetch has a new `jti`, `generatedAt` and digest:
 HodeiShield posture attestation — offline verification
 
 [0] Environment
-  PASS  OpenSSL 3.5.7 (ML-DSA capable)
+  PASS  OpenSSL 3.5.7 offers ML-DSA-65
 
 [1] Structure
   PASS  detached JWS (RFC 7515 Appendix F): payload segment is empty

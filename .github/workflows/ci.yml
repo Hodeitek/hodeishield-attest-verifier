@@ -86,3 +86,35 @@ jobs:
           cat out
           [ "$rc" -eq 2 ] || { echo "::error::expected exit 2, got $rc"; exit 1; }
           grep -qF 'is too old' out || { echo "::error::no 'is too old' message"; exit 1; }
+
+  # LibreSSL (the `openssl` on macOS, and Homebrew's 4.x) prints a version
+  # >= 3.5 and has no ML-DSA. It must be "could not check" (2) with "not ML-DSA
+  # capable", never reported as a capable OpenSSL and never 1. Alpine ships
+  # LibreSSL as `libressl`; it is linked as `openssl`, as macOS presents it.
+  libressl:
+    name: LibreSSL is exit 2, not 1
+    runs-on: ubuntu-latest
+    container: alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+    steps:
+      - name: Install bash, python3, libressl
+        run: apk add --no-cache bash python3 libressl
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verifier refuses to judge with LibreSSL
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/bin && ln -sf "$(command -v libressl)" /tmp/bin/openssl
+          export PATH="/tmp/bin:$PATH"
+          openssl version
+          cd tests/vectors/v1
+          rc=0
+          bash ../../../scripts/attest/verify-attestation.sh --attestation attestations/valid.json \
+            --jwks keys/test-only-issuer-jwks.json --expect-slug fixture-org \
+            --expect-issuer https://issuer.test --now 1767225900 > /tmp/out 2>&1 || rc=$?
+          cat /tmp/out
+          [ "$rc" -eq 2 ] || { echo "::error::expected exit 2, got $rc"; exit 1; }
+          grep -qF 'not ML-DSA capable' /tmp/out || { echo "::error::no 'not ML-DSA capable' message"; exit 1; }
+          if grep -qF 'PASS  OpenSSL' /tmp/out; then echo "::error::LibreSSL was reported as an ML-DSA capable OpenSSL"; exit 1; fi

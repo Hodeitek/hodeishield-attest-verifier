@@ -58,3 +58,5 @@ No third-party bot with write access runs on this repository.
   - `bash tests/container.sh` must pass before the pull request is opened.
   - To read the current multi-architecture digest of the tag:
     `docker buildx imagetools inspect debian:trixie-slim` (the `Digest:` line).
+- **The `alpine:3.22` digest** in `ci.yml` (the LibreSSL job) follows the same
+  rules: bumped by hand, at least 7 days old.
