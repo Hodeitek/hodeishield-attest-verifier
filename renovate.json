@@ -33,12 +33,13 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Job container debian:trixie-slim@<digest> in all workflows (digest-only bumps).",
+      "description": "debian:trixie-slim@<digest> wherever it is pinned: the job containers in the workflows, the digest comment in container.yml, and the two container commands in README.md. tests/container.sh fails if these differ, so a bump must change all of them in one PR (digest-only bumps).",
       "managerFilePatterns": [
-        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/",
+        "/^README\\.md$/"
       ],
       "matchStrings": [
-        "container:\\s*debian:(?<currentValue>trixie-slim)@(?<currentDigest>sha256:[a-f0-9]{64})"
+        "debian:(?<currentValue>trixie-slim)@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
       "datasourceTemplate": "docker",
       "depNameTemplate": "debian"
