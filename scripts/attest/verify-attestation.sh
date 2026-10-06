@@ -295,6 +295,18 @@ fi
 printf '%s[0] Environment%s\n' "$BOLD" "$RESET"
 command -v openssl >/dev/null 2>&1 || die "openssl not found. Need OpenSSL >= 3.5 for ML-DSA."
 OSSL_LINE="$(openssl version)"
+# The version number alone says nothing about ML-DSA: LibreSSL (macOS, and
+# Homebrew's 4.x) prints a version >= 3.5 and has no ML-DSA at all. Before this
+# check it passed as "ML-DSA capable" and only failed later, as an unexplained
+# "OpenSSL rejected the reconstructed public key". Still exit 2, but the reader
+# was told the opposite of the truth on the way there.
+case "$OSSL_LINE" in
+  'OpenSSL '*) ;;
+  *) die "'openssl' here is not OpenSSL, so it is not ML-DSA capable: ${OSSL_LINE}
+       ML-DSA (FIPS 204) needs OpenSSL >= 3.5. LibreSSL has no ML-DSA, whatever its
+       version number. Use OpenSSL >= 3.5, or the container route in the README.
+       This is a tooling limit, not evidence against the attestation." ;;
+esac
 OSSL_V="$(printf '%s' "$OSSL_LINE" | awk '{print $2}')"
 OSSL_MAJ="${OSSL_V%%.*}"; OSSL_R="${OSSL_V#*.}"; OSSL_MIN="${OSSL_R%%.*}"
 # Written multi-line on purpose. Semgrep's bash parser cannot parse a
@@ -311,7 +323,15 @@ if [ "$OSSL_MAJ" -lt 3 ] || { [ "$OSSL_MAJ" -eq 3 ] && [ "$OSSL_MIN" -lt 5 ]; };
        Found: ${OSSL_LINE}
        This is a tooling limit, not evidence against the attestation."
 fi
-ok "OpenSSL ${OSSL_V} (ML-DSA capable)"
+# Ask OpenSSL itself, instead of inferring it from the version: a build or a
+# provider configuration (a FIPS-only provider, say) can lack ML-DSA-65 on 3.5+.
+if ! openssl list -signature-algorithms 2>/dev/null | grep -qi 'ML-DSA-65'; then
+  die "OpenSSL ${OSSL_V} does not offer ML-DSA-65, so it is not ML-DSA capable here.
+       Found: ${OSSL_LINE}
+       'openssl list -signature-algorithms' does not list ML-DSA-65 (check the
+       providers it loads). This is a tooling limit, not evidence against the attestation."
+fi
+ok "OpenSSL ${OSSL_V} offers ML-DSA-65"
 
 if [ -n "$ATTESTATION_FILE" ] || [ -n "$CLAIMS_FILE" ] || [ -n "$POSTURE_FILE" ]; then
   command -v python3 >/dev/null 2>&1 \

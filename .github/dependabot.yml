@@ -3,6 +3,9 @@
 
 # Keeps the SHA-pinned actions in .github/workflows current. Dependabot
 # rewrites both the pinned SHA and its trailing version comment.
+# The debian:trixie-slim digest (workflows and README) and the cosign version
+# are not something Dependabot can parse. They are bumped by hand in the
+# periodic dependency reviews; see CONTRIBUTING.md, "Dependencies".
 version: 2
 updates:
   - package-ecosystem: github-actions

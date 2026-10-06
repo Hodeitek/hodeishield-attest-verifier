@@ -40,3 +40,23 @@ The `DCO` workflow checks this on commits of pull requests opened from forks.
   a fork each carry a `Signed-off-by` trailer matching their author. Commits
   published before the workflow was adopted (up to its `CUTOFF` commit) are not
   checked.
+
+## Dependencies
+
+No third-party bot with write access runs on this repository.
+
+- **GitHub Actions** are pinned by commit SHA, with the version in a trailing
+  comment. Dependabot (`.github/dependabot.yml`) opens one grouped pull request
+  against `dev` each week to move them.
+- **The `debian:trixie-slim` digest and the cosign version** (`cosign-release`
+  in `release.yml`) are bumped by hand, in the periodic dependency reviews:
+  - Take a new digest or release only once it is at least 7 days old.
+  - The digest is pinned in the workflows (`ci.yml`, `live.yml`,
+    `release.yml`, and a comment in `container.yml`) and in the two container
+    commands in `README.md`. Change all of them in the same commit;
+    `tests/container.sh` fails if they differ.
+  - `bash tests/container.sh` must pass before the pull request is opened.
+  - To read the current multi-architecture digest of the tag:
+    `docker buildx imagetools inspect debian:trixie-slim` (the `Digest:` line).
+- **The `alpine:3.22` digest** in `ci.yml` (the LibreSSL job) follows the same
+  rules: bumped by hand, at least 7 days old.

@@ -68,7 +68,7 @@ says what the tool cannot tell you.
 | | |
 |---|---|
 | `bash` ≥ 4 | This is bash, not POSIX `sh`. |
-| **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. |
+| **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier says so and exits 2. |
 | **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
 | `jq` | Only for `--status-list` (revocation checking). |
