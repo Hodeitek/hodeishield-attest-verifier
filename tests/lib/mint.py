@@ -10,9 +10,10 @@ posture F1..F8) and the status-list format (S-rules), NOT imported from
 scripts/attest/verify-attestation.sh. If the two ever disagree, the valid case
 in tests/run.sh fails, which is the point.
 
-Every key is generated at test time into a temporary directory. No private key
-is committed to this repository, so nothing here can mint a document that
-verifies against a key anybody else trusts.
+tests/run.sh generates every key at test time into a temporary directory. The
+only private keys committed to this repository are the TEST-ONLY keys of the
+published vectors (tests/vectors/v1/keys), which sign nothing real, so nothing
+here can mint a document that verifies against a key anybody trusts.
 
 Signing uses OpenSSL >= 3.5 (`openssl pkeyutl -sign -rawin`), empty ML-DSA
 context string, exactly as RFC 9964 specifies for JOSE.

@@ -296,6 +296,10 @@ the reason it is a short, single, readable script.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
   printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
+- `bash tests/vectors.sh` runs the published, versioned test vectors in
+  `tests/vectors/v1/`: fixed documents, TEST-ONLY keys, a fixed `--now` and the
+  expected exit code and reason for each, so you can check another verifier
+  against them. `tests/run.sh` runs them too; see `tests/vectors/v1/README.md`.
 - A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
   ("could not check"), never 1.
 - `bash tests/container.sh` extracts both container commands from this README

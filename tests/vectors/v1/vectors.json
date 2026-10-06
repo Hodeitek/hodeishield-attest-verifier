@@ -1,0 +1,1463 @@
+{
+  "format": "attest.attestation.v1",
+  "statusListFormat": "attest.statuslist.v1",
+  "vectorsVersion": "v1",
+  "note": "Paths are relative to this directory; run the verifier from here. expect.exit and expect.code are the contract; expect.match is the reference script's English.",
+  "cases": [
+    {
+      "id": "valid-detached",
+      "description": "A genuine detached attestation verifies.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed"
+      },
+      "canonical_sha256": "fe8b07a0e89e219fc53384aedb0c3bd65038946e1e31e2352486caa77d610571"
+    },
+    {
+      "id": "valid-jws-claims",
+      "description": "The same document given as a detached JWS plus a claims file verifies.",
+      "args": [
+        "--jws",
+        "jws/valid-detached.jws",
+        "--claims",
+        "claims/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed"
+      },
+      "canonical_sha256": "fe8b07a0e89e219fc53384aedb0c3bd65038946e1e31e2352486caa77d610571"
+    },
+    {
+      "id": "tampered-field",
+      "description": "A signed field (overallBand) changed after signing is rejected.",
+      "args": [
+        "--attestation",
+        "attestations/tampered-field.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      }
+    },
+    {
+      "id": "tampered-signature",
+      "description": "One character of the signature changed.",
+      "args": [
+        "--attestation",
+        "attestations/tampered-signature.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      }
+    },
+    {
+      "id": "reordered-header",
+      "description": "The protected header re-serialised in another member order is rejected (the signed bytes are the header as sent).",
+      "args": [
+        "--attestation",
+        "attestations/reordered-header.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      }
+    },
+    {
+      "id": "other-issuer",
+      "description": "A genuinely signed document whose iss differs from --expect-issuer.",
+      "args": [
+        "--attestation",
+        "attestations/other-issuer.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "issuer_mismatch",
+        "match": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "wrong-slug",
+      "description": "A genuine document for another trust-center slug than --expect-slug.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "another-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "slug_mismatch",
+        "match": "not the expected 'another-org'"
+      }
+    },
+    {
+      "id": "expired",
+      "description": "A genuine document past expiresAt is EXPIRED, not a forgery.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "expired",
+        "match": "EXPIRED",
+        "absent": [
+          "VERIFICATION FAILED"
+        ]
+      }
+    },
+    {
+      "id": "expired-says-signature-valid",
+      "description": "The last line of an expired genuine document says the signature is valid.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "expired",
+        "match": "EXPIRED — the signature is valid, but this attestation expired on 2026-01-01T00:15:00.000Z.",
+        "absent": [
+          "VERIFICATION FAILED"
+        ]
+      }
+    },
+    {
+      "id": "expired-names-fetch-command",
+      "description": "An expired genuine document names the command to fetch a new one.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "expired",
+        "match": "curl -fsS https://issuer.test/api/public/attest/fixture-org -o att.json"
+      }
+    },
+    {
+      "id": "expired-tampered",
+      "description": "A tampered document that is also expired is a failed verification, never only expired.",
+      "args": [
+        "--attestation",
+        "attestations/tampered-field.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "VERIFICATION FAILED",
+        "absent": [
+          "the signature is valid"
+        ]
+      }
+    },
+    {
+      "id": "expired-wrong-slug",
+      "description": "An expired document for another slug is a failed verification, not just expired.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "another-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "slug_mismatch",
+        "match": "VERIFICATION FAILED",
+        "absent": [
+          "the signature is valid"
+        ]
+      }
+    },
+    {
+      "id": "too-old",
+      "description": "A genuine unexpired document older than --max-age-seconds is reported as too old.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--max-age-seconds",
+        "60"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "too_old",
+        "match": "EXPIRED — the signature is valid, but this attestation was generated on",
+        "absent": [
+          "VERIFICATION FAILED"
+        ]
+      }
+    },
+    {
+      "id": "ttl-exceeded",
+      "description": "A validity window of 2 h is above the 1 h issuer ceiling.",
+      "args": [
+        "--attestation",
+        "attestations/ttl-exceeded.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "ttl_exceeded",
+        "match": "above the issuer's"
+      }
+    },
+    {
+      "id": "not-yet-valid",
+      "description": "A document dated beyond the 5 min clock-skew allowance in the future.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "not_yet_valid",
+        "match": "not_yet_valid"
+      }
+    },
+    {
+      "id": "unparseable-date",
+      "description": "A signed but unparseable generatedAt is rejected, not skipped.",
+      "args": [
+        "--attestation",
+        "attestations/unparseable-date.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "date_unparseable",
+        "match": "could not parse generatedAt"
+      }
+    },
+    {
+      "id": "header-extra-member",
+      "description": "A signed protected header member outside {alg, kid, typ}.",
+      "args": [
+        "--attestation",
+        "attestations/extra-header.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_not_allowed",
+        "match": "header members are"
+      }
+    },
+    {
+      "id": "nonce-mismatch",
+      "description": "A document answering challenge-A, verified against challenge-B.",
+      "args": [
+        "--attestation",
+        "attestations/nonce.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--expect-nonce",
+        "challenge-B"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "nonce_mismatch",
+        "match": "nonce_mismatch"
+      }
+    },
+    {
+      "id": "nonce-match",
+      "description": "A document answering challenge-A, verified against challenge-A.",
+      "args": [
+        "--attestation",
+        "attestations/nonce.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--expect-nonce",
+        "challenge-A"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "echoes your challenge verbatim"
+      },
+      "canonical_sha256": "c622f70fd46be3cebdb51ad17739d27ecae224a27e39c85cafc74a6022c7d0c0"
+    },
+    {
+      "id": "overall-band-overclaim",
+      "description": "A signed overallBand stronger than the weakest framework.",
+      "args": [
+        "--attestation",
+        "attestations/overclaim.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "overall_band_mismatch",
+        "match": "overall_band_mismatch"
+      }
+    },
+    {
+      "id": "unknown-kid",
+      "description": "The key document holds no key with the document's kid: could not check (2), not a forgery.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-other-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "unknown_kid",
+        "match": "no key in this JWKS carries kid"
+      }
+    },
+    {
+      "id": "kid-mismatch",
+      "description": "A key published under a kid its bytes do not derive.",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "jwks/mislabelled.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "kid_mismatch",
+        "match": "kid mismatch — header says"
+      }
+    },
+    {
+      "id": "decoy-slug-unsigned-member",
+      "description": "An unsigned nested decoy slug does not satisfy --expect-slug.",
+      "args": [
+        "--attestation",
+        "attestations/decoy-slug.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "another-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "unsigned_member",
+        "match": "unsigned_member"
+      }
+    },
+    {
+      "id": "decoy-slug-reads-signed-slug",
+      "description": "The slug check reads the signed slug, not the decoy.",
+      "args": [
+        "--attestation",
+        "attestations/decoy-slug.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "another-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "slug_mismatch",
+        "match": "not the expected 'another-org'"
+      }
+    },
+    {
+      "id": "decoy-timestamps-expired",
+      "description": "Unsigned decoy timestamps do not make an expired document fresh.",
+      "args": [
+        "--attestation",
+        "attestations/decoy-fresh.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "unsigned_member",
+        "match": "EXPIRED",
+        "absent": [
+          "the signature is valid"
+        ]
+      }
+    },
+    {
+      "id": "unsigned-member-top-level",
+      "description": "An unsigned top-level claims member.",
+      "args": [
+        "--attestation",
+        "attestations/extra-top.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "unsigned_member",
+        "match": "claims.note"
+      }
+    },
+    {
+      "id": "unsigned-member-framework",
+      "description": "An unsigned member inside a framework entry.",
+      "args": [
+        "--attestation",
+        "attestations/extra-framework.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "unsigned_member",
+        "match": "posture.frameworks[0].band_note"
+      }
+    },
+    {
+      "id": "missing-expiry",
+      "description": "A document without expiresAt is rejected, not treated as never expiring.",
+      "args": [
+        "--attestation",
+        "attestations/no-expiry.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "missing_expiry",
+        "match": "no expiresAt"
+      }
+    },
+    {
+      "id": "gated-redaction-leak",
+      "description": "A gated posture that still carries framework coverage.",
+      "args": [
+        "--attestation",
+        "attestations/gated-leak.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "redaction_violation",
+        "match": "redaction_violation"
+      }
+    },
+    {
+      "id": "header-alg-none",
+      "description": "A signed header naming another algorithm (none).",
+      "args": [
+        "--attestation",
+        "attestations/alg-none.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_alg_invalid",
+        "match": "alg is 'none'"
+      }
+    },
+    {
+      "id": "header-crit",
+      "description": "A signed header carrying crit.",
+      "args": [
+        "--attestation",
+        "attestations/crit.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_not_allowed",
+        "match": "header carries 'crit'"
+      }
+    },
+    {
+      "id": "decoy-claims-wrapper",
+      "description": "A nested claims wrapper does not replace the signed posture.",
+      "args": [
+        "--attestation",
+        "attestations/wrapped-decoy.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "another-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "slug_mismatch",
+        "match": "not the expected 'another-org'"
+      }
+    },
+    {
+      "id": "attached-valid",
+      "description": "An attached JWS alone verifies, with its claims decoded from the payload.",
+      "args": [
+        "--jws",
+        "jws/valid-attached.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "the embedded payload equals the bytes re-derived"
+      },
+      "canonical_sha256": "fe8b07a0e89e219fc53384aedb0c3bd65038946e1e31e2352486caa77d610571"
+    },
+    {
+      "id": "attached-wrong-slug",
+      "description": "An attached JWS alone is held to --expect-slug.",
+      "args": [
+        "--jws",
+        "jws/valid-attached.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "another-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "slug_mismatch",
+        "match": "not the expected 'another-org'"
+      }
+    },
+    {
+      "id": "attached-issuer-mismatch",
+      "description": "An attached JWS alone is held to --expect-issuer.",
+      "args": [
+        "--jws",
+        "jws/valid-attached.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://other-issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "issuer_mismatch",
+        "match": "issuer_mismatch"
+      }
+    },
+    {
+      "id": "attached-nonce-mismatch",
+      "description": "An attached JWS alone is held to --expect-nonce.",
+      "args": [
+        "--jws",
+        "jws/valid-attached.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--expect-nonce",
+        "challenge-B"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "nonce_mismatch",
+        "match": "nonce_mismatch"
+      }
+    },
+    {
+      "id": "attached-expired",
+      "description": "An attached JWS alone is held to its expiry.",
+      "args": [
+        "--jws",
+        "jws/valid-attached.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "expired",
+        "match": "EXPIRED"
+      }
+    },
+    {
+      "id": "attached-garbage-payload",
+      "description": "An attached payload that is not an envelope is a failure (1), not could-not-check (2).",
+      "args": [
+        "--jws",
+        "jws/attached-garbage-payload.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "payload_not_envelope",
+        "match": "is not a hodei-shield.attest.attestation.v1"
+      }
+    },
+    {
+      "id": "dup-posture-members",
+      "description": "slug/expiresAt duplicated inside posture.",
+      "args": [
+        "--attestation",
+        "attestations/dup-posture.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "dup-claims-in-attestation",
+      "description": "A second claims member inside attestation.",
+      "args": [
+        "--attestation",
+        "attestations/dup-claims.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "dup-claims-top-level",
+      "description": "A claims member beside attestation at the top level.",
+      "args": [
+        "--attestation",
+        "attestations/dup-top-claims.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "dup-attestation-member",
+      "description": "A duplicated attestation member.",
+      "args": [
+        "--attestation",
+        "attestations/dup-attestation.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "dup-framework-band",
+      "description": "A duplicated framework band.",
+      "args": [
+        "--attestation",
+        "attestations/dup-band.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "compact-valid",
+      "description": "The same document, compact and without duplicates, verifies.",
+      "args": [
+        "--attestation",
+        "attestations/valid-compact.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "every member of the claims JSON is covered by the signature"
+      },
+      "canonical_sha256": "fe8b07a0e89e219fc53384aedb0c3bd65038946e1e31e2352486caa77d610571"
+    },
+    {
+      "id": "dup-claims-file",
+      "description": "A duplicated member in a --claims file.",
+      "args": [
+        "--jws",
+        "jws/valid-detached.jws",
+        "--claims",
+        "claims/dup-member.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "dup-jwks-member",
+      "description": "A key document with a duplicated member: could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "jwks/dup-member.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "jwks_duplicate_key",
+        "match": "repeats members"
+      }
+    },
+    {
+      "id": "dup-beside-deep-nesting",
+      "description": "A duplicate beside nesting too deep to walk recursively is still found.",
+      "args": [
+        "--attestation",
+        "attestations/dup-deep.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "jwks-trailing-text",
+      "description": "A key document with text after the JSON: could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "jwks/trailing-text.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "not_strict_json",
+        "match": "is not strict JSON"
+      }
+    },
+    {
+      "id": "dup-header-member",
+      "description": "A protected header with a duplicated member.",
+      "args": [
+        "--attestation",
+        "attestations/dup-header.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_not_allowed",
+        "match": "header members are"
+      }
+    },
+    {
+      "id": "status-good",
+      "description": "A genuine document on a verified list that revokes nothing is good.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/empty.json"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "good",
+        "match": "GOOD — not revoked, per a verified status list"
+      },
+      "canonical_sha256": "fe8b07a0e89e219fc53384aedb0c3bd65038946e1e31e2352486caa77d610571",
+      "status_canonical_sha256": "047960f5100d1f72bfd2d2cbc2fc446176adc871a0892f6ee1fe4ea53cb06ed0"
+    },
+    {
+      "id": "status-revoked-key",
+      "description": "The document's signing key is revoked (Rule K).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/revokes-key.json"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "revoked_key",
+        "match": "REVOKED — via key"
+      }
+    },
+    {
+      "id": "status-revoked-subject",
+      "description": "The document was minted before its subject was withdrawn (Rule B).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/revokes-subject-after.json"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "revoked_subject",
+        "match": "REVOKED — via subject"
+      }
+    },
+    {
+      "id": "status-good-after-withdrawal",
+      "description": "A document minted after the withdrawal notBefore is good.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/revokes-subject-before.json"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "good",
+        "match": "GOOD — not revoked, per a verified status list"
+      }
+    },
+    {
+      "id": "status-stripped-revocation",
+      "description": "A revocation removed from a list after signing is UNKNOWN, never good.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/stripped-revocation.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      }
+    },
+    {
+      "id": "status-wrong-key",
+      "description": "A list signed with the ATTESTATION key is UNKNOWN (key sets are disjoint).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/signed-by-attestation-key.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_unknown_kid",
+        "match": "unknown_kid"
+      }
+    },
+    {
+      "id": "status-stale",
+      "description": "A list past nextUpdate is UNKNOWN, never good.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--status",
+        "status-lists/empty.json",
+        "--check-kid",
+        "U4ak4BB34tmbAwevvbToHw",
+        "--now",
+        "1767312000"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_stale",
+        "match": "stale"
+      }
+    },
+    {
+      "id": "status-rolled-back",
+      "description": "A list older than one already accepted (--min-seq) is UNKNOWN.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/empty.json",
+        "--min-seq",
+        "8"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_rolled_back",
+        "match": "rolled_back"
+      }
+    },
+    {
+      "id": "status-attached-jws-revoked",
+      "description": "An attached JWS alone does not dodge a subject withdrawal.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--status",
+        "status-lists/revokes-subject-after.json",
+        "--jws",
+        "jws/valid-attached.jws",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "revoked_subject",
+        "match": "REVOKED — via subject"
+      }
+    },
+    {
+      "id": "status-truncated-not-boolean",
+      "description": "A list whose truncated flag is not a boolean is UNKNOWN.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/truncated-truthy.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_truncated_invalid",
+        "match": "truncated must be a boolean"
+      }
+    },
+    {
+      "id": "status-dup-member",
+      "description": "A status list with a duplicated member is UNKNOWN.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/dup-member.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_duplicate_key",
+        "match": "duplicate_key"
+      }
+    },
+    {
+      "id": "status-bom",
+      "description": "A status list jq accepts but a strict parser does not is UNKNOWN.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/bom-prefixed.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_not_strict_json",
+        "match": "is not strict JSON"
+      }
+    },
+    {
+      "id": "status-expired-under-good-list",
+      "description": "A genuine expired document under a good list says it expired.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000",
+        "--status",
+        "status-lists/late-empty.json"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "expired",
+        "match": "EXPIRED — the signature is valid, but this attestation expired on 2026-01-01T00:15:00.000Z."
+      }
+    },
+    {
+      "id": "status-expired-under-revoking-list",
+      "description": "A genuine expired document whose key is revoked reports the revocation.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767312000",
+        "--status",
+        "status-lists/late-revokes-key.json"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "revoked_key",
+        "match": "REVOKED — via key",
+        "absent": [
+          "the signature is valid"
+        ]
+      }
+    },
+    {
+      "id": "status-decoy-generated-at",
+      "description": "An unsigned decoy generatedAt does not dodge a subject withdrawal.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--status",
+        "status-lists/revokes-subject-after.json",
+        "--attestation",
+        "attestations/decoy-generated-at.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "unsigned_member",
+        "match": "unsigned_member"
+      }
+    }
+  ]
+}
