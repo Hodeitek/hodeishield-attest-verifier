@@ -60,6 +60,20 @@ expect() {
   fi
 }
 
+# lacks PATTERN NAME — the output of the previous expect() has NO line
+# containing PATTERN. For verdicts that must not be confused with each other.
+lacks() {
+  local out="$T/out.$((PASSED + FAILED - 1))"
+  if grep -qF -- "$1" "$out"; then
+    printf 'not ok - %s (output contains: %s)\n' "$2" "$1"
+    sed 's/^/    # /' "$out"
+    FAILED=$((FAILED + 1))
+  else
+    printf 'ok - %s (no line containing: %s)\n' "$2" "$1"
+    PASSED=$((PASSED + 1))
+  fi
+}
+
 # edit IN OUT PYTHON — rewrite a JSON document; `d` is the parsed document.
 edit() {
   python3 - "$1" "$2" "$3" <<'PY'
@@ -136,6 +150,27 @@ expect 1 "not the expected 'another-org'" 'a document for another slug is reject
 expect 1 'EXPIRED' 'an expired document is rejected' -- \
   --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE"
 
+# Expired and tampered both exit 1, but must never read the same (#32): a
+# genuine document past its expiry says the signature is valid and how to get
+# a new one; a tampered one keeps "Do not rely on this document".
+expect 1 "EXPIRED — the signature is valid, but this attestation expired on $EXP." \
+  'a genuine expired document says so in its last line (exit 1)' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE"
+lacks 'VERIFICATION FAILED' 'a genuine expired document is not reported as a failed verification'
+expect 1 "curl -fsS $ISS/api/public/attest/$SLUG -o att.json" \
+  'a genuine expired document names the command to fetch a new one' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE"
+expect 1 'VERIFICATION FAILED' 'a tampered expired document is still a failed verification (exit 1)' -- \
+  --attestation "$T/tampered-field.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE"
+lacks 'the signature is valid' 'a tampered expired document never says its signature is valid'
+expect 1 'VERIFICATION FAILED' 'an expired document for another slug is a failed verification, not just expired' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug another-org --expect-issuer "$ISS" --now "$NOW_LATE"
+lacks 'the signature is valid' 'an expired document for another slug never says only that it expired'
+expect 1 'EXPIRED — the signature is valid, but this attestation was generated on' \
+  'a genuine document older than --max-age-seconds but unexpired says so (exit 1)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 60
+lacks 'VERIFICATION FAILED' 'a genuine document that is only too old is not reported as a failed verification'
+
 mint_attest --out "$T/long-ttl.json" --expires-at '2026-01-01T02:00:00.000Z'
 expect 1 "above the issuer's" 'a validity window above the 1 h issuer ceiling is rejected' -- \
   --attestation "$T/long-ttl.json" "${COMMON[@]}"
@@ -183,6 +218,7 @@ c = d["attestation"]["claims"]
 c["posture"] = {"x": {"generatedAt": "2026-01-02T00:00:00.000Z", "expiresAt": "2026-01-02T00:10:00.000Z"}, **c["posture"]}'
 expect 1 'EXPIRED' 'an unsigned decoy timestamp does not make an expired document fresh' -- \
   --attestation "$T/decoy-fresh.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE"
+lacks 'the signature is valid' 'an expired document with an unsigned member is not reported as only expired'
 
 edit "$T/att.json" "$T/extra-top.json" 'd["attestation"]["claims"]["note"] = "not signed"'
 expect 1 'claims.note' 'an unsigned top-level claims member is rejected' -- \
@@ -353,6 +389,22 @@ expect 3 'duplicate_key' 'a status list with a duplicated member is UNKNOWN' -- 
 printf '\xef\xbb\xbf' > "$T/list-bom.json"; cat "$T/list-dup.json" >> "$T/list-bom.json"
 expect 3 'is not strict JSON' 'a status list jq accepts but a strict parser does not is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-bom.json"
+
+# Expired under a good list says so; expired under a revocation reports the
+# revocation, because "request a new one" is the wrong advice for a withdrawn
+# key or subject.
+"${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" --issued-at '2026-01-01T23:00:00.000Z' \
+  --next-update '2026-01-02T01:00:00.000Z' --seq 9 --out "$T/list-late-empty.json"
+"${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" --issued-at '2026-01-01T23:00:00.000Z' \
+  --next-update '2026-01-02T01:00:00.000Z' --seq 9 --revoke-kid="$ISSUER_KID" --out "$T/list-late-key.json"
+LATE=(--status-list --status-keys "$T/status-keys.json" --attestation "$T/att.json" --jwks "$T/jwks.json"
+      --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE")
+expect 1 "EXPIRED — the signature is valid, but this attestation expired on $EXP." \
+  'a genuine expired document under a good list says it expired (exit 1)' -- \
+  "${LATE[@]}" --status "$T/list-late-empty.json"
+expect 1 'REVOKED — via key' 'a genuine expired document whose key is revoked reports the revocation' -- \
+  "${LATE[@]}" --status "$T/list-late-key.json"
+lacks 'the signature is valid' 'a revoked expired document is not reported as only expired'
 
 edit "$T/att.json" "$T/decoy-revoked.json" '
 c = d["attestation"]["claims"]

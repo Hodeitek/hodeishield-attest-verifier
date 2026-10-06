@@ -235,8 +235,9 @@ silent extension.
 #    Cached `public, max-age=300, stale-while-revalidate=3600`.
 curl -fsS https://app.hodeishield.com/api/public/attest/keys -o jwks.json
 
-# 2. The attestation itself, from wherever you were given it: the endpoint below,
-#    a Trust Center download, a questionnaire response, an email.
+# 2. The attestation itself, fetched from the URL you were given, right before
+#    verifying. A document lives at most one hour, so a file forwarded by email
+#    or attached to a questionnaire will usually fail the freshness check.
 curl -fsS https://app.hodeishield.com/api/public/attest/<slug> -o att.json
 ```
 

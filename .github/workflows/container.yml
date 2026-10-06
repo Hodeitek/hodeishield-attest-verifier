@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
+name: Container route
+
+# Runs the README's "Run it without installing anything" command, as written,
+# on a plain hosted runner (not a container job: the point is Docker or Podman
+# on the host). tests/container.sh extracts the command from README.md.
+#
+# The image in that command is debian:trixie-slim, pinned by digest:
+# debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+# README.md, ci.yml, live.yml and this comment must change in the same commit;
+# tests/container.sh fails if they differ.
+on:
+  push:
+    branches: [dev, main]
+    paths: &paths
+      - README.md
+      - scripts/attest/verify-attestation.sh
+      - tests/container.sh
+      - tests/lib/mint.py
+      - .github/workflows/container.yml
+      - .github/workflows/ci.yml
+      - .github/workflows/live.yml
+  pull_request:
+    branches: [dev, main]
+    paths: *paths
+  workflow_dispatch:
+
+concurrency:
+  group: container-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    name: README container command (docker, podman)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Engines on this runner
+        run: |
+          docker --version
+          podman --version
+      - name: tests/container.sh (docker)
+        run: ENGINE=docker bash tests/container.sh
+      - name: tests/container.sh (podman)
+        run: ENGINE=podman bash tests/container.sh

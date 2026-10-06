@@ -14,6 +14,13 @@ needed.
 
 ## The short version
 
+What an organisation shares with you is a **URL**, not a file:
+`https://app.hodeishield.com/api/public/attest/<slug>`, or just the `<slug>`,
+which is the last part of that URL. Fetch the document from it right before you
+verify: a document is valid for at most one hour, so a copy saved earlier, or
+one forwarded to you as a file, will fail the freshness check however genuine
+it is.
+
 The attestation and the signing key are served by
 [app.hodeishield.com](https://app.hodeishield.com). `-f` makes `curl` fail on an
 HTTP error instead of saving the error page as `att.json`.
@@ -37,10 +44,22 @@ document names its own issuer, and only you can say which one you trust.
 
 A posture attestation is a short document, signed by HodeiShield, stating how
 far an organisation has got with frameworks such as ISO 27001 or NIS2 at a given
-moment. You would usually receive one from a supplier, from their Trust Center
-on HodeiShield, or attached to a security questionnaire. This tool tells you
-whether that document is genuine, unaltered, current and about the organisation
-you think. It is a verifier you can read and run yourself, and the documentation
+moment. A supplier, their Trust Center on HodeiShield or their answer to a
+security questionnaire gives you the **link** to it,
+`https://app.hodeishield.com/api/public/attest/<slug>`, or the slug alone. The
+slug is the last part of that URL: in
+`https://app.hodeishield.com/api/public/attest/talmaren-payments` it is
+`talmaren-payments`, and it is the value you pass to `--expect-slug`. A Trust
+Center badge carries the same link in its `Link` response header (see
+[§4.9 of the verification document](docs/security/attest-verification.md#49-checking-an-embedded-badge-against-the-attestation)).
+
+Each document is valid for at most one hour after it is generated, so what you
+verify is the copy you fetch from that URL, not a file someone sent you: a file
+forwarded by email or attached to a questionnaire will usually be older than an
+hour by the time you check it, and the verifier rejects it as too old or
+expired. If you were sent only a file, ask for the link. This tool tells you
+whether the document you fetched is genuine, unaltered, current and about the
+organisation you think. It is a verifier you can read and run yourself, and the documentation
 here explains exactly what a `VERIFIED` result does and does not mean; §6 of it
 says what the tool cannot tell you.
 
@@ -56,6 +75,66 @@ says what the tool cannot tell you.
 
 `xxd` is used when present and is not required.
 
+## Run it without installing anything
+
+This is the supported route on macOS, Windows and Ubuntu 24.04 LTS, whose
+OpenSSL and bash are too old or absent for the verifier. The only thing your
+machine needs is Docker or Podman, plus `curl` to fetch the two files (`curl`
+ships with macOS, Windows 10 and later, and WSL).
+
+From the repository root, fetch the two files, then run one container command:
+
+```bash
+curl -fsS https://app.hodeishield.com/api/public/attest/talmaren-payments -o att.json
+curl -fsS https://app.hodeishield.com/api/public/attest/keys              -o jwks.json
+```
+
+<!-- container-route -->
+```bash
+docker run --rm -v "$PWD":/work:ro -w /work \
+  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
+```
+
+The container mounts your files read-only, installs OpenSSL, `python3` and `jq`
+inside itself, and runs the same script. If that install fails (for example
+because the container has no network), the command exits 2, "could not check",
+so the exit codes are exactly the native ones: the table in
+[Exit codes](#exit-codes--the-distinction-matters).
+
+To check revocation as well (see [Revocation](#revocation)), fetch the status
+list and its key set too, and run the same container with `--status-list`. Its
+exit codes are the `--status-list` table, including 3 for "unknown":
+
+```bash
+curl -fsS https://app.hodeishield.com/api/public/attest/status      -o status.json
+curl -fsS https://app.hodeishield.com/api/public/attest/status-keys -o status-jwks.json
+```
+
+<!-- container-route-status -->
+```bash
+docker run --rm -v "$PWD":/work:ro -w /work \
+  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  --status-list --status status.json --status-keys status-jwks.json \
+  --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
+```
+
+- **Podman:** the same commands with `podman` instead of `docker`. On SELinux
+  hosts (Fedora, RHEL) mount with `-v "$PWD":/work:ro,Z`.
+- **Windows:** install Docker Desktop and run the commands above from a WSL
+  terminal, in the cloned repository. PowerShell quotes differently, so no
+  PowerShell variant is offered.
+
+The image is the upstream Debian 13 image, pinned by digest: the same one CI
+tests on, so a rebuilt tag cannot change what you run. The digest pins the
+base image; `openssl`, `python3` and `jq` come from Debian 13's archive when the
+command runs, so they carry Debian's current security updates. An official signed image
+is tracked in [#22](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/22).
+
 ## Exit codes — the distinction matters
 
 Posture mode (the default, as above):
@@ -65,6 +144,13 @@ Posture mode (the default, as above):
 | **0** | Verified. The signature holds and every requested check passed. |
 | **1** | **Check failed.** Something did not hold. Do not rely on the document. |
 | **2** | **Could not check.** Missing tool, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
+
+A genuine document that is only out of date also exits 1: it is not one to rely
+on. Its last line tells it apart from a tampered or invalid one. It starts with
+`EXPIRED — the signature is valid` and gives the date the document expired and
+the command to fetch a new one. Any other failure ends with
+`VERIFICATION FAILED — … Do not rely on this document.` The `EXPIRED` line only
+appears when the signature verified and age or expiry was the only problem.
 
 `--status-list` mode (revocation, see below):
 
@@ -212,6 +298,9 @@ the reason it is a short, single, readable script.
   printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
 - A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
   ("could not check"), never 1.
+- `bash tests/container.sh` extracts both container commands from this README
+  and runs them as written (live example, plus offline rejection and revocation
+  cases); the "Container route" workflow does so with Docker and Podman.
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document

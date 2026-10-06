@@ -19,7 +19,8 @@ permissions:
 
 # The container jobs run on Debian 13, which ships OpenSSL 3.5, the first
 # release with ML-DSA (FIPS 204). The image is pinned by digest so a rebuilt
-# tag cannot change what the tests ran on.
+# tag cannot change what the tests ran on. README.md and container.yml carry
+# the same digest and must change in the same commit (tests/container.sh checks).
 jobs:
   shellcheck:
     name: shellcheck
@@ -35,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/live.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/live.sh tests/container.sh
 
   tests:
     name: offline tests (valid + rejection)
