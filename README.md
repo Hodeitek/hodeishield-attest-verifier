@@ -93,25 +93,46 @@ curl -fsS https://app.hodeishield.com/api/public/attest/keys              -o jwk
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
   debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
-  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --attestation att.json --jwks jwks.json \
   --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
 ```
 
-The container mounts your files read-only, installs OpenSSL and `python3`
+The container mounts your files read-only, installs OpenSSL, `python3` and `jq`
 inside itself, and runs the same script. If that install fails (for example
 because the container has no network), the command exits 2, "could not check",
 so the exit codes are exactly the native ones: the table in
 [Exit codes](#exit-codes--the-distinction-matters).
 
-- **Podman:** the same command with `podman` instead of `docker`. On SELinux
+To check revocation as well (see [Revocation](#revocation)), fetch the status
+list and its key set too, and run the same container with `--status-list`. Its
+exit codes are the `--status-list` table, including 3 for "unknown":
+
+```bash
+curl -fsS https://app.hodeishield.com/api/public/attest/status      -o status.json
+curl -fsS https://app.hodeishield.com/api/public/attest/status-keys -o status-jwks.json
+```
+
+<!-- container-route-status -->
+```bash
+docker run --rm -v "$PWD":/work:ro -w /work \
+  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  --status-list --status status.json --status-keys status-jwks.json \
+  --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
+```
+
+- **Podman:** the same commands with `podman` instead of `docker`. On SELinux
   hosts (Fedora, RHEL) mount with `-v "$PWD":/work:ro,Z`.
 - **Windows:** install Docker Desktop and run the commands above from a WSL
   terminal, in the cloned repository. PowerShell quotes differently, so no
   PowerShell variant is offered.
 
 The image is the upstream Debian 13 image, pinned by digest: the same one CI
-tests on, so a rebuilt tag cannot change what you run. An official signed image
+tests on, so a rebuilt tag cannot change what you run. The digest pins the
+base image; `openssl`, `python3` and `jq` come from Debian 13's archive when the
+command runs, so they carry Debian's current security updates. An official signed image
 is tracked in [#22](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/22).
 
 ## Exit codes — the distinction matters
@@ -270,9 +291,9 @@ the reason it is a short, single, readable script.
   printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
 - A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
   ("could not check"), never 1.
-- `bash tests/container.sh` extracts the container command from this README and
-  runs it as written (live example, plus an offline rejection case); the
-  "Container route" workflow does so with Docker and Podman.
+- `bash tests/container.sh` extracts both container commands from this README
+  and runs them as written (live example, plus offline rejection and revocation
+  cases); the "Container route" workflow does so with Docker and Podman.
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document

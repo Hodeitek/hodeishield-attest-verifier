@@ -4,19 +4,23 @@
 # =============================================================================
 # tests/container.sh — run the README's container command, verbatim.
 #
-# README.md ("Run it without installing anything") gives one `docker run`
-# command. This script extracts that block (the fence right after the
-# `<!-- container-route -->` marker) and runs it as written, so the README
-# cannot drift from what works. Only the leading `docker` word is replaced,
-# by $ENGINE, to exercise Podman with the same text.
+# README.md ("Run it without installing anything") gives two `docker run`
+# commands: the posture check, after the `<!-- container-route -->` marker, and
+# the same with --status-list (revocation), after `<!-- container-route-status -->`.
+# This script extracts each block (the fence right after its marker) and runs it
+# as written, so the README cannot drift from what works. Only the leading
+# `docker` word is replaced, by $ENGINE, to exercise Podman with the same text.
 #
 # Cases:
 #   a. the image digest is the same in README.md and every workflow;
-#   b. live: the production example verifies (exit 0, VERIFIED). An outage is a
-#      warning and skips this case; a 404 fails, as in tests/live.sh;
+#   b. live: the production example verifies (exit 0, VERIFIED) and, with the
+#      status list, is not revoked (exit 0, GOOD). An outage is a warning and
+#      skips this case; a 404 fails, as in tests/live.sh;
 #   c. offline: a document minted under a throwaway key verifies (exit 0), and
 #      the same document with one signed field changed is rejected (exit 1,
-#      "SIGNATURE DOES NOT VERIFY"), with no production dependency.
+#      "SIGNATURE DOES NOT VERIFY"); under a minted status list that revokes
+#      nothing it is GOOD (exit 0), under one that revokes its key it is
+#      REVOKED (exit 1). No production dependency.
 #
 # Env: ENGINE      docker (default) or podman
 #      LIVE_ORIGIN default https://app.hodeishield.com
@@ -44,22 +48,26 @@ ok()   { printf 'ok    %s\n' "$1"; }
 case "$ENGINE" in docker|podman) ;; *) fail "ENGINE must be docker or podman, got '$ENGINE'" ;; esac
 command -v "$ENGINE" >/dev/null 2>&1 || fail "$ENGINE is not installed"
 
-# --- the README block, verbatim ---------------------------------------------
-BLOCK="$T/block.sh"
-awk '
-  found && !inb && /^```bash[[:space:]]*$/ { inb = 1; next }
-  found && inb && /^```[[:space:]]*$/ { exit }
-  /^<!-- container-route -->[[:space:]]*$/ { found = 1; next }
-  found && inb { print }
-' "$ROOT/README.md" > "$BLOCK"
-[ -s "$BLOCK" ] || fail "no code block after <!-- container-route --> in README.md"
-head -n1 "$BLOCK" | grep -q '^docker ' || fail "the README block does not start with 'docker '"
-if [ "$ENGINE" != docker ]; then
-  sed -i "1s/^docker /$ENGINE /" "$BLOCK"
-fi
+# --- the README blocks, verbatim ---------------------------------------------
+# extract MARKER OUT — the bash fence right after <!-- MARKER --> in README.md.
+extract() {
+  awk -v m="<!-- $1 -->" '
+    found && !inb && /^```bash[[:space:]]*$/ { inb = 1; next }
+    found && inb && /^```[[:space:]]*$/ { exit }
+    $0 == m { found = 1; next }
+    found && inb { print }
+  ' "$ROOT/README.md" > "$2"
+  [ -s "$2" ] || fail "no code block after <!-- $1 --> in README.md"
+  head -n1 "$2" | grep -q '^docker ' || fail "the <!-- $1 --> block does not start with 'docker '"
+  if [ "$ENGINE" != docker ]; then
+    sed -i "1s/^docker /$ENGINE /" "$2"
+  fi
+}
+BLOCK="$T/block.sh";        extract container-route        "$BLOCK"
+STATUS_BLOCK="$T/status.sh"; extract container-route-status "$STATUS_BLOCK"
 
-# run_block DIR OUTFILE — run the block with DIR as the working directory.
-run_block() { ( cd "$1" && NO_COLOR=1 bash "$BLOCK" ) > "$2" 2>&1; }
+# run_block DIR OUTFILE [BLOCK] — run a block with DIR as the working directory.
+run_block() { ( cd "$1" && NO_COLOR=1 bash "${3:-$BLOCK}" ) > "$2" 2>&1; }
 
 # stage DIR — a minimal copy of the repository: what the block runs.
 stage() { mkdir -p "$1" && cp -R "$ROOT/scripts" "$1/"; }
@@ -98,6 +106,14 @@ live() {
   [ "$rc" -eq 0 ] || fail "live: README command exited $rc, expected 0"
   grep -q 'VERIFIED' "$T/live.out" || fail "live: no VERIFIED in the output"
   ok "live: README command verifies the production example (exit 0)"
+  fetch "$d/status.json" "$BASE/status" || return 0
+  fetch "$d/status-jwks.json" "$BASE/status-keys" || return 0
+  run_block "$d" "$T/live-status.out" "$STATUS_BLOCK"; rc=$?
+  cat "$T/live-status.out"
+  [ "$rc" -eq 0 ] || fail "live: README --status-list command exited $rc, expected 0"
+  grep -qF 'GOOD — not revoked, per a verified status list' "$T/live-status.out" \
+    || fail "live: no GOOD verdict in the --status-list output"
+  ok "live: README --status-list command finds the production example not revoked (exit 0)"
 }
 live
 
@@ -115,6 +131,13 @@ EXP="$(date -u -d "+10 minutes" +%Y-%m-%dT%H:%M:%S.000Z)"
 $M attest --key /tmp/k.pem --out /out/att.json --slug "$SLUG" --iss "$ISS" \
   --generated-at "$GEN" --expires-at "$EXP" \
   --framework iso27001=substantial --framework nis2=basic >/dev/null
+$M keygen --out /tmp/s.pem --jwks /out/status-jwks.json >/dev/null
+KID="$(python3 -c "import json; print(json.load(open(\"/out/jwks.json\"))[\"keys\"][0][\"kid\"])")"
+NEXT="$(date -u -d "+1 hour" +%Y-%m-%dT%H:%M:%S.000Z)"
+$M status --key /tmp/s.pem --iss "$ISS" --issued-at "$GEN" --next-update "$NEXT" \
+  --seq 1 --out /out/status-empty.json >/dev/null
+$M status --key /tmp/s.pem --iss "$ISS" --issued-at "$GEN" --next-update "$NEXT" \
+  --seq 2 --revoke-kid="$KID" --out /out/status-revoked.json >/dev/null
 python3 - <<PY
 import json
 d = json.load(open("/out/att.json"))
@@ -146,3 +169,23 @@ cat "$T/tampered.out"
 grep -qF 'SIGNATURE DOES NOT VERIFY' "$T/tampered.out" \
   || fail "offline: tampered document was rejected, but not for a signature failure"
 ok "offline: a changed signed field is rejected (exit 1, SIGNATURE DOES NOT VERIFY)"
+
+# Revocation: the same minted document under two minted status lists.
+for list in empty revoked; do
+  cp "$MINTDIR/status-$list.json" "$T/valid/status.json"
+  cp "$MINTDIR/status-jwks.json"  "$T/valid/status-jwks.json"
+  run_block "$T/valid" "$T/status-$list.out" "$STATUS_BLOCK"; rc=$?
+  cat "$T/status-$list.out"
+  case "$list" in
+    empty)
+      [ "$rc" -eq 0 ] || fail "offline: --status-list with a list that revokes nothing exited $rc, expected 0"
+      grep -qF 'GOOD — not revoked, per a verified status list' "$T/status-$list.out" \
+        || fail "offline: no GOOD verdict under a list that revokes nothing"
+      ok "offline: --status-list, a list that revokes nothing is GOOD (exit 0)" ;;
+    revoked)
+      [ "$rc" -eq 1 ] || fail "offline: --status-list with the key revoked exited $rc, expected 1"
+      grep -qF 'REVOKED — via key' "$T/status-$list.out" \
+        || fail "offline: no REVOKED verdict under a list that revokes the key"
+      ok "offline: --status-list, a list that revokes the key is REVOKED (exit 1)" ;;
+  esac
+done
