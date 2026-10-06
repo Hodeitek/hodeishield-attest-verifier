@@ -27,7 +27,7 @@ jobs:
       - name: Install openssl, python3, jq, shellcheck
         run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq shellcheck
       - name: shellcheck
-        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/live.sh
+        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh
       - name: tests/run.sh
         run: bash tests/run.sh
 

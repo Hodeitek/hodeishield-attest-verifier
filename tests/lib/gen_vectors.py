@@ -76,7 +76,7 @@ class Gen:
         subprocess.run([sys.executable, os.path.join(HERE, "mint.py"), *args],
                        check=True, stdout=subprocess.DEVNULL)
 
-    def attest(self, rel, **kw):
+    def attest(self, rel, key=K_ISSUER, **kw):
         """mint.py attest with the fixture defaults; kw overrides."""
         o = {"slug": SLUG, "iss": ISS, "generated-at": GEN, "expires-at": EXP}
         o.update({k.replace("_", "-"): v for k, v in kw.items()})
@@ -84,7 +84,7 @@ class Gen:
         hdr = o.pop("header", [])
 
         def f(p):
-            a = ["attest", "--key", self.path(K_ISSUER), "--out", p]
+            a = ["attest", "--key", self.path(key), "--out", p]
             for k, v in o.items():
                 a += ["--" + k, v]
             for x in fw:
@@ -128,7 +128,7 @@ class Gen:
         self.make(dst, f)
 
     def case(self, id, description, args, exit, code, match, absent=None,
-             canonical_sha256=None, status_canonical_sha256=None):
+             canonical_sha256=None, status_canonical_sha256=None, signature_only=False):
         if id in self.known:
             raise SystemExit("gen_vectors: case id %r used twice" % id)
         self.known.add(id)
@@ -136,6 +136,8 @@ class Gen:
         if absent:
             e["absent"] = absent
         c = {"id": id, "description": description, "args": args, "expect": e}
+        if signature_only:
+            c["signature_only"] = True
         if canonical_sha256:
             c["canonical_sha256"] = canonical_sha256
         if status_canonical_sha256:
@@ -520,6 +522,221 @@ def build(g):
     g.case("status-decoy-generated-at", "An unsigned decoy generatedAt does not dodge a subject withdrawal.",
            SK + ["--status", S + "revokes-subject-after.json", "--attestation", A + "decoy-generated-at.json"]
            + COMMON, 1, "unsigned_member", "unsigned_member")
+
+    build_signature_cases(g, A, S, SL, COMMON, issuer_kid)
+
+
+def common_with(common, jwks):
+    out = list(common)
+    out[out.index("--jwks") + 1] = jwks
+    return out
+
+
+def build_signature_cases(g, A, S, SL, COMMON, issuer_kid):
+    """Added 2026-10-06 (follow-up to the first publication): vectors that
+    exercise the signature check itself.
+
+    Group A (signature_only: true): every other check passes, so only the
+    signature check stands between the document and exit 0 / good. A verifier
+    whose signature check always passes accepts every one of these.
+    Group B (no flag): structural signature cases rejected by checks that run
+    independently of the signature (size, alg, kid derivation, claims.kid)."""
+    other_kid = json.load(open(g.path(J_OTHER)))["keys"][0]["kid"]
+    status_kid = json.load(open(g.path(J_STATUS)))["keys"][0]["kid"]
+
+    def both_keys(p):
+        i = json.load(open(g.path(J_ISSUER)))["keys"]
+        o = json.load(open(g.path(J_OTHER)))["keys"]
+        json.dump({"keys": i + o}, open(p, "w"), indent=2)
+    g.make("jwks/issuer-and-other.json", both_keys)
+
+    def att(rel):
+        return ["--attestation", rel] + COMMON
+
+    SIGFAIL = (1, "signature_invalid", "SIGNATURE DOES NOT VERIFY")
+    SIGFAIL_S = (3, "status_unknown_bad_signature", "bad_signature")
+
+    def sig_only(id, desc, args):
+        g.case(id, desc + " Only the signature check rejects it.", args, *SIGFAIL, signature_only=True)
+
+    def sig_only_s(id, desc, args):
+        g.case(id, desc + " Only the signature check rejects it.", args, *SIGFAIL_S, signature_only=True)
+
+    # ---- Group A, payload manipulations (signature untouched) -----------------
+    def pst(c):
+        return c["posture"]
+    manip = [
+        ("orgname-char", "One character of the signed orgName changed.",
+         lambda c: pst(c).__setitem__("orgName", pst(c)["orgName"][:-1] + "z")),
+        ("lastchecked-plus-1s", "lastCheckedAt moved by one second.",
+         lambda c: pst(c).__setitem__("lastCheckedAt", "2026-01-01T00:00:01.000Z")),
+        ("generatedat-plus-1s", "generatedAt moved by one second (still fresh).",
+         lambda c: pst(c).__setitem__("generatedAt", "2026-01-01T00:00:01.000Z")),
+        ("expiresat-plus-1s", "expiresAt moved by one second (still within the issuer ceiling).",
+         lambda c: pst(c).__setitem__("expiresAt", "2026-01-01T00:15:01.000Z")),
+        ("framework-label", "One framework label changed.",
+         lambda c: pst(c)["frameworks"][0].__setitem__("label", "ISO27002")),
+        ("framework-band-nonweakest", "A non-weakest framework band raised, so overallBand stays consistent.",
+         lambda c: pst(c)["frameworks"][0].__setitem__("band", "advanced")),
+        ("framework-code", "One framework code renamed.",
+         lambda c: pst(c)["frameworks"][1].__setitem__("code", "nis3")),
+        ("jti", "The signed jti replaced.",
+         lambda c: c.__setitem__("jti", "00000000-0000-4000-8000-000000000000")),
+        ("nonce-added", "A nonce added to a document signed without one (no --expect-nonce given).",
+         lambda c: c.__setitem__("nonce", "added-after-signing")),
+    ]
+    for name, desc, fn in manip:
+        g.edit(A + "valid.json", A + "sigonly-" + name + ".json",
+               lambda d, fn=fn: fn(d["attestation"]["claims"]))
+        sig_only("sigonly-att-" + name, desc, att(A + "sigonly-" + name + ".json"))
+
+    def claims_file(p):
+        d = json.load(open(g.path("claims/valid.json")))
+        d["posture"]["orgName"] = d["posture"]["orgName"][:-1] + "z"
+        json.dump(d, open(p, "w"), indent=2)
+    g.make("claims/sigonly-orgname-char.json", claims_file)
+    sig_only("sigonly-att-claims-file", "A detached JWS with a claims file whose orgName was changed.",
+             ["--jws", "jws/valid-detached.jws", "--claims", "claims/sigonly-orgname-char.json"] + COMMON)
+
+    # ---- Group A, signature bytes flipped, length kept at 3309 ----------------
+    def flip(pos, status=False):
+        def fn(d):
+            sig = d["signature"] if status else d["attestation"]["signature"]
+            h, p, s = sig.split(".")
+            raw = bytearray(b64d(s))
+            assert len(raw) == 3309
+            raw[pos] ^= 0x01
+            new = ".".join([h, p, b64e(bytes(raw))])
+            if status:
+                d["signature"] = new
+            else:
+                d["attestation"]["signature"] = new
+        return fn
+    for name, pos in (("start", 0), ("middle", 1654), ("end", 3308)):
+        g.edit(A + "valid.json", A + "sigonly-flip-" + name + ".json", flip(pos))
+        sig_only("sigonly-att-sig-flip-" + name,
+                 "One bit of signature byte %d of 3309 flipped; the length is unchanged." % pos,
+                 att(A + "sigonly-flip-" + name + ".json"))
+
+    # ---- Group A, wrong signer / transplanted signature -----------------------
+    g.attest(A + "sigonly-signed-by-other.json", key=K_OTHER, declare_kid=issuer_kid)
+    sig_only("sigonly-att-signed-by-other-key",
+             "Signed with an unrelated key but presented under the issuer's kid (header kid and claims.kid).",
+             att(A + "sigonly-signed-by-other.json"))
+
+    g.attest(A + "donor-advanced.json", framework=["iso27001=advanced", "nis2=advanced"])
+
+    def transplant(d):
+        donor = json.load(open(g.path(A + "donor-advanced.json")))
+        d["attestation"]["signature"] = donor["attestation"]["signature"]
+    g.edit(A + "valid.json", A + "sigonly-transplanted.json", transplant)
+    sig_only("sigonly-att-transplanted-signature",
+             "A genuine signature from another attestation (other posture, same key and header) put on this "
+             "document's claims.", att(A + "sigonly-transplanted.json"))
+
+    g.attest(A + "sigonly-kid-switch.json", key=K_ISSUER, declare_kid=other_kid)
+    sig_only("sigonly-att-kid-switch-consistent",
+             "Header kid and claims.kid both name the OTHER key, a key set holds both keys, and the signature "
+             "is by the issuer key.",
+             ["--attestation", A + "sigonly-kid-switch.json"] + common_with(COMMON, "jwks/issuer-and-other.json"))
+
+    # ---- Group A, status lists -----------------------------------------------
+    s_manip = [
+        ("seq", "The signed seq changed.", lambda L: L.__setitem__("seq", 6)),
+        ("nextupdate-plus-1s", "nextUpdate moved by one second.",
+         lambda L: L.__setitem__("nextUpdate", "2026-01-01T02:00:01.000Z")),
+        ("issuedat-plus-1s", "issuedAt moved by one second.",
+         lambda L: L.__setitem__("issuedAt", "2026-01-01T00:00:01.000Z")),
+    ]
+    for name, desc, fn in s_manip:
+        g.edit(S + "empty.json", S + "sigonly-" + name + ".json",
+               lambda d, fn=fn: fn(d["statusList"]))
+        sig_only_s("sigonly-status-" + name, "A status list: " + desc,
+                   SL + ["--status", S + "sigonly-" + name + ".json"])
+    for name, pos in (("start", 0), ("middle", 1654), ("end", 3308)):
+        g.edit(S + "empty.json", S + "sigonly-flip-" + name + ".json", flip(pos, status=True))
+        sig_only_s("sigonly-status-sig-flip-" + name,
+                   "A status list with one bit of signature byte %d of 3309 flipped." % pos,
+                   SL + ["--status", S + "sigonly-flip-" + name + ".json"])
+
+    def stransplant(d):
+        d["signature"] = json.load(open(g.path(S + "revokes-key.json")))["signature"]
+    g.edit(S + "empty.json", S + "sigonly-transplanted.json", stransplant)
+    sig_only_s("sigonly-status-transplanted-signature",
+               "A status list carrying the genuine signature of a different list (same key and header).",
+               SL + ["--status", S + "sigonly-transplanted.json"])
+
+    g.status(S + "sigonly-signed-by-other.json", key=K_OTHER, issued_at=LIST_AT, next_update=LIST_NEXT,
+             seq=7, declare_kid=status_kid)
+    sig_only_s("sigonly-status-signed-by-other-key",
+               "A status list signed with an unrelated key under the status kid.",
+               SL + ["--status", S + "sigonly-signed-by-other.json"])
+
+    # ---- Group B: structural signature cases ----------------------------------
+    def resize(delta, status=False):
+        def fn(d):
+            sig = d["signature"] if status else d["attestation"]["signature"]
+            h, p, s = sig.split(".")
+            raw = b64d(s)
+            raw = raw[:delta] if delta < 0 else raw + b"\x00" * delta
+            new = ".".join([h, p, b64e(raw)])
+            if status:
+                d["signature"] = new
+            else:
+                d["attestation"]["signature"] = new
+        return fn
+    g.edit(A + "valid.json", A + "sig-truncated.json", resize(-1))
+    g.case("sig-truncated-3308", "The signature one byte short (3308 bytes).",
+           att(A + "sig-truncated.json"), 1, "signature_size_invalid",
+           "signature is 3308 bytes, expected 3309")
+    g.edit(A + "valid.json", A + "sig-extended.json", resize(1))
+    g.case("sig-extended-3310", "The signature one byte long (3310 bytes).",
+           att(A + "sig-extended.json"), 1, "signature_size_invalid",
+           "signature is 3310 bytes, expected 3309")
+
+    for name, alg in (("ml-dsa-44", "ML-DSA-44"), ("ml-dsa-87", "ML-DSA-87"),
+                      ("eddsa", "EdDSA"), ("empty", "")):
+        g.attest(A + "alg-" + name + ".json", header=["alg=" + alg])
+        g.case("alg-" + name, "A signed protected header whose alg is %r instead of ML-DSA-65." % alg,
+               att(A + "alg-" + name + ".json"), 1, "header_alg_invalid",
+               "alg is '%s', expected 'ML-DSA-65'" % alg)
+
+    def relabel(d):
+        d["keys"][0]["kid"] = "AAAAAAAAAAAAAAAAAAAAAA"
+    g.edit(J_ISSUER, "jwks/issuer-relabelled.json", relabel)
+    g.attest(A + "header-kid-not-from-key.json", declare_kid="AAAAAAAAAAAAAAAAAAAAAA")
+    g.case("header-kid-not-derived-from-key",
+           "A validly signed document whose header and claims kid is not the one the key bytes derive, "
+           "listed under that kid in the key set.",
+           ["--attestation", A + "header-kid-not-from-key.json"]
+           + common_with(COMMON, "jwks/issuer-relabelled.json"), 1, "kid_mismatch", "kid mismatch — header says")
+
+    g.attest(A + "claims-kid-differs.json", claims_kid=other_kid)
+    g.case("claims-kid-differs-from-header-kid",
+           "A validly signed document whose signed claims.kid names another key than the header kid.",
+           att(A + "claims-kid-differs.json"), 1, "kid_mismatch", "kid_mismatch — the header says")
+    g.attest(A + "claims-kid-differs-other-signer.json", key=K_OTHER, claims_kid=issuer_kid)
+    g.case("claims-kid-differs-other-signer",
+           "Signed by the other key with its own kid in the header, but claims.kid names the issuer key; "
+           "the key set holds both.",
+           ["--attestation", A + "claims-kid-differs-other-signer.json"]
+           + common_with(COMMON, "jwks/issuer-and-other.json"), 1, "kid_mismatch",
+           "kid_mismatch — the header says")
+
+    g.edit(S + "empty.json", S + "sig-truncated.json", resize(-1, status=True))
+    g.case("status-sig-truncated-3308", "A status list signature one byte short (3308 bytes).",
+           SL + ["--status", S + "sig-truncated.json"], 3, "status_unknown_signature_size",
+           "signature is 3308 bytes, expected 3309")
+    g.edit(S + "empty.json", S + "sig-extended.json", resize(1, status=True))
+    g.case("status-sig-extended-3310", "A status list signature one byte long (3310 bytes).",
+           SL + ["--status", S + "sig-extended.json"], 3, "status_unknown_signature_size",
+           "signature is 3310 bytes, expected 3309")
+    for name, alg in (("ml-dsa-44", "ML-DSA-44"), ("eddsa", "EdDSA")):
+        g.status(S + "alg-" + name + ".json", issued_at=LIST_AT, next_update=LIST_NEXT, seq=7,
+                 header=["alg=" + alg])
+        g.case("status-alg-" + name, "A status list whose signed header alg is %r." % alg,
+               SL + ["--status", S + "alg-" + name + ".json"], 3, "status_unknown_unsupported_alg",
+               "alg is '%s', expected 'ML-DSA-65'" % alg)
 
 
 def write_outputs(g):

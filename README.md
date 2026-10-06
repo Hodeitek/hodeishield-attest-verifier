@@ -300,6 +300,10 @@ the reason it is a short, single, readable script.
   `tests/vectors/v1/`: fixed documents, TEST-ONLY keys, a fixed `--now` and the
   expected exit code and reason for each, so you can check another verifier
   against them. `tests/run.sh` runs them too; see `tests/vectors/v1/README.md`.
+- `bash tests/mutants.sh` builds a copy of the verifier whose signature check
+  always passes and shows the vectors that depend only on that check
+  (`signature_only`) are accepted by it, so a verifier with a disabled
+  signature check cannot pass the suite. `tests/run.sh` runs it too.
 - A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
   ("could not check"), never 1.
 - `bash tests/container.sh` extracts both container commands from this README
