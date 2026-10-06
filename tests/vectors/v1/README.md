@@ -45,6 +45,7 @@ Each case:
 | `expect.absent` | (optional) substrings the reference output must not contain, to keep verdicts that exit alike from being confused (for example "expired" versus "forged") |
 | `canonical_sha256` | (valid documents) sha-256 of the canonical envelope bytes the signature is over, printed by the script in section [4]. Use it to debug your encoder |
 | `status_canonical_sha256` | same, for the status list's canonical bytes |
+| `signature_only` | (optional, `true`) every check other than the signature check passes for this document, so only the signature check stands between it and acceptance. See "Signature-only vectors" below |
 
 ### Running another implementation
 
@@ -53,14 +54,15 @@ verifier with `args` from this directory and check it reaches `expect.exit` for
 the reason `expect.code` names. The `code` values are:
 
 - `0`: `verified`, `good`
-- `1`: `signature_invalid`, `expired`, `too_old`, `not_yet_valid`, `ttl_exceeded`,
+- `1`: `signature_invalid`, `signature_size_invalid`, `expired`, `too_old`, `not_yet_valid`, `ttl_exceeded`,
   `date_unparseable`, `missing_expiry`, `issuer_mismatch`, `slug_mismatch`,
   `nonce_mismatch`, `overall_band_mismatch`, `kid_mismatch`, `header_not_allowed`,
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
   `redaction_violation`, `revoked_key`, `revoked_subject`
 - `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
-  `truncated_invalid`, `duplicate_key`, `not_strict_json`)
+  `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
+  `unsupported_alg`)
 
 Where one document breaks several rules at once (a decoy inside an expired
 document, say), `code` names the verdict the reference gives; the case
@@ -69,6 +71,48 @@ description says which.
 The reference runner is `tests/vectors.sh` (`VERIFIER=/path/to/script bash
 tests/vectors.sh`). It checks `SHA256SUMS` first, then runs each case as
 `NO_COLOR=1 bash "$VERIFIER" args...` from this directory.
+
+## Signature-only vectors
+
+Some manipulations are rejected by checks that run **independently of the
+signature**: the signature size (3309 bytes), `alg` must be `ML-DSA-65`, the
+`kid` must be derivable from the key bytes, `claims.kid` must equal the header
+`kid`, the header member set. Those vectors are valuable, but they cannot tell
+you whether your signature check works: a verifier whose signature check always
+passes still rejects them, by design (defence in depth). They are the plain
+cases, without the flag.
+
+The cases marked `"signature_only": true` are different: every other check
+passes, and only the ML-DSA verification stands between the document and exit
+0 (or `good`). The reference rejects each one with `SIGNATURE DOES NOT VERIFY`
+(exit 1) or, for a status list, `bad_signature` (exit 3). If your verifier
+accepts any of them, its signature check is not doing its job. They cover:
+
+- a signed value changed so that nothing else notices (`orgName`,
+  `lastCheckedAt`, `generatedAt`, `expiresAt`, a framework label, code or
+  non-weakest band, `jti`, an added `nonce`; for a status list `seq`,
+  `issuedAt`, `nextUpdate`), and the same through `--jws` plus `--claims`;
+- signature bytes flipped at the start, middle and end, length kept at 3309;
+- a document signed with another key but presented under the issuer's kid
+  (header and `claims.kid`), for attestations and status lists;
+- a valid signature transplanted from another genuine document (same key,
+  same header) onto this document's claims;
+- the kid switched consistently to the other key's kid, a key set holding both
+  keys, and the signature still by the issuer key.
+
+The structural cases (signature one byte short or long, `alg` set to
+ML-DSA-44, ML-DSA-87, EdDSA or empty, a header kid the key bytes do not derive,
+`claims.kid` different from the header kid) are plain cases that each assert the
+specific reason the reference prints.
+
+`tests/mutants.sh` enforces this: it builds a copy of the reference verifier
+with the two `openssl pkeyutl -verify` calls forced to succeed, then checks that
+every `signature_only` case is rejected by the reference and accepted by that
+copy. A case that some other check also rejects would fail there, so the flag
+cannot be applied loosely. The test keys that sign these documents are
+`TEST-ONLY` (see above); `tests/lib/mint.py` has test-only options
+(`--declare-kid`, `--header-kid`, `--claims-kid`) to make a document name a key
+other than the one that signed it, which no real issuer does.
 
 ## The vectors are the committed bytes
 
@@ -93,3 +137,12 @@ files unless given `--force`, and `--extend` adds only new files and cases.
 ## Change log
 
 - 2026-10-06: v1 published.
+- 2026-10-06: added 37 cases and their files (nothing existing changed): 24
+  `signature_only` cases (new manifest field, see above) that only the signature
+  check rejects, for attestations and status lists, and 13 structural signature
+  cases (signature size, `alg`, kid derivation, `claims.kid`). New codes:
+  `signature_size_invalid`, `status_unknown_signature_size`,
+  `status_unknown_unsupported_alg`. `tests/lib/mint.py` gained test-only kid
+  options and `tests/mutants.sh` was added. Only the manifest and this
+  README (which describe the new cases) changed; every key, document and other
+  file keeps its `SHA256SUMS` line byte for byte.

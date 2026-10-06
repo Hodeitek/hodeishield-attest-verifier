@@ -137,8 +137,22 @@ def cmd_keygen(a):
 
 
 # --- documents ------------------------------------------------------------------
+def declared_kids(a, derived):
+    """TEST-ONLY: the kid written to the protected header and to claims.kid.
+
+    A real issuer always declares the kid derived from the key it signs with.
+    The vectors that show a signature check is load-bearing need a document
+    that names one key and is signed by another, so these options let the
+    declared kid differ from the signing key's. Never use them to mint
+    anything that is meant to verify."""
+    both = getattr(a, "declare_kid", None) or derived
+    return (getattr(a, "header_kid", None) or both,
+            getattr(a, "claims_kid", None) or both)
+
+
 def cmd_attest(a):
-    kid = kid_of(raw_pub(a.key))
+    derived = kid_of(raw_pub(a.key))
+    hkid, kid = declared_kids(a, derived)
     frameworks = [{"code": c, "label": c.upper(), "band": b}
                   for c, b in (x.split("=", 1) for x in a.framework)]
     posture = {
@@ -156,7 +170,7 @@ def cmd_attest(a):
               "posture": posture}
     payload = envelope_bytes(claims)
     doc = {"attestation": {"claims": claims,
-                           "signature": detached_jws(a.key, kid, ATTEST_TYP, payload,
+                           "signature": detached_jws(a.key, hkid, ATTEST_TYP, payload,
                                                      dict(h.split("=", 1) for h in a.header)),
                            "digest": hashlib.sha256(payload).hexdigest()}}
     with open(a.out, "w") as fh:
@@ -179,7 +193,8 @@ def subject_hash(slug):
 
 
 def cmd_status(a):
-    kid = kid_of(raw_pub(a.key))
+    derived = kid_of(raw_pub(a.key))
+    hkid, kid = declared_kids(a, derived)
     keys = [{"kid": k, "reason": "key_compromise", "revokedAt": a.issued_at} for k in a.revoke_kid]
     subjects = []
     for spec in a.revoke_subject:
@@ -190,7 +205,8 @@ def cmd_status(a):
            "issuedAt": a.issued_at, "nextUpdate": a.next_update, "truncated": False,
            "keys": keys, "subjects": subjects}
     doc = {"statusList": lst,
-           "signature": detached_jws(a.key, kid, STATUS_TYP, statuslist_bytes(lst))}
+           "signature": detached_jws(a.key, hkid, STATUS_TYP, statuslist_bytes(lst),
+                                     dict(h.split("=", 1) for h in a.header))}
     with open(a.out, "w") as fh:
         json.dump(doc, fh, indent=2)
 
@@ -219,6 +235,10 @@ def main():
                    help="name=value: an extra protected-header member, signed")
     t.add_argument("--overall-band", default=None,
                    help="sign this overallBand instead of the derived one (an overclaiming issuer)")
+    t.add_argument("--declare-kid", default=None,
+                   help="TEST-ONLY: kid for header AND claims, instead of the signing key's own")
+    t.add_argument("--header-kid", default=None, help="TEST-ONLY: header kid only")
+    t.add_argument("--claims-kid", default=None, help="TEST-ONLY: claims.kid only")
     t.set_defaults(fn=cmd_attest)
 
     x = sub.add_parser("attach")
@@ -235,6 +255,12 @@ def main():
     s.add_argument("--next-update", required=True)
     s.add_argument("--revoke-kid", action="append", default=[])
     s.add_argument("--revoke-subject", action="append", default=[], help="slug@notBefore")
+    s.add_argument("--declare-kid", default=None,
+                   help="TEST-ONLY: kid for header AND claims, instead of the signing key's own")
+    s.add_argument("--header-kid", default=None, help="TEST-ONLY: header kid only")
+    s.add_argument("--claims-kid", default=None, help="TEST-ONLY: claims.kid only")
+    s.add_argument("--header", action="append", default=[],
+                   help="name=value: an extra or overriding protected-header member, signed")
     s.set_defaults(fn=cmd_status)
 
     a = ap.parse_args()

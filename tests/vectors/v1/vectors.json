@@ -1458,6 +1458,869 @@
         "code": "unsigned_member",
         "match": "unsigned_member"
       }
+    },
+    {
+      "id": "sigonly-att-orgname-char",
+      "description": "One character of the signed orgName changed. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-orgname-char.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-lastchecked-plus-1s",
+      "description": "lastCheckedAt moved by one second. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-lastchecked-plus-1s.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-generatedat-plus-1s",
+      "description": "generatedAt moved by one second (still fresh). Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-generatedat-plus-1s.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-expiresat-plus-1s",
+      "description": "expiresAt moved by one second (still within the issuer ceiling). Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-expiresat-plus-1s.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-framework-label",
+      "description": "One framework label changed. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-framework-label.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-framework-band-nonweakest",
+      "description": "A non-weakest framework band raised, so overallBand stays consistent. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-framework-band-nonweakest.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-framework-code",
+      "description": "One framework code renamed. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-framework-code.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-jti",
+      "description": "The signed jti replaced. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-jti.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-nonce-added",
+      "description": "A nonce added to a document signed without one (no --expect-nonce given). Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-nonce-added.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-claims-file",
+      "description": "A detached JWS with a claims file whose orgName was changed. Only the signature check rejects it.",
+      "args": [
+        "--jws",
+        "jws/valid-detached.jws",
+        "--claims",
+        "claims/sigonly-orgname-char.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-sig-flip-start",
+      "description": "One bit of signature byte 0 of 3309 flipped; the length is unchanged. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-flip-start.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-sig-flip-middle",
+      "description": "One bit of signature byte 1654 of 3309 flipped; the length is unchanged. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-flip-middle.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-sig-flip-end",
+      "description": "One bit of signature byte 3308 of 3309 flipped; the length is unchanged. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-flip-end.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-signed-by-other-key",
+      "description": "Signed with an unrelated key but presented under the issuer's kid (header kid and claims.kid). Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-signed-by-other.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-transplanted-signature",
+      "description": "A genuine signature from another attestation (other posture, same key and header) put on this document's claims. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-transplanted.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-att-kid-switch-consistent",
+      "description": "Header kid and claims.kid both name the OTHER key, a key set holds both keys, and the signature is by the issuer key. Only the signature check rejects it.",
+      "args": [
+        "--attestation",
+        "attestations/sigonly-kid-switch.json",
+        "--jwks",
+        "jwks/issuer-and-other.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_invalid",
+        "match": "SIGNATURE DOES NOT VERIFY"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-seq",
+      "description": "A status list: The signed seq changed. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-seq.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-nextupdate-plus-1s",
+      "description": "A status list: nextUpdate moved by one second. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-nextupdate-plus-1s.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-issuedat-plus-1s",
+      "description": "A status list: issuedAt moved by one second. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-issuedat-plus-1s.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-sig-flip-start",
+      "description": "A status list with one bit of signature byte 0 of 3309 flipped. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-flip-start.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-sig-flip-middle",
+      "description": "A status list with one bit of signature byte 1654 of 3309 flipped. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-flip-middle.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-sig-flip-end",
+      "description": "A status list with one bit of signature byte 3308 of 3309 flipped. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-flip-end.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-transplanted-signature",
+      "description": "A status list carrying the genuine signature of a different list (same key and header). Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-transplanted.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sigonly-status-signed-by-other-key",
+      "description": "A status list signed with an unrelated key under the status kid. Only the signature check rejects it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sigonly-signed-by-other.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_bad_signature",
+        "match": "bad_signature"
+      },
+      "signature_only": true
+    },
+    {
+      "id": "sig-truncated-3308",
+      "description": "The signature one byte short (3308 bytes).",
+      "args": [
+        "--attestation",
+        "attestations/sig-truncated.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_size_invalid",
+        "match": "signature is 3308 bytes, expected 3309"
+      }
+    },
+    {
+      "id": "sig-extended-3310",
+      "description": "The signature one byte long (3310 bytes).",
+      "args": [
+        "--attestation",
+        "attestations/sig-extended.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "signature_size_invalid",
+        "match": "signature is 3310 bytes, expected 3309"
+      }
+    },
+    {
+      "id": "alg-ml-dsa-44",
+      "description": "A signed protected header whose alg is 'ML-DSA-44' instead of ML-DSA-65.",
+      "args": [
+        "--attestation",
+        "attestations/alg-ml-dsa-44.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_alg_invalid",
+        "match": "alg is 'ML-DSA-44', expected 'ML-DSA-65'"
+      }
+    },
+    {
+      "id": "alg-ml-dsa-87",
+      "description": "A signed protected header whose alg is 'ML-DSA-87' instead of ML-DSA-65.",
+      "args": [
+        "--attestation",
+        "attestations/alg-ml-dsa-87.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_alg_invalid",
+        "match": "alg is 'ML-DSA-87', expected 'ML-DSA-65'"
+      }
+    },
+    {
+      "id": "alg-eddsa",
+      "description": "A signed protected header whose alg is 'EdDSA' instead of ML-DSA-65.",
+      "args": [
+        "--attestation",
+        "attestations/alg-eddsa.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_alg_invalid",
+        "match": "alg is 'EdDSA', expected 'ML-DSA-65'"
+      }
+    },
+    {
+      "id": "alg-empty",
+      "description": "A signed protected header whose alg is '' instead of ML-DSA-65.",
+      "args": [
+        "--attestation",
+        "attestations/alg-empty.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_alg_invalid",
+        "match": "alg is '', expected 'ML-DSA-65'"
+      }
+    },
+    {
+      "id": "header-kid-not-derived-from-key",
+      "description": "A validly signed document whose header and claims kid is not the one the key bytes derive, listed under that kid in the key set.",
+      "args": [
+        "--attestation",
+        "attestations/header-kid-not-from-key.json",
+        "--jwks",
+        "jwks/issuer-relabelled.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "kid_mismatch",
+        "match": "kid mismatch — header says"
+      }
+    },
+    {
+      "id": "claims-kid-differs-from-header-kid",
+      "description": "A validly signed document whose signed claims.kid names another key than the header kid.",
+      "args": [
+        "--attestation",
+        "attestations/claims-kid-differs.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "kid_mismatch",
+        "match": "kid_mismatch — the header says"
+      }
+    },
+    {
+      "id": "claims-kid-differs-other-signer",
+      "description": "Signed by the other key with its own kid in the header, but claims.kid names the issuer key; the key set holds both.",
+      "args": [
+        "--attestation",
+        "attestations/claims-kid-differs-other-signer.json",
+        "--jwks",
+        "jwks/issuer-and-other.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "kid_mismatch",
+        "match": "kid_mismatch — the header says"
+      }
+    },
+    {
+      "id": "status-sig-truncated-3308",
+      "description": "A status list signature one byte short (3308 bytes).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sig-truncated.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_signature_size",
+        "match": "signature is 3308 bytes, expected 3309"
+      }
+    },
+    {
+      "id": "status-sig-extended-3310",
+      "description": "A status list signature one byte long (3310 bytes).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/sig-extended.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_signature_size",
+        "match": "signature is 3310 bytes, expected 3309"
+      }
+    },
+    {
+      "id": "status-alg-ml-dsa-44",
+      "description": "A status list whose signed header alg is 'ML-DSA-44'.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/alg-ml-dsa-44.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_unsupported_alg",
+        "match": "alg is 'ML-DSA-44', expected 'ML-DSA-65'"
+      }
+    },
+    {
+      "id": "status-alg-eddsa",
+      "description": "A status list whose signed header alg is 'EdDSA'.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/alg-eddsa.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_unsupported_alg",
+        "match": "alg is 'EdDSA', expected 'ML-DSA-65'"
+      }
     }
   ]
 }
