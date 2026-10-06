@@ -18,6 +18,9 @@
 # The expected lines are quoted from the verifier's own source; grep them there
 # before changing one.
 #
+# It finishes by running the published test vectors (tests/vectors.sh) and
+# fails if either part fails.
+#
 # Needs: bash >= 4, OpenSSL >= 3.5, python3, jq. No network.
 #   bash tests/run.sh                    # the script in this repository
 #   VERIFIER=/path/to/copy bash tests/run.sh
@@ -415,4 +418,9 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
 
 echo
 printf '# %d passed, %d failed\n' "$PASSED" "$FAILED"
-[ "$FAILED" -eq 0 ]
+
+# The published vectors (tests/vectors/v1) are part of the same gate.
+echo
+VECTORS_RC=0
+VERIFIER="$VERIFIER" bash "$ROOT/tests/vectors.sh" || VECTORS_RC=$?
+[ "$FAILED" -eq 0 ] && [ "$VECTORS_RC" -eq 0 ]
