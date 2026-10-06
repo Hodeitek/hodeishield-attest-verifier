@@ -85,6 +85,13 @@ Posture mode (the default, as above):
 | **1** | **Check failed.** Something did not hold. Do not rely on the document. |
 | **2** | **Could not check.** Missing tool, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
 
+A genuine document that is only out of date also exits 1: it is not one to rely
+on. Its last line tells it apart from a tampered or invalid one. It starts with
+`EXPIRED — the signature is valid` and gives the date the document expired and
+the command to fetch a new one. Any other failure ends with
+`VERIFICATION FAILED — … Do not rely on this document.` The `EXPIRED` line only
+appears when the signature verified and age or expiry was the only problem.
+
 `--status-list` mode (revocation, see below):
 
 | Code | Meaning |
