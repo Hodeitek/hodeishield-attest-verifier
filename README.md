@@ -75,6 +75,45 @@ says what the tool cannot tell you.
 
 `xxd` is used when present and is not required.
 
+## Run it without installing anything
+
+This is the supported route on macOS, Windows and Ubuntu 24.04 LTS, whose
+OpenSSL and bash are too old or absent for the verifier. The only thing your
+machine needs is Docker or Podman, plus `curl` to fetch the two files (`curl`
+ships with macOS, Windows 10 and later, and WSL).
+
+From the repository root, fetch the two files, then run one container command:
+
+```bash
+curl -fsS https://app.hodeishield.com/api/public/attest/talmaren-payments -o att.json
+curl -fsS https://app.hodeishield.com/api/public/attest/keys              -o jwks.json
+```
+
+<!-- container-route -->
+```bash
+docker run --rm -v "$PWD":/work:ro -w /work \
+  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
+```
+
+The container mounts your files read-only, installs OpenSSL and `python3`
+inside itself, and runs the same script. If that install fails (for example
+because the container has no network), the command exits 2, "could not check",
+so the exit codes are exactly the native ones: the table in
+[Exit codes](#exit-codes--the-distinction-matters).
+
+- **Podman:** the same command with `podman` instead of `docker`. On SELinux
+  hosts (Fedora, RHEL) mount with `-v "$PWD":/work:ro,Z`.
+- **Windows:** install Docker Desktop and run the commands above from a WSL
+  terminal, in the cloned repository. PowerShell quotes differently, so no
+  PowerShell variant is offered.
+
+The image is the upstream Debian 13 image, pinned by digest: the same one CI
+tests on, so a rebuilt tag cannot change what you run. An official signed image
+is tracked in [#22](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/22).
+
 ## Exit codes — the distinction matters
 
 Posture mode (the default, as above):
@@ -231,6 +270,9 @@ the reason it is a short, single, readable script.
   printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
 - A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
   ("could not check"), never 1.
+- `bash tests/container.sh` extracts the container command from this README and
+  runs it as written (live example, plus an offline rejection case); the
+  "Container route" workflow does so with Docker and Podman.
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document
