@@ -335,7 +335,34 @@ t = j.dumps(d)'
 expect 1 'header members are' 'a protected header with a duplicated member is rejected' -- \
   --attestation "$T/dup-header.json" "${COMMON[@]}"
 
+# The toolchain gate. Shims stand in for an `openssl` that is not ML-DSA
+# capable; every other call goes to the real one. LibreSSL >= 3.5 used to pass
+# the version check as "ML-DSA capable" and fail later with an unexplained
+# message. Both must now say "not ML-DSA capable" and exit 2, never 1.
+REAL_OPENSSL="$(command -v openssl)"
+mkdir -p "$T/shim-libressl" "$T/shim-no-mldsa"
+cat > "$T/shim-libressl/openssl" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = version ]; then echo 'LibreSSL 4.1.2'; exit 0; fi
+exec "$REAL_OPENSSL" "\$@"
+SHIM
+cat > "$T/shim-no-mldsa/openssl" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = list ]; then "$REAL_OPENSSL" "\$@" | grep -vi ml-dsa; exit 0; fi
+exec "$REAL_OPENSSL" "\$@"
+SHIM
+chmod +x "$T/shim-libressl/openssl" "$T/shim-no-mldsa/openssl"
+PATH="$T/shim-libressl:$PATH" expect 2 'is not OpenSSL, so it is not ML-DSA capable' \
+  'LibreSSL >= 3.5 is "not ML-DSA capable" (2), not a pass' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'PASS  OpenSSL' 'LibreSSL >= 3.5 is never reported as an ML-DSA capable OpenSSL'
+PATH="$T/shim-no-mldsa:$PATH" expect 2 'does not offer ML-DSA-65, so it is not ML-DSA capable' \
+  'an OpenSSL >= 3.5 without ML-DSA-65 is "not ML-DSA capable" (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'PASS  OpenSSL' 'an OpenSSL without ML-DSA-65 is never reported as capable'
+
 echo '# revocation (--status-list)'
+
 
 LIST_AT='2026-01-01T00:00:00.000Z'
 LIST_NEXT='2026-01-01T02:00:00.000Z'
