@@ -1,5 +1,12 @@
 # Contributing
 
+## Language
+
+Issues, milestones, labels, pull request titles and bodies, and commit
+messages are written in English. A commit subject is lowercase, uses a
+conventional type (`fix:`, `feat:`, `docs:`…) and names the defect or gap
+it addresses rather than the change.
+
 ## Commits
 
 - Commits must be signed.
