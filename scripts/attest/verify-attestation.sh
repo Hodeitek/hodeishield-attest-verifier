@@ -148,6 +148,9 @@
 #
 # EXIT CODES
 #   Posture mode (default):    0 verified | 1 verification failed | 2 environment/usage problem
+#   A genuine document that is only too old or expired is still 1, but its last
+#   line says so ("EXPIRED — the signature is valid ...") instead of the line a
+#   tampered or invalid document gets, and names the command to fetch a new one.
 #   --status-list mode:        0 good | 1 revoked | 2 environment/usage problem | 3 unknown
 #   `unknown` (3) is deliberately its own code, distinct from `revoked` (1): a
 #   list you could not fetch or could not verify is NOT evidence the subject is
@@ -243,6 +246,13 @@ stat_bad() { printf '  %sFAIL%s  %s\n' "$RED" "$RESET" "$*" >&2; STATUS_FAILURES
 MISSING_LABEL='<missing>'
 
 FAILURES=0
+# The subset of FAILURES that are only about age: too old for --max-age-seconds,
+# or past expiresAt. When every failure is one of these AND the signature
+# verified, the document is genuine but stale, and the verdict says that
+# instead of the line a tampered document gets (#32). Same exit code, 1: an
+# expired attestation is still not one to rely on.
+STALE_FAILURES=0; STALE_EXPIRED=0; SIGNATURE_VERIFIED=0
+stale() { bad "$@"; STALE_FAILURES=$((STALE_FAILURES+1)); }
 WORKDIR=''
 cleanup() { if [ -n "$WORKDIR" ]; then rm -rf -- "$WORKDIR"; fi; return 0; }
 trap cleanup EXIT
@@ -1031,6 +1041,7 @@ printf '%s.%s' "$H" "$PAYLOAD_B64" > "$WORKDIR/signing_input.bin"
 if openssl pkeyutl -verify -pubin -inkey "$WORKDIR/pub.pem" -rawin \
      -in "$WORKDIR/signing_input.bin" -sigfile "$WORKDIR/sig.bin" >/dev/null 2>&1; then
   ok "ML-DSA-65 signature verifies over protected.payload"
+  SIGNATURE_VERIFIED=1
 else
   bad "SIGNATURE DOES NOT VERIFY — the document was altered, or it was not signed by this key"
 fi
@@ -1064,7 +1075,7 @@ if [ -n "$POSTURE_FILE" ]; then
         bad "not_yet_valid — generatedAt is $(( G - NOW ))s in the future, beyond the
           ${POSTURE_CLOCK_SKEW_SECONDS}s clock-skew allowance"
       elif [ "$AGE" -gt "$MAX_AGE_SECONDS" ]; then
-        bad "posture is ${AGE}s old, beyond --max-age-seconds ${MAX_AGE_SECONDS}"
+        stale "posture is ${AGE}s old, beyond --max-age-seconds ${MAX_AGE_SECONDS}"
       else
         ok "within the ${MAX_AGE_SECONDS}s freshness window"
       fi
@@ -1091,7 +1102,8 @@ if [ -n "$POSTURE_FILE" ]; then
       bad "could not parse expiresAt '${EXPIRES}' — the expiry was NOT checked.
           Do not read this as 'not expired'. Upgrade date(1) or install python3."
     elif [ "$NOW" -gt "$E" ]; then
-      bad "EXPIRED $(( NOW - E ))s ago — re-fetch, do not accept"
+      stale "EXPIRED $(( NOW - E ))s ago — re-fetch, do not accept"
+      STALE_EXPIRED=1
     else
       ok "not expired"
     fi
@@ -1659,12 +1671,45 @@ fi # STATUS_LIST_MODE — section 9
 # --- Verdict -----------------------------------------------------------------
 printf '\n'
 
+# Genuine but stale: the signature verified and the only failures are age or
+# expiry. Exit 1 like any failure, with a last line that cannot be confused
+# with the one a tampered document gets.
+stale_only() {
+  [ "$SIGNATURE_VERIFIED" -eq 1 ] && [ "$FAILURES" -gt 0 ] && [ "$FAILURES" -eq "$STALE_FAILURES" ]
+}
+stale_verdict() {
+  if [ "$STALE_EXPIRED" -eq 1 ]; then
+    printf '%s%sEXPIRED%s — the signature is valid, but this attestation expired on %s.\n' \
+      "$RED" "$BOLD" "$RESET" "${EXPIRES:-}" >&2
+  else
+    printf '%s%sEXPIRED%s — the signature is valid, but this attestation was generated on %s,\n' \
+      "$RED" "$BOLD" "$RESET" "${GENERATED:-}" >&2
+    printf 'more than the %ss you allow (--max-age-seconds) ago.\n' "$MAX_AGE_SECONDS" >&2
+  fi
+  printf 'It was not altered, but it no longer says anything about the organisation now:\n' >&2
+  printf 'do not rely on it. Request a new one, or fetch a fresh copy from the link you\n' >&2
+  printf 'were given and verify that instead.\n' >&2
+  # The command is built from the signed iss and slug only when both have the
+  # shape of an origin and a slug, so nothing odd is ever printed as a command.
+  if [[ "${CLAIMS_ISS:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+     && [[ "${SLUG:-}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    printf '\n  curl -fsS %s/api/public/attest/%s -o att.json\n' "$CLAIMS_ISS" "$SLUG" >&2
+  fi
+  printf '\n' >&2
+  exit 1
+}
+
 if [ "$STATUS_LIST_MODE" -eq 1 ]; then
   # A posture signature that does not verify is a harder failure than a
   # revocation-check outcome and takes precedence, exactly as it would for a
   # caller composing the two checks itself: an attestation that is not even
   # authentic is not rescued by its kid also being absent from a status list.
-  if [ -n "$JWS_FILE" ] && [ "$FAILURES" -ne 0 ]; then
+  # A revoked key or subject outranks staleness: "request a new one" would be
+  # the wrong advice for a document whose signer or subject was withdrawn.
+  if [ -n "$JWS_FILE" ] && stale_only && [ "$REVOCATION_STATUS" != revoked ]; then
+    stale_verdict
+  fi
+  if [ -n "$JWS_FILE" ] && [ "$FAILURES" -ne 0 ] && ! stale_only; then
     printf '%s%sVERIFICATION FAILED%s — %d posture check(s) did not hold. Do not rely on this document.\n\n' \
       "$RED" "$BOLD" "$RESET" "$FAILURES" >&2
     exit 1
@@ -1699,6 +1744,9 @@ if [ "$FAILURES" -eq 0 ]; then
   printf 'the key belongs to who you think, or that the document was meant to exist.\n'
   printf 'Read docs/security/attest-verification.md §6 before relying on it.\n\n'
   exit 0
+fi
+if stale_only; then
+  stale_verdict
 fi
 printf '%s%sVERIFICATION FAILED%s — %d check(s) did not hold. Do not rely on this document.\n\n' \
   "$RED" "$BOLD" "$RESET" "$FAILURES" >&2
