@@ -10,6 +10,10 @@ it addresses rather than the change.
 ## Commits
 
 - Commits must be signed.
+- A commit that fixes an issue says `Closes #N` in the commit message itself,
+  not only in the pull request body. GitHub closes the issue when the commit
+  reaches `main`; a merge into `dev` closes nothing. Use `Refs #N` for a commit
+  that only contributes to an issue.
 - Commit messages must not mention Claude or carry any AI-assistant
   attribution: no `Claude-Session:` or `Co-Authored-By: Claude` trailers, no
   claude.ai links. The same goes for pull request titles and bodies.
@@ -40,6 +44,27 @@ The `DCO` workflow checks this on commits of pull requests opened from forks.
   a fork each carry a `Signed-off-by` trailer matching their author. Commits
   published before the workflow was adopted (up to its `CUTOFF` commit) are not
   checked.
+
+## Issues
+
+No issue stays open once the code that fixes it is on `main`.
+
+- **After every promotion to `main`** (and every release), every open issue is
+  reviewed against what is now on `main`:
+  - **Fixed:** closed, with a comment citing the commit or pull request and the
+    file, line or test that shows it.
+  - **Partly fixed:** a comment says what is done and what remains, and it
+    stays open.
+  - **Still valid:** left as it is.
+  - **Obsolete** (superseded, duplicate, out of scope): closed with the reason
+    and a link.
+- **After a merge into `dev`:** the issues the pull request mentions (`Refs #N`,
+  its body, its branch name) are checked. They are closed only if the fix is
+  complete; otherwise a comment records the status.
+- A security issue is closed only with evidence that it is fixed or not
+  exploitable.
+- Closing comments are in English and, like everything in this public
+  repository, cite only public material.
 
 ## Dependencies
 
