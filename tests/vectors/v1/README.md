@@ -25,7 +25,8 @@ JWKS you publish, and never treat a document signed by them as genuine.
 - `vectors.json`: the manifest, one entry per case.
 - `attestations/`, `jws/`, `claims/`: input documents (full attestations,
   compact JWS in detached and attached form, bare claims objects).
-- `jwks/`: key-document variants (mislabelled, duplicated member, trailing text).
+- `jwks/`: key-document variants (mislabelled, duplicated member, trailing text,
+  keys marked with `hs_retired_at`).
 - `status-lists/`: signed status lists, valid and manipulated.
 - `SHA256SUMS`: sha-256 of every file in this directory except itself.
 
@@ -58,11 +59,11 @@ the reason `expect.code` names. The `code` values are:
   `date_unparseable`, `missing_expiry`, `issuer_mismatch`, `slug_mismatch`,
   `nonce_mismatch`, `overall_band_mismatch`, `kid_mismatch`, `header_not_allowed`,
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
-  `redaction_violation`, `revoked_key`, `revoked_subject`
-- `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`
+  `redaction_violation`, `revoked_key`, `revoked_subject`, `retired_key`
+- `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
   `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
-  `unsupported_alg`)
+  `unsupported_alg`, `retired_key`, `retired_at_malformed`)
 
 Where one document breaks several rules at once (a decoy inside an expired
 document, say), `code` names the verdict the reference gives; the case
@@ -146,3 +147,15 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   options and `tests/mutants.sh` was added. Only the manifest and this
   README (which describe the new cases) changed; every key, document and other
   file keeps its `SHA256SUMS` line byte for byte.
+- 2026-10-07: added 9 cases and their files (nothing existing changed) for the
+  `hs_retired_at` member of a JWK, which marks a key as retired. A key set
+  marks a key as `2026-07-31T18:53:58Z`: a document generated at
+  `18:53:57.999Z` verifies, one generated at `18:53:58.000Z` fails
+  (`retired_key`), a malformed value is a key set that cannot be used
+  (`jwks_retired_at_malformed`, exit 2), and a retired key that is not the
+  selected one changes nothing. The same for the status list's key set: a list
+  issued at or after the retirement is unknown (`status_unknown_retired_key`),
+  as is a malformed value (`status_unknown_retired_at_malformed`). New codes:
+  `retired_key`, `jwks_retired_at_malformed`, `status_unknown_retired_key`,
+  `status_unknown_retired_at_malformed`. The manifest and this README changed;
+  every other file keeps its `SHA256SUMS` line byte for byte.
