@@ -265,6 +265,14 @@ esc() {
   done
   printf '%s' "$out"
 }
+# Whether $1 has the shape of a kid. In the C locale, so that a range such as
+# A-Z cannot match an accented letter under a UTF-8 locale.
+is_kid_shape() {
+  local LC_ALL=C
+  local shape='^[A-Za-z0-9_-]{21}[AQgw]$'
+  [[ "$1" =~ $shape ]]
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --jws)          JWS_FILE="${2:?}"; shift 2 ;;
@@ -290,7 +298,7 @@ while [ $# -gt 0 ]; do
     # equal a derived kid, so it is a usage error, not a check that always fails.
     --expect-kid)
       [ $# -ge 2 ] || { printf 'error: --expect-kid needs a value\n' >&2; exit 2; }
-      [[ "$2" =~ ^[A-Za-z0-9_-]{21}[AQgw]$ ]] \
+      is_kid_shape "$2" \
         || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$(esc "$2")" >&2; exit 2; }
       EXPECT_KIDS+=("$2"); shift 2 ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
