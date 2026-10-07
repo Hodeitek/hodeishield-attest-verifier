@@ -307,7 +307,8 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   SHA256SUMS
 ```
 
-Replace `<TAG>` with the release tag. This proves that the file was built from
+Replace `<TAG>` with the release tag. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md). This proves that the file was built from
 that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
 the reason it is a short, single, readable script.
