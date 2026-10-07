@@ -817,6 +817,44 @@ def build_retired_cases(g, A, S, issuer_kid):
            + ["--status", S + "retired-before.json"], 3, "status_unknown_retired_at_malformed",
            "malformed_document \u2014 hs_retired_at of the --status-keys entry")
 
+    # Key sets that cannot be read one way: the first entry would win, so a
+    # retirement marker could be dodged by ordering.
+    def reshape(kind, marker):
+        def fn(d):
+            k = d["keys"][0]
+            if kind == "dup":
+                d["keys"] = [dict(k), dict(k, hs_retired_at=marker)]
+            elif kind == "object":
+                d["keys"] = {"a": dict(k, hs_retired_at=marker)}
+            else:
+                d["keys"] = ["str", dict(k)]
+        return fn
+    g.edit(J_ISSUER, "jwks/duplicate-kid.json", reshape("dup", RET))
+    g.case("jwks-duplicate-kid", "Two keys carry the same kid, the second marked retired: the key set is invalid, "
+           "could not check (2).",
+           ["--attestation", A + "retired-before.json"] + common(RET_NOW, jwks="jwks/duplicate-kid.json"),
+           2, "jwks_duplicate_kid", "two of its keys carry the same kid")
+    g.edit(J_ISSUER, "jwks/keys-not-array.json", reshape("object", RET))
+    g.case("jwks-keys-not-array", "`keys` is an object, not an array: the key set is invalid, could not check (2).",
+           ["--attestation", A + "retired-before.json"] + common(RET_NOW, jwks="jwks/keys-not-array.json"),
+           2, "jwks_keys_not_array", "keys` is not an array of objects")
+    g.edit(J_STATUS, "jwks/status-duplicate-kid.json", reshape("dup", RET))
+    g.case("status-keys-duplicate-kid", "The status key set has two keys with the same kid: unknown (3).",
+           ["--status-list", "--status-keys", "jwks/status-duplicate-kid.json"] + SR_COMMON
+           + ["--status", S + "retired-before.json"], 3, "status_unknown_duplicate_kid",
+           "duplicate_key \u2014 status-keys.json has two keys with the same kid")
+    g.edit(J_STATUS, "jwks/status-keys-object.json", reshape("object", RET))
+    g.case("status-keys-not-array", "`keys` of the status key set is an object, whose member carries a retirement "
+           "marker: unknown (3), not a list trusted without reading the marker.",
+           ["--status-list", "--status-keys", "jwks/status-keys-object.json"] + SR_COMMON
+           + ["--status", S + "retired-at.json"], 3, "status_unknown_keys_not_array",
+           "malformed_document \u2014 status-keys.json: `keys` is not an array of objects")
+    g.edit(J_STATUS, "jwks/status-keys-str-entry.json", reshape("str", RET))
+    g.case("status-keys-entry-not-object", "An entry of the status key set's `keys` is a string: unknown (3).",
+           ["--status-list", "--status-keys", "jwks/status-keys-str-entry.json"] + SR_COMMON
+           + ["--status", S + "retired-before.json"], 3, "status_unknown_keys_not_array",
+           "malformed_document \u2014 status-keys.json: `keys` is not an array of objects")
+
 
 def write_outputs(g):
     mpath = g.path("vectors.json")

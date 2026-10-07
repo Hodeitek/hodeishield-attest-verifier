@@ -2540,6 +2540,126 @@
         "code": "status_unknown_retired_at_malformed",
         "match": "malformed_document — hs_retired_at of the --status-keys entry"
       }
+    },
+    {
+      "id": "jwks-duplicate-kid",
+      "description": "Two keys carry the same kid, the second marked retired: the key set is invalid, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "jwks/duplicate-kid.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "jwks_duplicate_kid",
+        "match": "two of its keys carry the same kid"
+      }
+    },
+    {
+      "id": "jwks-keys-not-array",
+      "description": "`keys` is an object, not an array: the key set is invalid, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "jwks/keys-not-array.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "jwks_keys_not_array",
+        "match": "keys` is not an array of objects"
+      }
+    },
+    {
+      "id": "status-keys-duplicate-kid",
+      "description": "The status key set has two keys with the same kid: unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-duplicate-kid.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-before.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_duplicate_kid",
+        "match": "duplicate_key — status-keys.json has two keys with the same kid"
+      }
+    },
+    {
+      "id": "status-keys-not-array",
+      "description": "`keys` of the status key set is an object, whose member carries a retirement marker: unknown (3), not a list trusted without reading the marker.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-keys-object.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-at.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_keys_not_array",
+        "match": "malformed_document — status-keys.json: `keys` is not an array of objects"
+      }
+    },
+    {
+      "id": "status-keys-entry-not-object",
+      "description": "An entry of the status key set's `keys` is a string: unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-keys-str-entry.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-before.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_keys_not_array",
+        "match": "malformed_document — status-keys.json: `keys` is not an array of objects"
+      }
     }
   ]
 }

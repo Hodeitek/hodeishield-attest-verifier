@@ -60,10 +60,12 @@ the reason `expect.code` names. The `code` values are:
   `nonce_mismatch`, `overall_band_mismatch`, `kid_mismatch`, `header_not_allowed`,
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
   `redaction_violation`, `revoked_key`, `revoked_subject`, `retired_key`
-- `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`
+- `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
+  `jwks_duplicate_kid`, `jwks_keys_not_array`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
   `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
-  `unsupported_alg`, `retired_key`, `retired_at_malformed`)
+  `unsupported_alg`, `retired_key`, `retired_at_malformed`, `duplicate_kid`,
+  `keys_not_array`)
 
 Where one document breaks several rules at once (a decoy inside an expired
 document, say), `code` names the verdict the reference gives; the case
@@ -159,3 +161,10 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   `retired_key`, `jwks_retired_at_malformed`, `status_unknown_retired_key`,
   `status_unknown_retired_at_malformed`. The manifest and this README changed;
   every other file keeps its `SHA256SUMS` line byte for byte.
+- 2026-10-08: added 5 cases and their files (nothing existing changed) for key
+  sets that cannot be read one way: two keys with the same kid, and `keys`
+  that is not an array of objects. For the attestation key set the outcome is
+  exit 2 (`jwks_duplicate_kid`, `jwks_keys_not_array`); for the status key set
+  it is exit 3 (`status_unknown_duplicate_kid`, `status_unknown_keys_not_array`).
+  The manifest and this README changed; every other file keeps its `SHA256SUMS`
+  line byte for byte.
