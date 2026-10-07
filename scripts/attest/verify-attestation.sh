@@ -159,8 +159,8 @@
 #   tampered or invalid document gets, and names the command to fetch a new one.
 #   --status-list mode:        0 good | 1 revoked | 2 environment/usage problem | 3 unknown
 #   `unknown` (3) is deliberately its own code, distinct from `revoked` (1): a
-#   list you could not fetch or could not verify is NOT evidence the subject is
-#   fine, and a caller scripting against this tool must not be able to conflate
+#   list that was obtained but could not be verified is NOT evidence the subject is
+#   fine (one that could not be fetched at all is exit 2), and a caller scripting against this tool must not be able to conflate
 #   the two by checking `$? -ne 0`.
 # =============================================================================
 set -euo pipefail
@@ -1902,10 +1902,10 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
       exit 1
       ;;
     *)
-      printf '%s%sUNKNOWN%s (%s) — neither good nor revoked. A list you could not fetch or could\n' \
+      printf '%s%sUNKNOWN%s (%s) — neither good nor revoked. A status list that was obtained but does\n' \
         "$YELLOW" "$BOLD" "$RESET" "${REVOCATION_UNKNOWN_BECAUSE:-unverified}" >&2
-      printf 'not verify has NOT told you the subject is fine; treat this exactly as you would\n' >&2
-      printf 'treat an unreachable revocation authority. docs/security/attest-verification.md\n' >&2
+      printf 'not verify, or that cannot settle this subject, has NOT told you the subject is fine; treat\n' >&2
+      printf 'this exactly as you would treat an unreachable revocation authority. docs/security/attest-verification.md\n' >&2
       printf '§7.1, "Unknown is not good", explains why this is a distinct outcome from both\n' >&2
       printf '"good" and "revoked", not a synonym for either.\n\n' >&2
       exit 3

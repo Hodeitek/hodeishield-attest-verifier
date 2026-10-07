@@ -17,6 +17,24 @@ before it takes effect. Only the latest release is supported, as
 `scripts/attest/verify-attestation.sh` changes, so there will be a new sha256 at
 release.
 
+### Security
+- Every value taken from a document, key set or status list is printed with
+  control characters (newline, carriage return, ESC) and any non-ASCII byte as a
+  visible `\xHH` escape. Before, an edited document could carry a nonce, `iss`,
+  `jti`, date or member name that forged lines such as an "Attested content"
+  block or a `VERIFIED` verdict on stdout, above the real `FAIL` lines on stderr
+  (the exit code was not affected).
+
+### Fixed
+- A verified document with a non-ASCII framework label no longer ends in an
+  error when Python's stdout is not UTF-8 (`PYTHONIOENCODING=ascii`); a display
+  problem cannot change the verdict.
+- `--expect-kid` validates its value in the C locale, so an accented letter is a
+  usage error (exit 2) under a UTF-8 locale instead of a failed check.
+- The `UNKNOWN` verdict text no longer says a list "you could not fetch" is
+  unknown: a list that could not be fetched is exit 2, and `UNKNOWN` (exit 3) is
+  a list that was obtained but does not verify, or cannot settle the subject.
+
 ### Changed
 - **Output change.** The overall band, the frameworks and the other claims about
   the organisation are no longer printed before the checks have finished. They
@@ -49,6 +67,10 @@ release.
   `unexpected_kid`); a value that is not the shape of a kid is a usage error
   (exit 2). It is not `--check-kid`, which looks a kid up in a status list, and
   it does not apply to the status-list signing key.
+- Documentation corrections: the Compatibility section gives the real exit codes
+  for an unknown format version (2 for an attestation, 3 for a status list);
+  "Unknown is not good" says a fetch failure is exit 2; "What the output shows"
+  lists exactly what a run that does not verify still prints.
 - README: a Compatibility section (format versions per verifier version, the
   90-day notice, latest release only), "What the output shows", and
   `--expect-kid` in "Pinning the key".

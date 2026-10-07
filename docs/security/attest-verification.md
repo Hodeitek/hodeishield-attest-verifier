@@ -1500,15 +1500,17 @@ into one outcome by checking `$? -ne 0`:
 | `2` | **could not check** — usage or environment problem (bad flags, missing `curl`/`openssl`/`python3`/`jq`, an unreadable file), **or a `--status` / `--status-keys` source that could not be fetched** (the script stops with `error: failed to fetch …`). Says nothing about the subject. |
 | `3` | `unknown` — the list was obtained but does not verify: bad signature, stale past `nextUpdate` (300 s skew allowance), rolled back (`--min-seq`), self-revoking, an unresolved or mislabelled `kid`, a malformed document; **or** the subject rule could not be decided (see above). The list's `iss` is compared to `--expect-issuer` **only if you pass it**; without it, a list from another issuer is not caught. **Not** evidence of anything either way — see the "if you never fetch" paragraph above. |
 
-**Unknown is not good.** An `unknown` outcome (exit 3) means the verifier
-could not obtain or verify a status list, or could not decide the subject rule
-from the list it has, so it has **not** established that the key or the subject
-is fine. Treat it exactly as you would an unreachable revocation authority: do
-not read it as "not revoked" and do not carry on as if the check had passed. It
-is a distinct outcome, not a synonym for `good` (exit 0) or for `revoked`
-(exit 1), which is why a script must not collapse it into either by testing
-`$? -eq 0` or `$? -ne 0`. Re-fetch the status list and the key set and run the
-check again; if it persists, follow the steps in §7.
+**Unknown is not good.** An `unknown` outcome (exit 3) means a status list was
+obtained but could not be verified, or the subject rule could not be decided
+from the list it has, so the verifier has **not** established that the key or
+the subject is fine. (A list that could not be fetched at all is a different
+case, exit 2: "could not check".) Treat `unknown` exactly as you would an
+unreachable revocation authority: do not read it as "not revoked" and do not
+carry on as if the check had passed. It is a distinct outcome, not a synonym for
+`good` (exit 0) or for `revoked` (exit 1), which is why a script must not
+collapse it into either by testing `$? -eq 0` or `$? -ne 0`. Re-fetch the status
+list and the key set and run the check again; if it persists, follow the steps
+in §7.
 
 A `404 status_list_unavailable` from `/api/public/attest/status` means this
 deployment publishes no list at all (unconfigured, or the publisher has never

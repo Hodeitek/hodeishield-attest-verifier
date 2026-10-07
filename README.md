@@ -203,13 +203,29 @@ and, for each framework, its name and band, plus the subject, `generatedAt`,
 before the verdict, and only when the run ends `VERIFIED` (or `GOOD` in
 `--status-list` mode). A document that is tampered, expired, revoked, of unknown
 status, or that could not be checked shows none of it: the output says
-`attested content withheld: this document did not verify` instead. The sections
-above still print what is needed to see why: which check failed, the `kid` and
-whether it can be derived from the key, the expected and found slug or issuer,
-and the document's `generatedAt` and `expiresAt` for a freshness failure.
+`attested content withheld: this document did not verify` instead.
 
-The full signed posture JSON is printed only with `--raw`, and under the same
-rule: a document that does not verify never shows it, even with `--raw`.
+The full signed posture JSON is printed only with `--raw`, under the same rule.
+Bands, framework names and the raw posture are never shown for a document that
+does not verify, even with `--raw`.
+
+A run that does not verify still prints what is needed to see why. These are
+failure reasons, not attested content:
+
+- the check lines, the protected header and the `kid` (and the kid derived from
+  the key bytes, when they differ);
+- the envelope identifiers `docVersion`, `iss`, `kid`, `jti` and `nonce`;
+- `generatedAt` and `expiresAt`, with the age, on every run (and the issued and
+  next-update times of a status list);
+- the subject slug: in the expected-and-found slug message, in the `curl` hint
+  under an `EXPIRED` verdict, and on the `subjectHash` line in `--status-list`
+  mode;
+- the visibility `gated`, in a redaction failure message;
+- the words "nothing is attested", in the `PASS` line for a null `overallBand`.
+
+Every value taken from a document, key set or status list is printed with
+control characters, and any byte outside printable ASCII, as a visible `\xHH`
+escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
 
 ## Convince yourself it can fail
 
@@ -339,8 +355,11 @@ The verifier checks two document formats, and no other version of either:
 - Only the latest release is supported (see [SECURITY.md](SECURITY.md)). Update
   to it before relying on a result, and see the [changelog](CHANGELOG.md) for
   what each release changed.
-- A document with a format version the verifier does not know is not verified:
-  it fails, it is never read as an older format.
+- A document with a format version the verifier does not know is never read as
+  an older format, and is never verified. An attestation whose `docVersion` or
+  posture version is not the one above stops the run with exit 2 ("could not
+  check", the canonical encoder refuses it). A status list with another
+  `docVersion` is `unknown`, exit 3.
 
 ## Verifying a release
 
