@@ -12,6 +12,9 @@ attestations, published by [Hodeitek](https://hodeitek.com), so that you do
 **not** have to take our word for one. No credentials, account or cooperation
 needed.
 
+Step-by-step guides: [Spanish](https://docs.hodeishield.com/integrations/attest-verifier/),
+[English](https://docs.hodeishield.com/en/integrations/attest-verifier/).
+
 ## The short version
 
 What an organisation shares with you is a **URL**, not a file:
