@@ -444,6 +444,45 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --attestation "$T/decoy-revoked.json" "${COMMON[@]}"
 
+# --help (#15): a short usage, not the header comment. It must exit 0, stay
+# under 40 lines, carry the exit codes, and list EVERY option the argument
+# parser accepts. The options are read from the parser's own `case` patterns, so
+# an option added later without help text fails here.
+echo '# --help'
+expect 0 'Exit codes:' '--help exits 0 and prints the exit codes' -- --help
+HELP_OUT="$T/out.$((PASSED + FAILED - 1))"
+HELP_LINES="$(wc -l < "$HELP_OUT" | tr -d ' ')"
+if [ "$HELP_LINES" -le 40 ]; then
+  printf 'ok - --help is %s lines (at most 40)\n' "$HELP_LINES"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - --help is %s lines, expected at most 40\n' "$HELP_LINES"; FAILED=$((FAILED + 1))
+fi
+for code in 0 1 2 3; do
+  if grep -qE "^  $code  " "$HELP_OUT"; then
+    printf 'ok - --help documents exit code %s\n' "$code"; PASSED=$((PASSED + 1))
+  else
+    printf 'not ok - --help has no line for exit code %s\n' "$code"; FAILED=$((FAILED + 1))
+  fi
+done
+lacks 'set -euo pipefail' '--help is the usage text, not the header comment of the script'
+# The parser's patterns: from `while [ $# -gt 0 ]` to its `done`, the lines that
+# open a case arm, e.g. `    --jws)` or `    -h|--help)`.
+mapfile -t PARSER_OPTS < <(sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$VERIFIER" \
+  | sed -nE 's/^    (-[-A-Za-z|]+)\).*/\1/p' | tr '|' '\n' | grep -E '^--[a-z]' | sort -u)
+if [ "${#PARSER_OPTS[@]}" -ge 19 ]; then
+  printf 'ok - found %d options in the argument parser\n' "${#PARSER_OPTS[@]}"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - read only %d options from the argument parser; did its shape change?\n' "${#PARSER_OPTS[@]}"
+  FAILED=$((FAILED + 1))
+fi
+for opt in "${PARSER_OPTS[@]}"; do
+  if grep -qE -- "(^|[^-A-Za-z])${opt}([^-A-Za-z]|\$)" "$HELP_OUT"; then
+    printf 'ok - --help lists %s\n' "$opt"; PASSED=$((PASSED + 1))
+  else
+    printf 'not ok - --help does not list %s\n' "$opt"; FAILED=$((FAILED + 1))
+  fi
+done
+
 # Nothing the verifier prints may send the reader to a document that is not
 # public (#34). Every run above left its stdout and stderr in $T/out.N, the
 # --status-list runs that end UNKNOWN among them.

@@ -189,6 +189,52 @@ MAX_STATUS_LIST_VALIDITY_SECONDS=86400
 # House NTP allowance (status-list.ts DEFAULT_CLOCK_SKEW_MS / 1000).
 STATUS_CLOCK_SKEW_SECONDS=300
 
+# The text --help prints. The header comment above is for whoever reads or audits
+# this script; this is for whoever runs it. Every option the parser below accepts
+# is listed here, and tests/run.sh fails if one is not.
+usage() {
+  cat <<'USAGE'
+Usage:
+  verify-attestation.sh --attestation att.json --jwks jwks.json [options]
+  verify-attestation.sh --status-list --status S --status-keys K \
+                        (--attestation att.json --jwks jwks.json | --check-kid KID) [options]
+
+Attestation mode (the default):
+  --attestation FILE     the document as the endpoint serves it
+  --jws FILE             a compact JWS, with --claims FILE or attached
+  --claims FILE          the claims object that the JWS signs
+  --posture FILE         a full claims object (a bare posture is refused)
+  --jwks FILE            the attestation key set
+  --pub-b64url KEY       the raw public key, instead of --jwks
+  --expect-slug SLUG     require this organisation slug
+  --expect-issuer URL    require this issuer (iss)
+  --expect-nonce VALUE   require this challenge ('' requires none)
+  --max-age-seconds N    reject a document older than N seconds (default 3600)
+  --max-age-days N       the same, in days
+  --now EPOCH            take this Unix time as now (for testing)
+
+Status-list mode (revocation):
+  --status-list          check a signed revocation status list
+  --status FILE|URL      the status list
+  --status-keys FILE|URL the status list's own key set (never --jwks)
+  --check-kid KID        look this key up in the list
+  --check-subject SLUG   look this organisation up in the list
+  --check-generated-at T the document time to compare with the subject entry
+  --min-seq N            reject a list older than sequence N (rollback)
+
+Common:
+  -h, --help             this text
+
+Exit codes:
+  0  verified (good, in --status-list mode)
+  1  a check failed (revoked, in --status-list mode)
+  2  could not check, or a usage error
+  3  unknown, in --status-list mode only: not evidence either way
+
+Documentation: README.md and docs/security/attest-verification.md
+USAGE
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --jws)          JWS_FILE="${2:?}"; shift 2 ;;
@@ -216,7 +262,7 @@ while [ $# -gt 0 ]; do
     --min-seq)              MIN_SEQ="${2:?}"; shift 2
       [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || { printf 'error: --min-seq must be a non-negative integer\n' >&2; exit 2; } ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
-    -h|--help)      sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
+    -h|--help)      usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
