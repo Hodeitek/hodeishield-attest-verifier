@@ -7,15 +7,77 @@ bundles; see [Verifying a release](README.md#verifying-a-release).
 ## Compatibility
 
 Every release so far verifies `attest.attestation.v1` documents and
-`attest.statuslist.v1` status lists, and no other format version. Only the
-latest release is supported, as [SECURITY.md](SECURITY.md) says.
+`attest.statuslist.v1` status lists, and no other format version. A change to
+either format that older verifiers cannot read is announced at least 90 days
+before it takes effect. Only the latest release is supported, as
+[SECURITY.md](SECURITY.md) says.
 
 ## Unreleased
 
-Documentation and repository metadata only; `scripts/` is unchanged since
-v1.2.1.
+`scripts/attest/verify-attestation.sh` changes, so there will be a new sha256 at
+release.
+
+### Security
+- Every value taken from a document, key set or status list is printed with
+  control characters (newline, carriage return, ESC) and any non-ASCII byte as a
+  visible `\xHH` escape. Before, an edited document could carry a nonce, `iss`,
+  `jti`, date or member name that forged lines such as an "Attested content"
+  block or a `VERIFIED` verdict on stdout, above the real `FAIL` lines on stderr
+  (the exit code was not affected). This affected every release from v1.0.0 to
+  v1.2.1.
+
+### Fixed
+- A verified document with a non-ASCII framework label no longer ends in an
+  error when Python's stdout is not UTF-8 (`PYTHONIOENCODING=ascii`); a display
+  problem cannot change the verdict.
+- `--expect-kid` validates its value in the C locale, so an accented letter is a
+  usage error (exit 2) under a UTF-8 locale instead of a failed check.
+- The `UNKNOWN` verdict text no longer says a list "you could not fetch" is
+  unknown: a list that could not be fetched is exit 2, and `UNKNOWN` (exit 3) is
+  a list that was obtained but does not verify, or cannot settle the subject.
+
+### Changed
+- **Output change.** The overall band, the frameworks and the other claims about
+  the organisation are no longer printed before the checks have finished. They
+  appear in an "Attested content" block just before the verdict, and only when
+  the document verifies (exit 0, or `GOOD` in `--status-list` mode). A document
+  that is tampered, expired, revoked, of unknown status or that could not be
+  checked prints `attested content withheld: this document did not verify`
+  instead. The full posture JSON, which was printed every time, is now printed
+  only with `--raw`, and under the same rule. A script that read the band or
+  the posture JSON from the output of a failed run no longer finds it; exit
+  codes are unchanged.
+- `--help` prints a short usage (the options, the exit codes, where to read
+  more) instead of the whole header comment of the script.
+- The messages no longer point to a design document that is not public. The
+  status-list header and the `UNKNOWN` verdict point to
+  `docs/security/attest-verification.md` §7.1, which has a new paragraph,
+  "Unknown is not good".
+- Verification document §7.1: the "Unknown is not good" paragraph, a note
+  that the sample output in §4.3 predates the attested-content change, and two
+  passages that named a non-public design document no longer do.
+- CONTRIBUTING: "Issues" (when a fixed issue is closed) and "Design" (shared
+  vocabulary for designing a change).
+- Verification document brought up to date with v1.2.1 (ML-DSA capability gate,
+  the `EXPIRED` verdict).
 
 ### Added
+- `--raw`: also print the full signed posture JSON, for a document that verifies.
+- `--expect-kid KID`: require that the key that signed the attestation has this
+  kid, compared with the kid recomputed from the key bytes. Repeat it to pin two
+  kids through a rotation overlap. A mismatch is a failed check (exit 1,
+  `unexpected_kid`); a value that is not the shape of a kid is a usage error
+  (exit 2). It is not `--check-kid`, which looks a kid up in a status list, and
+  it does not apply to the status-list signing key.
+- Documentation corrections: the Compatibility section gives the real exit codes
+  for an unknown format version (2 for an attestation, 3 for a status list);
+  "Unknown is not good" says a fetch failure is exit 2; "What the output shows"
+  lists exactly what a run that does not verify still prints.
+- README: a Compatibility section (format versions per verifier version, the
+  90-day notice, latest release only), "What the output shows", and
+  `--expect-kid` in "Pinning the key".
+- Tests for all of the above, including a check that no output refers to a
+  document that is not public.
 - Issue form for "the verifier cannot run or cannot check", and a contact link
   to private vulnerability reporting.
 - Links to the guides on docs.hodeishield.com, and a pointer to hodeishield.com
@@ -23,12 +85,6 @@ v1.2.1.
 - README and verification document §6: what the key fingerprint to pin is (the
   `kid`), and a command that computes it from a downloaded `jwks.json`.
 - This changelog.
-
-### Changed
-- Verification document brought up to date with v1.2.1 (ML-DSA capability gate,
-  the `EXPIRED` verdict).
-- CONTRIBUTING: "Issues" (when a fixed issue is closed) and "Design" (shared
-  vocabulary for designing a change).
 
 ## v1.2.1 - 2026-10-06
 

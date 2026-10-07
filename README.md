@@ -194,6 +194,39 @@ bash scripts/attest/verify-attestation.sh --status-list \
 interchangeable. What the list can and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 
+## What the output shows
+
+The checks print as `PASS`, `WARN` and `FAIL` lines, in numbered sections, with
+the last line giving the verdict. What the document *says* (its overall band
+and, for each framework, its name and band, plus the subject, `generatedAt`,
+`lastCheckedAt` and visibility) is printed in an "Attested content" block just
+before the verdict, and only when the run ends `VERIFIED` (or `GOOD` in
+`--status-list` mode). A document that is tampered, expired, revoked, of unknown
+status, or that could not be checked shows none of it: the output says
+`attested content withheld: this document did not verify` instead.
+
+The full signed posture JSON is printed only with `--raw`, under the same rule.
+Bands, framework names and the raw posture are never shown for a document that
+does not verify, even with `--raw`.
+
+A run that does not verify still prints what is needed to see why. These are
+failure reasons, not attested content:
+
+- the check lines, the protected header and the `kid` (and the kid derived from
+  the key bytes, when they differ);
+- the envelope identifiers `docVersion`, `iss`, `kid`, `jti` and `nonce`;
+- `generatedAt` and `expiresAt`, with the age, on every run (and the issued and
+  next-update times of a status list);
+- the subject slug: in the expected-and-found slug message, in the `curl` hint
+  under an `EXPIRED` verdict, and on the `subjectHash` line in `--status-list`
+  mode;
+- the visibility `gated`, in a redaction failure message;
+- the words "nothing is attested", in the `PASS` line for a null `overallBand`.
+
+Every value taken from a document, key set or status list is printed with
+control characters, and any byte outside printable ASCII, as a visible `\xHH`
+escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
+
 ## Convince yourself it can fail
 
 A verifier that has only ever printed `PASS` has told you nothing. Each of these
@@ -265,6 +298,27 @@ python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashl
 Compare the output with the `kid` you pinned. This repository does not yet
 publish the current values.
 
+Let the verifier do the comparison with `--expect-kid`:
+
+```bash
+bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com \
+  --expect-kid <the kid you pinned>
+```
+
+- The run exits 1 with a `FAIL` line, `unexpected_kid`, naming the kid found and
+  the kids expected, unless the key that signed has that kid. The comparison is
+  with the kid recomputed from the key bytes, never with a label in the
+  document or the JWKS, so a key relabelled to the kid you pinned does not pass.
+- Repeat the option to pin two kids during a key rotation overlap
+  (`--expect-kid <old> --expect-kid <new>`): the key may have either.
+- A value that is not the shape of a kid (22 base64url characters) is a usage
+  error, exit 2.
+- It is not `--check-kid`. `--check-kid` looks a kid up in a revocation status
+  list; `--expect-kid` requires the attestation's signing key to be one you
+  pinned. It does not apply to the key that signs the status list, which has no
+  pin option in this release.
+
 ## Where this comes from, and what is redacted
 
 - `scripts/attest/verify-attestation.sh` is the same script we keep, byte for
@@ -284,8 +338,28 @@ publish the current values.
   **provenance** — they say where a constant or a rule came from. They are not
   steps you are expected to follow. The same holds for references to
   `docs/architecture/specs/…` (the revocation design document) in the script's
-  comments and in some of its messages: that document is not public. §7 of the
-  public document covers what a verifier needs.
+  comments: that document is not public, and nothing the script prints points to
+  it. Where a message sends you to a document, it is §7 or §7.1 of the public
+  one, which covers what a verifier needs.
+
+## Compatibility
+
+The verifier checks two document formats, and no other version of either:
+
+| Verifier version | Attestation | Status list |
+|---|---|---|
+| every release so far (v1.0.0 to v1.2.1) | `attest.attestation.v1` | `attest.statuslist.v1` |
+
+- A change to either format that older verifiers cannot read is announced at
+  least 90 days before it takes effect.
+- Only the latest release is supported (see [SECURITY.md](SECURITY.md)). Update
+  to it before relying on a result, and see the [changelog](CHANGELOG.md) for
+  what each release changed.
+- A document with a format version the verifier does not know is never read as
+  an older format, and is never verified. An attestation whose `docVersion` or
+  posture version is not the one above stops the run with exit 2 ("could not
+  check", the canonical encoder refuses it). A status list with another
+  `docVersion` is `unknown`, exit 3.
 
 ## Verifying a release
 

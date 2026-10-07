@@ -73,6 +73,12 @@
 #                      A nonce you do not compare is decoration — this is the
 #                      comparison, and only you can make it.
 #   --expect-issuer    fail unless claims.iss equals this origin
+#   --expect-kid       fail unless the key that signed is one of these kids; repeat
+#                      it to pin two through a rotation overlap. Compared with the
+#                      kid RECOMPUTED from the key bytes, never with a label. Not
+#                      --check-kid, and it does not apply to the status-list key.
+#   --raw              also print the full signed posture JSON, but only when the
+#                      document verified (what it says is never shown otherwise)
 #   --max-age-seconds  staleness tolerance on `generatedAt` (default 3600 = 1 h)
 #   --max-age-days     deprecated alias, converted to seconds
 #   --now              override "now" (Unix seconds), for reproducible testing
@@ -153,8 +159,8 @@
 #   tampered or invalid document gets, and names the command to fetch a new one.
 #   --status-list mode:        0 good | 1 revoked | 2 environment/usage problem | 3 unknown
 #   `unknown` (3) is deliberately its own code, distinct from `revoked` (1): a
-#   list you could not fetch or could not verify is NOT evidence the subject is
-#   fine, and a caller scripting against this tool must not be able to conflate
+#   list that was obtained but could not be verified is NOT evidence the subject is
+#   fine (one that could not be fetched at all is exit 2), and a caller scripting against this tool must not be able to conflate
 #   the two by checking `$? -ne 0`.
 # =============================================================================
 set -euo pipefail
@@ -163,6 +169,10 @@ JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
 EXPECT_SLUG=''; EXPECT_NONCE_SET=0; EXPECT_NONCE=''
 MAX_AGE_SECONDS=3600; NOW_OVERRIDE=''
+SHOW_RAW=0
+# --expect-kid, repeatable: the kids the attestation's signing key may have. Empty
+# means no pin. Not --check-kid, which looks a kid up in a status list.
+EXPECT_KIDS=()
 
 # --- status-list mode (--status-list) ---------------------------------------
 STATUS_LIST_MODE=0
@@ -189,6 +199,80 @@ MAX_STATUS_LIST_VALIDITY_SECONDS=86400
 # House NTP allowance (status-list.ts DEFAULT_CLOCK_SKEW_MS / 1000).
 STATUS_CLOCK_SKEW_SECONDS=300
 
+# The text --help prints. The header comment above is for whoever reads or audits
+# this script; this is for whoever runs it. Every option the parser below accepts
+# is listed here, and tests/run.sh fails if one is not.
+usage() {
+  cat <<'USAGE'
+Usage:
+  verify-attestation.sh --attestation att.json --jwks jwks.json [options]
+  verify-attestation.sh --status-list --status S --status-keys K \
+                        (--attestation att.json --jwks jwks.json | --check-kid KID) [options]
+
+Attestation mode (the default):
+  --attestation FILE     the document as the endpoint serves it
+  --jws FILE             a compact JWS, with --claims FILE or attached
+  --claims FILE          the claims object that the JWS signs
+  --posture FILE         a full claims object (a bare posture is refused)
+  --jwks FILE            the attestation key set
+  --pub-b64url KEY       the raw public key, instead of --jwks
+  --expect-slug SLUG     require this organisation slug
+  --expect-issuer URL    require this issuer (iss)
+  --expect-nonce VALUE   require this challenge ('' requires none)
+  --expect-kid KID       require the signing key to have this kid; repeat for a rotation overlap
+  --max-age-seconds N    reject a document older than N seconds (default 3600)
+  --max-age-days N       the same, in days
+  --raw                  also print the full signed posture JSON (verified documents only)
+  --now EPOCH            take this Unix time as now (for testing)
+
+Status-list mode (revocation):
+  --status-list          check a signed revocation status list
+  --status FILE|URL      the status list
+  --status-keys FILE|URL the status list's own key set (never --jwks)
+  --check-kid KID        look this kid up in the list (not --expect-kid, which pins)
+  --check-subject SLUG   look this organisation up in the list
+  --check-generated-at T the document time to compare with the subject entry
+  --min-seq N            reject a list older than sequence N (rollback)
+
+Common:
+  -h, --help             this text
+
+Exit codes:
+  0  verified (good, in --status-list mode)
+  1  a check failed (revoked, in --status-list mode)
+  2  could not check, or a usage error
+  3  unknown, in --status-list mode only: not evidence either way
+
+Documentation: README.md and docs/security/attest-verification.md
+USAGE
+}
+
+# esc VALUE — print VALUE with every byte that is not printable ASCII shown as a
+# visible \xHH escape. EVERY value that comes from a document, a key set or a
+# status list goes through this before it reaches the terminal: anyone can edit
+# a document, and an unescaped newline or ESC inside a nonce could forge lines
+# (an "Attested content" block, a VERIFIED verdict) or hide text, whether or not
+# the signature verifies. The C locale makes it count bytes, so a multi-byte
+# character cannot slip through as one "printable" unit.
+esc() {
+  local LC_ALL=C
+  local s="$1" out='' c='' i=0 n=${#1}
+  local plain='^[ -~]*$' one='^[ -~]$'
+  if [[ "$s" =~ $plain ]]; then printf '%s' "$s"; return 0; fi
+  for (( i = 0; i < n; i++ )); do
+    c="${s:i:1}"
+    if [[ "$c" =~ $one ]]; then out+="$c"; else printf -v c '\\x%02x' "'$c"; out+="$c"; fi
+  done
+  printf '%s' "$out"
+}
+# Whether $1 has the shape of a kid. In the C locale, so that a range such as
+# A-Z cannot match an accented letter under a UTF-8 locale.
+is_kid_shape() {
+  local LC_ALL=C
+  local shape='^[A-Za-z0-9_-]{21}[AQgw]$'
+  [[ "$1" =~ $shape ]]
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --jws)          JWS_FILE="${2:?}"; shift 2 ;;
@@ -207,6 +291,16 @@ while [ $# -gt 0 ]; do
     --max-age-seconds) MAX_AGE_SECONDS="${2:?}"; shift 2 ;;
     --max-age-days) MAX_AGE_SECONDS=$(( ${2:?} * 86400 )); shift 2 ;;
     --now)          NOW_OVERRIDE="${2:?}"; shift 2 ;;
+    --raw)          SHOW_RAW=1; shift ;;
+    # Repeatable, so that two kids can be pinned through a key rotation overlap.
+    # A kid is BASE64URL of 16 bytes: 21 characters of the alphabet, then one of
+    # A Q g w (the last character carries only 2 bits). Anything else can never
+    # equal a derived kid, so it is a usage error, not a check that always fails.
+    --expect-kid)
+      [ $# -ge 2 ] || { printf 'error: --expect-kid needs a value\n' >&2; exit 2; }
+      is_kid_shape "$2" \
+        || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$(esc "$2")" >&2; exit 2; }
+      EXPECT_KIDS+=("$2"); shift 2 ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
     --status)               STATUS_SRC="${2:?}"; shift 2 ;;
     --status-keys)          STATUS_KEYS_SRC="${2:?}"; shift 2 ;;
@@ -216,18 +310,26 @@ while [ $# -gt 0 ]; do
     --min-seq)              MIN_SEQ="${2:?}"; shift 2
       [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || { printf 'error: --min-seq must be a non-negative integer\n' >&2; exit 2; } ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
-    -h|--help)      sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
+    -h|--help)      usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 
+CONTENT_WITHHELD='attested content withheld: this document did not verify'
 RED=''; GREEN=''; YELLOW=''; BOLD=''; RESET=''
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 fi
 ok()   { printf '  %sPASS%s  %s\n' "$GREEN" "$RESET" "$*"; }
 warn() { printf '  %sWARN%s  %s\n' "$YELLOW" "$RESET" "$*"; }
-die()  { printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 2; }
+# WITHHOLD_ON_DIE is set once a document is being read (after the banner below):
+# a run that stops there never established the document, so it shows none of it.
+WITHHOLD_ON_DIE=0
+die()  {
+  printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2
+  [ "$WITHHOLD_ON_DIE" -eq 0 ] || printf '%s\n' "$CONTENT_WITHHELD" >&2
+  exit 2
+}
 bad()  { printf '  %sFAIL%s  %s\n' "$RED" "$RESET" "$*" >&2; FAILURES=$((FAILURES+1)); }
 # Like bad(), but for the STATUS LIST's own verification (§6.1 of the design
 # doc). Deliberately a SEPARATE counter from $FAILURES: a status-list failure
@@ -270,6 +372,9 @@ Never the attestation --jwks — the two key sets are disjoint by design."
     || die "--status-list needs something to check: pass --attestation or --jws (check its \
 kid/slug), or --check-kid, or --check-subject. Run with --help."
 fi
+[ "${#EXPECT_KIDS[@]}" -eq 0 ] || [ "$HAVE_ATTESTATION" -eq 1 ] \
+  || die "--expect-kid pins the key that signed an attestation, so it needs --attestation (or --jws). \
+To look a kid up in a status list, use --check-kid."
 if [ "$HAVE_ATTESTATION" -eq 1 ] || [ "$STATUS_LIST_MODE" -eq 0 ]; then
   [ "$HAVE_ATTESTATION" -eq 1 ] || die "missing --attestation (or --jws). Run with --help."
   [ -z "$JWS_FILE" ] || [ -r "$JWS_FILE" ] || die "cannot read ${JWS_FILE}"
@@ -290,6 +395,7 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
 else
   printf '\n%sHodeiShield posture attestation — offline verification%s\n\n' "$BOLD" "$RESET"
 fi
+if [ "$HAVE_ATTESTATION" -eq 1 ]; then WITHHOLD_ON_DIE=1; fi
 
 # --- 0. Environment ----------------------------------------------------------
 printf '%s[0] Environment%s\n' "$BOLD" "$RESET"
@@ -640,7 +746,10 @@ if isinstance(doc, Obj):
     top = [k for k, _ in doc]
     if "attestation" in top:
         out += [k + " (beside and inside attestation)" for k in ("claims", "signature") if k in top]
-sys.stdout.write("\n".join(sorted(set(out))))
+def vis(t):
+    return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
+# Member names come from the document; they are shown, so they are escaped here.
+sys.stdout.write("\n".join(sorted(set(vis(x) for x in out))))
 '
 
 # Document surgery: pull the pieces out of whatever JSON the caller handed us.
@@ -688,7 +797,9 @@ elif mode == "posture":
     json.dump(p, open(sys.argv[3], "w"), indent=2)
 elif mode == "field":
     v = doc.get(sys.argv[3])
-    if isinstance(v, str): sys.stdout.write(v)
+    # Bytes, not text: a non-UTF-8 stdout (PYTHONIOENCODING) must not make a
+    # value unreadable and so change a verdict.
+    if isinstance(v, str): sys.stdout.buffer.write(v.encode("utf-8", "surrogatepass"))
     elif v is not None: sys.stdout.write(json.dumps(v))
 elif mode == "has":
     sys.stdout.write("0" if doc.get(sys.argv[3]) is None else "1")
@@ -707,7 +818,26 @@ elif mode == "unsigned":
         for i, f in enumerate(p.get("frameworks") or []):
             if isinstance(f, dict):
                 extra += ["posture.frameworks[%d].%s" % (i, k) for k in f if k not in SIGNED_FRAMEWORK]
-    sys.stdout.write("\n".join(extra))
+    def vis(t):
+        return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
+    sys.stdout.write("\n".join(vis(x) for x in extra))
+elif mode == "summary":
+    # What the signature covers, for a human: only members the canonical encoders
+    # read. Control characters are shown as ? so a value cannot drive the terminal.
+    def clean(v): return "".join(ch if ch.isprintable() else "?" for ch in str(v))
+    def show(v): return "null" if v is None else clean(v)
+    p = doc.get("posture") or {}
+    lines = ["        overallBand: " + show(doc.get("overallBand")),
+             "        subject:     %s  (visibility: %s)" % (show(p.get("slug")), show(p.get("visibility"))),
+             "        generatedAt: " + show(p.get("generatedAt")),
+             "        lastCheckedAt: %s" % ("null  (no monitoring heartbeat is claimed)" if p.get("lastCheckedAt") is None
+                else clean(p["lastCheckedAt"]) + "  (freshness of the underlying data, can be older than generatedAt)")]
+    fw = p.get("frameworks") or []
+    lines.append("        frameworks:  " + ("none attested" if not fw else "%d attested" % len(fw)))
+    for f in fw: lines.append("          %s (%s): %s" % (clean(f.get("label")), clean(f.get("code")), clean(f.get("band"))))
+    # Written as UTF-8 bytes whatever the terminal encoding: a label such as
+    # "ens—alto" must not turn a verified document into an error.
+    sys.stdout.buffer.write(("\n".join(lines) + "\n").encode("utf-8", "backslashreplace"))
 else: raise SystemExit("document: unknown mode %r" % mode)
 '
 
@@ -891,19 +1021,19 @@ json_str() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "
 ALG="$(json_str "$WORKDIR/header.json" alg)"
 KID="$(json_str "$WORKDIR/header.json" kid)"
 TYP="$(json_str "$WORKDIR/header.json" typ)"
-printf '        %s\n' "$(cat "$WORKDIR/header.json")"
+printf '        %s\n' "$(esc "$(cat "$WORKDIR/header.json")")"
 
 # Never dispatch on `alg` — compare it as a constant. The verification primitive
 # below is ML-DSA-65 unconditionally, so `alg: none` is a non-event.
 if [ "$ALG" = 'ML-DSA-65' ]; then
   ok "alg is ML-DSA-65 (RFC 9964, IANA-permanent)"
 else
-  bad "alg is '${ALG}', expected 'ML-DSA-65'. Refusing to verify under a substituted algorithm."
+  bad "alg is '$(esc "${ALG}")', expected 'ML-DSA-65'. Refusing to verify under a substituted algorithm."
 fi
 if [ "$TYP" = 'application/attest+jws' ]; then
   ok "typ is application/attest+jws — cannot be replayed into another JWS surface"
 else
-  bad "typ is '${TYP}', expected 'application/attest+jws'"
+  bad "typ is '$(esc "${TYP}")', expected 'application/attest+jws'"
 fi
 if grep -q '"crit"' "$WORKDIR/header.json"; then
   bad "header carries 'crit' — RFC 7515 §4.1.11 requires rejection of extensions we do not implement"
@@ -925,7 +1055,7 @@ else: print(",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)
 if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
   ok "header is the closed set {alg, kid, typ}"
 else
-  bad "malformed_document — header members are '${HEADER_MEMBERS}', expected exactly alg,kid,typ"
+  bad "malformed_document — header members are '$(esc "${HEADER_MEMBERS}")', expected exactly alg,kid,typ"
 fi
 
 # --- 3. Public key -----------------------------------------------------------
@@ -957,12 +1087,12 @@ for k in json.load(open(sys.argv[1])).get("keys") or []:
     # can only turn "I am holding the wrong key document" into a signature
     # failure that reads like a forged document. Those are different findings
     # and a verifier must not conflate them.
-    die "no key in this JWKS carries kid '${KID}'.
+    die "no key in this JWKS carries kid '$(esc "${KID}")'.
        This is NOT evidence that the document is forged — it means you are
        holding the wrong or a stale key document. Re-fetch the JWKS and retry;
        a retired key leaves the published set at the end of its overlap."
   else
-    ok "selected the JWKS key whose kid is '${KID}'"
+    ok "selected the JWKS key whose kid is '$(esc "${KID}")'"
   fi
 fi
 
@@ -982,10 +1112,28 @@ openssl dgst -sha256 -binary -out "$WORKDIR/kiddigest.bin" "$WORKDIR/kidinput.bi
 head -c 16 "$WORKDIR/kiddigest.bin" > "$WORKDIR/kid16.bin"
 DERIVED_KID="$(b64url_encode "$WORKDIR/kid16.bin")"
 if [ "$DERIVED_KID" = "$KID" ]; then
-  ok "kid '${KID}' is derivable from these key bytes"
+  ok "kid '$(esc "${KID}")' is derivable from these key bytes"
 else
-  bad "kid mismatch — header says '${KID}', the key bytes derive '${DERIVED_KID}'.
+  bad "kid mismatch — header says '$(esc "${KID}")', the key bytes derive '${DERIVED_KID}'.
           The key document is mislabelled or you are holding the wrong key."
+fi
+
+# --expect-kid: the pin is compared with the kid RECOMPUTED from the key bytes
+# above, never with the label the header or the JWKS carries. A mislabelled key
+# therefore cannot satisfy a pin by naming itself after the kid you pinned. (A
+# mismatch between that label and the key already failed above; this is the
+# separate question of whether the key is one you meant to trust.)
+if [ "${#EXPECT_KIDS[@]}" -gt 0 ]; then
+  PIN_MATCH=0
+  for pinned_kid in "${EXPECT_KIDS[@]}"; do
+    if [ "$pinned_kid" = "$DERIVED_KID" ]; then PIN_MATCH=1; fi
+  done
+  if [ "$PIN_MATCH" -eq 1 ]; then
+    ok "the key bytes derive kid '${DERIVED_KID}', one of the kids you pinned with --expect-kid"
+  else
+    bad "unexpected_kid — the key bytes derive kid '${DERIVED_KID}', which is not one of the kids you
+          pinned with --expect-kid: ${EXPECT_KIDS[*]}"
+  fi
 fi
 
 # OpenSSL loads SubjectPublicKeyInfo; the JWK carries the bare FIPS 204 key.
@@ -993,7 +1141,7 @@ fi
 printf '308207b2300b0609608648016503040312038207a100' | hex_to_bin > "$WORKDIR/pub.der"
 cat "$WORKDIR/pub.raw" >> "$WORKDIR/pub.der"
 openssl pkey -pubin -inform DER -in "$WORKDIR/pub.der" -out "$WORKDIR/pub.pem" 2>"$WORKDIR/err" \
-  || die "OpenSSL rejected the reconstructed public key: $(cat "$WORKDIR/err")"
+  || die "OpenSSL rejected the reconstructed public key: $(esc "$(cat "$WORKDIR/err")")"
 ok "loaded as an ML-DSA-65 public key"
 
 # --- 4. Payload — the signing envelope ---------------------------------------
@@ -1035,12 +1183,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   if [ "$CLAIMS_KID" = "$KID" ]; then
     ok "claims.kid (E3) equals the protected-header kid — one key, named twice, agreeing"
   else
-    bad "kid_mismatch — the header says '${KID}', the signed body says '${CLAIMS_KID}'.
+    bad "kid_mismatch — the header says '$(esc "${KID}")', the signed body says '$(esc "${CLAIMS_KID}")'.
           A document cannot name one key in its body and be signed by another."
   fi
 elif [ -n "$ATTACHED_UNDECODABLE" ]; then
   bad "malformed_document — the attached payload is not a hodei-shield.attest.attestation.v1
-          envelope (${ATTACHED_UNDECODABLE}). There are no claims to check, so nothing here verifies."
+          envelope ($(esc "${ATTACHED_UNDECODABLE}")). There are no claims to check, so nothing here verifies."
   PAYLOAD_B64="$P"
 else
   ok "using the payload embedded in the attached JWS"
@@ -1079,7 +1227,6 @@ if [ -n "$POSTURE_FILE" ]; then
   # signature does not cover; tests/run.sh holds the rejection cases.
   GENERATED="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field generatedAt)"
   EXPIRES="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field expiresAt)"
-  CHECKED="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field lastCheckedAt)"
   SLUG="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field slug)"
 
   # epoch_of() is defined globally (near b64url_encode) so --status-list mode
@@ -1090,7 +1237,7 @@ if [ -n "$POSTURE_FILE" ]; then
     G="$(epoch_of "$GENERATED")"
     if [ -n "$G" ]; then
       AGE=$(( NOW - G ))
-      printf '        generatedAt: %s  (age %ss)\n' "$GENERATED" "$AGE"
+      printf '        generatedAt: %s  (age %ss)\n' "$(esc "$GENERATED")" "$AGE"
       if [ $(( G - POSTURE_CLOCK_SKEW_SECONDS )) -gt "$NOW" ]; then
         bad "not_yet_valid — generatedAt is $(( G - NOW ))s in the future, beyond the
           ${POSTURE_CLOCK_SKEW_SECONDS}s clock-skew allowance"
@@ -1103,7 +1250,7 @@ if [ -n "$POSTURE_FILE" ]; then
       # A FAIL, as posture.ts rejects it (`malformed_document`): a document whose
       # age cannot be read has not had its age checked, and until 2026-09-29 this
       # was a warning that let it through with freshness unchecked.
-      bad "could not parse generatedAt '${GENERATED}' — freshness was NOT checked.
+      bad "could not parse generatedAt '$(esc "${GENERATED}")' — freshness was NOT checked.
           Do not read this as 'fresh'. Upgrade date(1) or install python3."
     fi
   else
@@ -1112,14 +1259,14 @@ if [ -n "$POSTURE_FILE" ]; then
 
   if [ -n "$EXPIRES" ]; then
     E="$(epoch_of "$EXPIRES")"
-    printf '        expiresAt:   %s\n' "$EXPIRES"
+    printf '        expiresAt:   %s\n' "$(esc "$EXPIRES")"
     if [ -z "$E" ]; then
       # NOT a pass and NOT a warning. Before 2026-08-20 this branch fell through
       # to `ok "not expired"`, so on any host whose date(1) could not parse the
       # string — BSD, macOS — an EXPIRED document reported PASS. A verifier that
       # cannot read the expiry has not checked the expiry, and the whole point
       # of this tool is that it never says otherwise.
-      bad "could not parse expiresAt '${EXPIRES}' — the expiry was NOT checked.
+      bad "could not parse expiresAt '$(esc "${EXPIRES}")' — the expiry was NOT checked.
           Do not read this as 'not expired'. Upgrade date(1) or install python3."
     elif [ "$NOW" -gt "$E" ]; then
       stale "EXPIRED $(( NOW - E ))s ago — re-fetch, do not accept"
@@ -1146,18 +1293,11 @@ if [ -n "$POSTURE_FILE" ]; then
           Reject this document; do not substitute a tolerance of your own."
   fi
 
-  if [ -n "$CHECKED" ]; then
-    printf '        lastCheckedAt: %s  (freshness of the underlying data,\n' "$CHECKED"
-    printf '                       which can be older than generatedAt)\n'
-  else
-    warn "lastCheckedAt is null — no genuine monitoring heartbeat is being claimed"
-  fi
-
   if [ -n "$EXPECT_SLUG" ]; then
     if [ "$SLUG" = "$EXPECT_SLUG" ]; then
-      ok "posture is for slug '${SLUG}', as expected"
+      ok "posture is for slug '$(esc "${SLUG}")', as expected"
     else
-      bad "posture is for slug '${SLUG}', not the expected '${EXPECT_SLUG}' —
+      bad "posture is for slug '$(esc "${SLUG}")', not the expected '${EXPECT_SLUG}' —
           this attestation belongs to a different organisation"
     fi
   fi
@@ -1180,25 +1320,20 @@ if [ -n "$CLAIMS_FILE" ]; then
   CLAIMS_BAND="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" field overallBand)"
   CLAIMS_BAND_PRESENT="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" has overallBand)"
 
-  printf '        docVersion:  %s\n' "${CLAIMS_DOCVERSION:-$MISSING_LABEL}"
-  printf '        iss:         %s\n' "${CLAIMS_ISS:-$MISSING_LABEL}"
-  printf '        kid:         %s\n' "${CLAIMS_KID:-$MISSING_LABEL}"
-  printf '        jti:         %s\n' "${CLAIMS_JTI:-$MISSING_LABEL}"
+  printf '        docVersion:  %s\n' "$(esc "${CLAIMS_DOCVERSION:-$MISSING_LABEL}")"
+  printf '        iss:         %s\n' "$(esc "${CLAIMS_ISS:-$MISSING_LABEL}")"
+  printf '        kid:         %s\n' "$(esc "${CLAIMS_KID:-$MISSING_LABEL}")"
+  printf '        jti:         %s\n' "$(esc "${CLAIMS_JTI:-$MISSING_LABEL}")"
   if [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
-    printf '        nonce:       %s\n' "$CLAIMS_NONCE"
+    printf '        nonce:       %s\n' "$(esc "$CLAIMS_NONCE")"
   else
     printf '        nonce:       null  (no challenge — see --expect-nonce)\n'
-  fi
-  if [ "$CLAIMS_BAND_PRESENT" = '1' ]; then
-    printf '        overallBand: %s\n' "$CLAIMS_BAND"
-  else
-    printf '        overallBand: null\n'
   fi
 
   if [ "$CLAIMS_DOCVERSION" = 'attest.attestation.v1' ]; then
     ok "docVersion (E1) is attest.attestation.v1 — and it is inside the signature, so it cannot be rewritten on the wire"
   else
-    bad "unsupported_version — docVersion is '${CLAIMS_DOCVERSION:-$MISSING_LABEL}'"
+    bad "unsupported_version — docVersion is '$(esc "${CLAIMS_DOCVERSION:-$MISSING_LABEL}")'"
   fi
 
   # The canonical encoders read a CLOSED set of members and silently skip the
@@ -1227,12 +1362,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   # by somebody else's HodeiShield deployment.
   if [ -n "$EXPECT_ISSUER" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
-      ok "iss (E2) is '${CLAIMS_ISS}', as expected"
+      ok "iss (E2) is '$(esc "${CLAIMS_ISS}")', as expected"
     else
-      bad "issuer_mismatch — iss is '${CLAIMS_ISS}', not the expected '${EXPECT_ISSUER}'"
+      bad "issuer_mismatch — iss is '$(esc "${CLAIMS_ISS}")', not the expected '${EXPECT_ISSUER}'"
     fi
   else
-    warn "no --expect-issuer: iss is '${CLAIMS_ISS}' and nothing pinned it. The key set you"
+    warn "no --expect-issuer: iss is '$(esc "${CLAIMS_ISS}")' and nothing pinned it. The key set you"
     warn "verified against must be the one THAT origin publishes, or this proves nothing."
   fi
 
@@ -1243,13 +1378,13 @@ if [ -n "$CLAIMS_FILE" ]; then
       if [ "$CLAIMS_NONCE_PRESENT" = '0' ]; then
         ok "nonce (E5) is null, as required by --expect-nonce ''"
       else
-        bad "nonce_mismatch — you required no challenge, the document carries '${CLAIMS_NONCE}'"
+        bad "nonce_mismatch — you required no challenge, the document carries '$(esc "${CLAIMS_NONCE}")'"
       fi
     elif [ "$CLAIMS_NONCE_PRESENT" = '1' ] && [ "$CLAIMS_NONCE" = "$EXPECT_NONCE" ]; then
       ok "nonce (E5) echoes your challenge verbatim — this document was minted for you, now"
     else
       bad "nonce_mismatch — you challenged with '${EXPECT_NONCE}', the document carries \
-'${CLAIMS_NONCE:-null}'. A replayed or substituted document, however well it verifies."
+'$(esc "${CLAIMS_NONCE:-null}")'. A replayed or substituted document, however well it verifies."
     fi
   elif [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
     warn "the document carries a nonce but you did not pass --expect-nonce, so nothing"
@@ -1271,11 +1406,11 @@ PY
     if [ -z "$DERIVED_BAND" ]; then
       ok "overallBand (E6) is null and nothing is attested — consistent"
     else
-      ok "overallBand (E6) '${CLAIMS_BAND}' equals the weakest attested band — recomputed, not trusted"
+      ok "overallBand (E6) equals the weakest attested band — recomputed, not trusted"
     fi
   else
-    bad "overall_band_mismatch — the document claims overallBand '${CLAIMS_BAND:-null}', but the
-          weakest band in its own coverage list is '${DERIVED_BAND:-null}'"
+    bad "overall_band_mismatch — the document's overallBand is not the weakest band in its
+          own coverage list"
   fi
 
   # The gated-redaction contract, enforced at the RELYING PARTY: a `gated`
@@ -1292,16 +1427,9 @@ PY
     if [ "$FW_COUNT" -eq 0 ] && [ "$CHECKED_PRESENT" = '0' ] && [ "$CLAIMS_BAND_PRESENT" = '0' ]; then
       ok "gated posture is redacted as it must be: no coverage, no heartbeat, no overall band"
     else
-      bad "redaction_violation — a 'gated' posture is carrying coverage (${FW_COUNT} framework(s)),
+      bad "redaction_violation — a 'gated' posture is carrying coverage,
           a heartbeat or an overall band. Reject it: a signature must not make a leak authoritative."
     fi
-  fi
-
-  printf '\n        posture (E7, the frozen v1 bytes):\n'
-  if command -v jq >/dev/null 2>&1; then
-    jq . < "$POSTURE_FILE" | sed 's/^/        /'
-  else
-    sed 's/^/        /' "$POSTURE_FILE"
   fi
 else
   printf '        (canonical bytes only; supply --attestation or --claims to read the claims)\n'
@@ -1317,7 +1445,7 @@ fi # [ -n "$JWS_FILE" ] — end of posture-attestation sections 1-7
 if [ "$STATUS_LIST_MODE" -eq 1 ]; then
 
 printf '\n%s[8] Status list — hodei-shield.attest.statuslist.v1%s\n' "$BOLD" "$RESET"
-printf '        (design doc §6.1: docs/architecture/specs/2026-07-30-attest-revocation-design.md)\n'
+printf '        (how to check revocation yourself: docs/security/attest-verification.md §7.1)\n'
 
 STATUS_JWS=''; SH=''; SP=''; SS=''
 STATUS_DOC_VERSION=''; STATUS_LIST_KID=''; SALG=''; STYP=''
@@ -1351,7 +1479,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$STATUS_DOC_VERSION" = 'attest.statuslist.v1' ]; then
     ok "docVersion is attest.statuslist.v1"
   else
-    stat_bad "unsupported_version — statusList.docVersion is '${STATUS_DOC_VERSION:-$MISSING_LABEL}', \
+    stat_bad "unsupported_version — statusList.docVersion is '$(esc "${STATUS_DOC_VERSION:-$MISSING_LABEL}")', \
 expected 'attest.statuslist.v1'"
   fi
 fi
@@ -1412,7 +1540,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
     ok "header is the closed set {alg, kid, typ} — nothing unexamined can carry meaning"
   else
-    stat_bad "malformed_document — header members are '${HEADER_MEMBERS}', expected exactly alg,kid,typ"
+    stat_bad "malformed_document — header members are '$(esc "${HEADER_MEMBERS}")', expected exactly alg,kid,typ"
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
@@ -1423,12 +1551,12 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$SALG" = 'ML-DSA-65' ]; then
     ok "alg is ML-DSA-65"
   else
-    stat_bad "unsupported_alg — alg is '${SALG}', expected 'ML-DSA-65'"
+    stat_bad "unsupported_alg — alg is '$(esc "${SALG}")', expected 'ML-DSA-65'"
   fi
   if [ "$STYP" = 'application/attest-status+jws' ]; then
     ok "typ is application/attest-status+jws — cannot be replayed as a posture attestation"
   else
-    stat_bad "unexpected_typ — typ is '${STYP}', expected 'application/attest-status+jws'"
+    stat_bad "unexpected_typ — typ is '$(esc "${STYP}")', expected 'application/attest-status+jws'"
   fi
 fi
 
@@ -1437,9 +1565,9 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   STATUS_PUB_B64URL="$(jq -r --arg kid "$STATUS_LIST_KID" \
     '.keys[]? | select(.kid==$kid) | .pub' "$WORKDIR/status-keys.json" | head -1)"
   if [ -n "$STATUS_PUB_B64URL" ]; then
-    ok "selected the --status-keys entry whose kid is '${STATUS_LIST_KID}'"
+    ok "selected the --status-keys entry whose kid is '$(esc "${STATUS_LIST_KID}")'"
   else
-    stat_bad "unknown_kid — '${STATUS_LIST_KID}' is not in --status-keys. Unresolvable is a \
+    stat_bad "unknown_kid — '$(esc "${STATUS_LIST_KID}")' is not in --status-keys. Unresolvable is a \
 rejection, never a fallback to another key — and never a fallback to the attestation --jwks, \
 which is a disjoint set by design (status-keys.ts)."
   fi
@@ -1463,9 +1591,9 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   head -c 16 "$WORKDIR/status_kiddigest.bin" > "$WORKDIR/status_kid16.bin"
   STATUS_DERIVED_KID="$(b64url_encode "$WORKDIR/status_kid16.bin")"
   if [ "$STATUS_DERIVED_KID" = "$STATUS_LIST_KID" ]; then
-    ok "kid '${STATUS_LIST_KID}' is derivable from these key bytes"
+    ok "kid '$(esc "${STATUS_LIST_KID}")' is derivable from these key bytes"
   else
-    stat_bad "kid mismatch — status-keys entry claims '${STATUS_LIST_KID}', its bytes derive \
+    stat_bad "kid mismatch — status-keys entry claims '$(esc "${STATUS_LIST_KID}")', its bytes derive \
 '${STATUS_DERIVED_KID}'"
   fi
 fi
@@ -1478,7 +1606,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
        2>"$WORKDIR/status_err"; then
     ok "loaded as an ML-DSA-65 public key"
   else
-    stat_bad "OpenSSL rejected the reconstructed status public key: $(cat "$WORKDIR/status_err")"
+    stat_bad "OpenSSL rejected the reconstructed status public key: $(esc "$(cat "$WORKDIR/status_err")")"
   fi
 fi
 
@@ -1487,9 +1615,9 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if python3 -c "$CANON_STATUS_PY" "$WORKDIR/list.json" > "$WORKDIR/status_canon.bin" \
        2>"$WORKDIR/status_canon_err"; then
     SCANON_LEN="$(wc -c < "$WORKDIR/status_canon.bin" | tr -d ' ')"
-    ok "re-derived ${SCANON_LEN} canonical bytes from statusList (independent encoder, §6.4)"
+    ok "re-derived ${SCANON_LEN} canonical bytes from statusList (independent encoder)"
   else
-    stat_bad "encoding_failed — canonical encoder refused the document: $(cat "$WORKDIR/status_canon_err")"
+    stat_bad "encoding_failed — canonical encoder refused the document: $(esc "$(cat "$WORKDIR/status_canon_err")")"
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
@@ -1511,16 +1639,16 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$LIST_KID" = "$STATUS_LIST_KID" ]; then
     ok "claims.kid equals the JWS header kid (signed twice, deliberately)"
   else
-    stat_bad "kid_mismatch — statusList.kid ('${LIST_KID}') != JWS header kid ('${STATUS_LIST_KID}')"
+    stat_bad "kid_mismatch — statusList.kid ('$(esc "${LIST_KID}")') != JWS header kid ('$(esc "${STATUS_LIST_KID}")')"
   fi
 fi
 
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$EXPECT_ISSUER" ]; then
   LIST_ISS="$(jq -r '.iss' "$WORKDIR/list.json")"
   if [ "$LIST_ISS" = "$EXPECT_ISSUER" ]; then
-    ok "iss is '${LIST_ISS}', as expected"
+    ok "iss is '$(esc "${LIST_ISS}")', as expected"
   else
-    stat_bad "issuer_mismatch — iss is '${LIST_ISS}', expected '${EXPECT_ISSUER}'"
+    stat_bad "issuer_mismatch — iss is '$(esc "${LIST_ISS}")', expected '${EXPECT_ISSUER}'"
   fi
 fi
 
@@ -1531,8 +1659,8 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   SNEXTUPDATE="$(jq -r '.nextUpdate' "$WORKDIR/list.json")"
   SIAT="$(epoch_of "$SISSUEDAT")"
   SNUP="$(epoch_of "$SNEXTUPDATE")"
-  printf '        issuedAt:   %s\n' "$SISSUEDAT"
-  printf '        nextUpdate: %s\n' "$SNEXTUPDATE"
+  printf '        issuedAt:   %s\n' "$(esc "$SISSUEDAT")"
+  printf '        nextUpdate: %s\n' "$(esc "$SNEXTUPDATE")"
   if [ -z "$SIAT" ] || [ -z "$SNUP" ]; then
     stat_bad "malformed_document — could not parse issuedAt/nextUpdate as RFC 3339"
   else
@@ -1561,16 +1689,16 @@ fi
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$MIN_SEQ" ]; then
   SSEQ="$(jq -r '.seq' "$WORKDIR/list.json")"
   if [ "$SSEQ" -lt "$MIN_SEQ" ] 2>/dev/null; then
-    stat_bad "rolled_back — seq ${SSEQ} is lower than the highest previously accepted (${MIN_SEQ})"
+    stat_bad "rolled_back — seq $(esc "${SSEQ}") is lower than the highest previously accepted (${MIN_SEQ})"
   else
-    ok "seq ${SSEQ} >= previously accepted ${MIN_SEQ} — not a rollback"
+    ok "seq $(esc "${SSEQ}") >= previously accepted ${MIN_SEQ} — not a rollback"
   fi
 fi
 
 # --- Rule S: a list may not revoke its own signer ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
   if jq -e --arg kid "$LIST_KID" '.keys[]? | select(.kid==$kid)' "$WORKDIR/list.json" >/dev/null 2>&1; then
-    stat_bad "self_revocation — the list revokes its own signing key ('${LIST_KID}')"
+    stat_bad "self_revocation — the list revokes its own signing key ('$(esc "${LIST_KID}")')"
   else
     ok "the list does not name its own signing key among the revoked keys (Rule S)"
   fi
@@ -1580,13 +1708,13 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   STATUS_LIST_VALID=1
   printf '        %s revoked key(s), %s revoked subject(s), truncated=%s, seq=%s, iss=%s\n' \
     "$(jq '.keys | length' "$WORKDIR/list.json")" "$(jq '.subjects | length' "$WORKDIR/list.json")" \
-    "$(jq -r '.truncated' "$WORKDIR/list.json")" "$(jq -r '.seq' "$WORKDIR/list.json")" \
-    "$(jq -r '.iss' "$WORKDIR/list.json")"
+    "$(jq -r '.truncated' "$WORKDIR/list.json")" "$(esc "$(jq -r '.seq' "$WORKDIR/list.json")")" \
+    "$(esc "$(jq -r '.iss' "$WORKDIR/list.json")")"
   printf '\n%s%sthe status list itself verifies.%s\n' "$GREEN" "$BOLD" "$RESET"
 else
   printf '\n%s%sthe status list does NOT verify%s (%d check(s) failed) — its content is UNKNOWN,\n' \
     "$YELLOW" "$BOLD" "$RESET" "$STATUS_FAILURES"
-  printf 'not "not revoked". §6.1: any failure here yields unknown, never good, never revoked.%s\n' "$RESET"
+  printf 'not "not revoked". Any failure here yields unknown, never good, never revoked.%s\n' "$RESET"
 fi
 
 fi # STATUS_LIST_MODE — section 8
@@ -1634,7 +1762,7 @@ else
     { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$EFFECTIVE_SLUG"; } \
       | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
     SUBJECT_HASH="$(b64url_encode "$WORKDIR/subject_hash.bin")"
-    printf '        subjectHash(%s) = %s\n' "$EFFECTIVE_SLUG" "$SUBJECT_HASH"
+    printf '        subjectHash(%s) = %s\n' "$(esc "$EFFECTIVE_SLUG")" "$SUBJECT_HASH"
 
     SUBJ_ENTRY="$(jq -c --arg h "$SUBJECT_HASH" \
       '.subjects[]? | select(.subjectHash==$h)' "$WORKDIR/list.json" | head -1)"
@@ -1643,8 +1771,8 @@ else
       SUBJ_REASON="$(printf '%s' "$SUBJ_ENTRY" | jq -r '.reason')"
       if [ -z "$EFFECTIVE_GENAT" ]; then
         REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
-        warn "subject '${EFFECTIVE_SLUG}' IS listed, but no generatedAt was given \
-(--check-generated-at, or --attestation/--claims) to compare against notBefore='${SUBJ_NOTBEFORE}' \
+        warn "subject '$(esc "${EFFECTIVE_SLUG}")' IS listed, but no generatedAt was given \
+(--check-generated-at, or --attestation/--claims) to compare against notBefore='$(esc "${SUBJ_NOTBEFORE}")' \
 — cannot \
 decide, so UNKNOWN, never 'good'"
       else
@@ -1673,12 +1801,12 @@ fi
 case "$REVOCATION_STATUS" in
   good)
     printf '\n%s%sGOOD%s' "$GREEN" "$BOLD" "$RESET"
-    [ -n "$EFFECTIVE_KID" ]  && printf ' — kid %s is not revoked' "$EFFECTIVE_KID"
-    [ -n "$EFFECTIVE_SLUG" ] && printf ', subject %s carries no earlier withdrawal' "$EFFECTIVE_SLUG"
-    printf ' (list seq %s).\n' "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')"
+    [ -n "$(esc "$EFFECTIVE_KID")" ]  && printf ' — kid %s is not revoked' "$(esc "$EFFECTIVE_KID")"
+    [ -n "$(esc "$EFFECTIVE_SLUG")" ] && printf ', subject %s carries no earlier withdrawal' "$(esc "$EFFECTIVE_SLUG")"
+    printf ' (list seq %s).\n' "$(esc "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')")"
     ;;
   revoked)
-    printf '\n%s%sREVOKED%s — via %s, reason "%s".\n' "$RED" "$BOLD" "$RESET" "$REVOCATION_VIA" "$REVOCATION_REASON"
+    printf '\n%s%sREVOKED%s — via %s, reason "%s".\n' "$RED" "$BOLD" "$RESET" "$REVOCATION_VIA" "$(esc "$REVOCATION_REASON")"
     ;;
   unknown)
     printf '\n%s%sUNKNOWN%s (%s). Neither good nor revoked — do not treat this as "not revoked".\n' \
@@ -1687,6 +1815,33 @@ case "$REVOCATION_STATUS" in
 esac
 
 fi # STATUS_LIST_MODE — section 9
+
+# --- Attested content --------------------------------------------------------
+# What the document SAYS is shown only once the whole run has established it:
+# every posture check held and, in --status-list mode, the list also says GOOD.
+# A document that is tampered, expired, revoked or of unknown status shows none
+# of it, so nothing unproven sits on the screen beside a PASS. Section 7 above
+# prints only the envelope fields the checks compare (docVersion, iss, kid, jti,
+# nonce); the posture and its bands are printed here, last, or not at all.
+if [ -n "$JWS_FILE" ]; then
+  if [ "$FAILURES" -eq 0 ] && { [ "$STATUS_LIST_MODE" -eq 0 ] || [ "${REVOCATION_STATUS:-}" = good ]; }; then
+    if [ -n "$CLAIMS_FILE" ]; then
+      printf '\n%sAttested content%s (covered by the signature, and the document verified)\n' "$BOLD" "$RESET"
+      # A display failure must never change the verdict.
+      python3 -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
+      if [ "$SHOW_RAW" -eq 1 ]; then
+        printf '\n        posture (E7, the frozen v1 bytes):\n'
+        if command -v jq >/dev/null 2>&1; then
+          jq . < "$POSTURE_FILE" | sed 's/^/        /'
+        else
+          sed 's/^/        /' "$POSTURE_FILE"
+        fi
+      fi
+    fi
+  else
+    printf '\n%s\n' "$CONTENT_WITHHELD"
+  fi
+fi
 
 # --- Verdict -----------------------------------------------------------------
 printf '\n'
@@ -1700,10 +1855,10 @@ stale_only() {
 stale_verdict() {
   if [ "$STALE_EXPIRED" -eq 1 ]; then
     printf '%s%sEXPIRED%s — the signature is valid, but this attestation expired on %s.\n' \
-      "$RED" "$BOLD" "$RESET" "${EXPIRES:-}" >&2
+      "$RED" "$BOLD" "$RESET" "$(esc "${EXPIRES:-}")" >&2
   else
     printf '%s%sEXPIRED%s — the signature is valid, but this attestation was generated on %s,\n' \
-      "$RED" "$BOLD" "$RESET" "${GENERATED:-}" >&2
+      "$RED" "$BOLD" "$RESET" "$(esc "${GENERATED:-}")" >&2
     printf 'more than the %ss you allow (--max-age-seconds) ago.\n' "$MAX_AGE_SECONDS" >&2
   fi
   printf 'It was not altered, but it no longer says anything about the organisation now:\n' >&2
@@ -1713,7 +1868,7 @@ stale_verdict() {
   # shape of an origin and a slug, so nothing odd is ever printed as a command.
   if [[ "${CLAIMS_ISS:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
      && [[ "${SLUG:-}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-    printf '\n  curl -fsS %s/api/public/attest/%s -o att.json\n' "$CLAIMS_ISS" "$SLUG" >&2
+    printf '\n  curl -fsS %s/api/public/attest/%s -o att.json\n' "$(esc "$CLAIMS_ISS")" "$(esc "$SLUG")" >&2
   fi
   printf '\n' >&2
   exit 1
@@ -1743,15 +1898,16 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
       exit 0
       ;;
     revoked)
-      printf '%s%sREVOKED%s — reason "%s". Do not rely on this document.\n\n' "$RED" "$BOLD" "$RESET" "$REVOCATION_REASON" >&2
+      printf '%s%sREVOKED%s — reason "%s". Do not rely on this document.\n\n' "$RED" "$BOLD" "$RESET" "$(esc "$REVOCATION_REASON")" >&2
       exit 1
       ;;
     *)
-      printf '%s%sUNKNOWN%s (%s) — neither good nor revoked. A list you could not fetch or could\n' \
+      printf '%s%sUNKNOWN%s (%s) — neither good nor revoked. A status list that was obtained but does\n' \
         "$YELLOW" "$BOLD" "$RESET" "${REVOCATION_UNKNOWN_BECAUSE:-unverified}" >&2
-      printf 'not verify has NOT told you the subject is fine; treat this exactly as you would\n' >&2
-      printf 'treat an unreachable revocation authority. §4.5 of the design doc explains why this\n' >&2
-      printf 'is a distinct outcome from both "good" and "revoked", not a synonym for either.\n\n' >&2
+      printf 'not verify, or that cannot settle this subject, has NOT told you the subject is fine; treat\n' >&2
+      printf 'this exactly as you would treat an unreachable revocation authority. docs/security/attest-verification.md\n' >&2
+      printf '§7.1, "Unknown is not good", explains why this is a distinct outcome from both\n' >&2
+      printf '"good" and "revoked", not a synonym for either.\n\n' >&2
       exit 3
       ;;
   esac
