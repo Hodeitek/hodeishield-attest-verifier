@@ -152,8 +152,9 @@ Posture mode (the default, as above):
 | **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key, a key set whose `hs_retired_at` is malformed. This is *not* a statement about the document — do not read it as failure. |
 
 A document generated at or after the retirement of the key that signed it also
-exits 1, with a `FAIL` line starting `retired_key`: the key set marks a retired
-key with `hs_retired_at` (see [Current signing keys](docs/security/keys.md)).
+exits 1, with a `FAIL` line starting `retired_key`: by policy, a retired key stays
+published and is marked with `hs_retired_at` in its key set (see
+[Current signing keys](docs/security/keys.md)).
 The signature may be genuine, but the document is not one to rely on, and a
 fresh copy signed by the same key would fail the same way. Its last line is
 `VERIFICATION FAILED`, not `EXPIRED`.

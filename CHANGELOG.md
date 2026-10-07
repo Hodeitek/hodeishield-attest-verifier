@@ -56,9 +56,17 @@ release.
   a list that was obtained but does not verify, or cannot settle the subject.
 
 ### Changed
+- A key set that is not an array of objects under `keys`, or that has two keys
+  with the same `kid`, is invalid: exit 2 for `--jwks`, unknown (exit 3) for
+  `--status-keys`. Before, the first entry won, so a retirement marker could be
+  dodged by ordering, and a status key set with `keys` as an object or with a
+  non-object entry was read inconsistently (or made `jq` exit 5).
+- `--pub-b64url` together with `--jwks` is a usage error (exit 2). Before, the
+  key set was silently ignored and the run could exit 0 on a path that did not
+  exist.
 - The unknown-kid message no longer says a retired key leaves the published key
-  set at the end of its overlap; a retired key stays published, marked with
-  `hs_retired_at`.
+  set at the end of its overlap; by policy, a retired key stays published and is
+  marked with `hs_retired_at`.
 - Verification document §7: a retired key stays in the published key set, marked
   as retired, instead of leaving it at the end of its overlap. A document signed
   by a retired key is acceptable only if its `generatedAt` is before the

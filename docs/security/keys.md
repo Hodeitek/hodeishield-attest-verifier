@@ -57,19 +57,24 @@ Both roles follow the same policy:
   (§7 and §7.1 of the verification document).
 
 A document signed by a retired key is acceptable only if its `generatedAt` is
-before the retirement time. In practice no such document passes at the current
-time: the verifier enforces a validity ceiling of one hour (`expiresAt` minus
-`generatedAt`), so a document backdated to before the retirement has already
-expired, and a current one is dated after it. Retirement is not a response to
-compromise, so with `--now` set to a past instant a backdated document is judged
-as of that instant.
+before the retirement time. For an attestation, no such document passes at the
+current time: the verifier enforces a validity ceiling of one hour (`expiresAt`
+minus `generatedAt`), so a document backdated to before the retirement has
+already expired, and a current one is dated after it. A status list is
+different: its validity (`nextUpdate` minus `issuedAt`) can be up to 24 hours,
+plus a 300 second clock allowance, so a list signed by a retired status key and
+issued just before the retirement can still be accepted for that long after it.
+Retirement is not a response to compromise: a compromised key goes through
+revocation (above), not retirement. With `--now` set to a past instant a
+backdated document is judged as of that instant.
 
 As policy, the key set marks a retired key with the member `hs_retired_at`, an
 RFC 3339 UTC time with seconds (`YYYY-MM-DDTHH:MM:SSZ`). Verifier v1.3.0 and later reject a
 document whose `generatedAt` is at or after it (exit 1, `retired_key`), and a
 status list issued at or after the retirement of its key is unknown (exit 3).
 A `hs_retired_at` in any other form makes the key set invalid (exit 2 for the
-attestation key set, unknown for the status-list key set). Earlier versions
+attestation key set, unknown for the status-list key set), and so does a key set
+whose `keys` is not an array of objects or that lists the same `kid` twice. Earlier versions
 ignore the member, so with them check yourself that a document signed by a
 retired key has a `generatedAt` before the retirement time in the table above.
 

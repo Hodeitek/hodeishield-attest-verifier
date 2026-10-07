@@ -1323,9 +1323,12 @@ compared exactly, milliseconds included), and a status list issued at or after
 the retirement of its own key is unknown (exit 3). Earlier versions ignore the
 member, so with them check that a document signed by a retired key has a
 `generatedAt` before the retirement time listed in [`keys.md`](keys.md). The
-one-hour validity ceiling means a document from a retired key cannot pass at the
-current time: a backdated one has already expired, and a current one is dated
-after the retirement. With `--now` set to a past instant, a backdated document
+one-hour validity ceiling means an attestation from a retired key cannot pass at
+the current time: a backdated one has already expired, and a current one is dated
+after the retirement. A status list can be valid for up to 24 hours plus a 300
+second allowance, so one signed by a retired status key and issued just before
+the retirement can still be accepted for that long; a compromise goes through
+revocation, not retirement. With `--now` set to a past instant, a backdated document
 is judged as of that instant.
 
 The key document lists the ACTIVE signing key first, then every retired key,
