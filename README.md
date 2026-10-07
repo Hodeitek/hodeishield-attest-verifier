@@ -68,7 +68,7 @@ says what the tool cannot tell you.
 | | |
 |---|---|
 | `bash` ≥ 4 | This is bash, not POSIX `sh`. |
-| **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier says so and exits 2. |
+| **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier checks this itself, says so and exits 2. If you cannot upgrade, use the [container route](#run-it-without-installing-anything). |
 | **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
 | `jq` | Only for `--status-list` (revocation checking). |
@@ -143,7 +143,7 @@ Posture mode (the default, as above):
 |---|---|
 | **0** | Verified. The signature holds and every requested check passed. |
 | **1** | **Check failed.** Something did not hold. Do not rely on the document. |
-| **2** | **Could not check.** Missing tool, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
+| **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
 
 A genuine document that is only out of date also exits 1: it is not one to rely
 on. Its last line tells it apart from a tampered or invalid one. It starts with
@@ -304,8 +304,9 @@ the reason it is a short, single, readable script.
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled
   signature check cannot pass the suite. `tests/run.sh` runs it too.
-- A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
-  ("could not check"), never 1.
+- Two jobs check that the verifier exits 2 ("could not check"), never 1, when
+  its `openssl` cannot do ML-DSA: one with an OpenSSL older than 3.5, one with
+  real LibreSSL in a digest-pinned Alpine image.
 - `bash tests/container.sh` extracts both container commands from this README
   and runs them as written (live example, plus offline rejection and revocation
   cases); the "Container route" workflow does so with Docker and Podman.
