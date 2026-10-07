@@ -7,9 +7,53 @@ messages are written in English. A commit subject is lowercase, uses a
 conventional type (`fix:`, `feat:`, `docs:`…) and names the defect or gap
 it addresses rather than the change.
 
+## Design
+
+A reference for designing or refactoring part of the verifier. Words used
+the same way throughout:
+
+- **Module**: anything with an interface and an implementation, at any scale
+  (a shell function, the script, a test helper).
+- **Interface**: everything a caller must know to use it: arguments,
+  invariants, exit codes and errors, ordering.
+- **Depth**: behaviour per unit of interface. Deep is much behaviour behind a
+  small interface; shallow is an interface nearly as complex as the code.
+- **Seam**: a place where behaviour can change without editing that place.
+- **Adapter**: a concrete implementation plugged into a seam.
+- **Locality**: what changes together lives together. A change should touch
+  one module, not five.
+
+Principles:
+
+- Depth lives in the interface. Judge a module by how little a caller must learn.
+- Deletion test: imagine inlining the module into its callers. If the
+  complexity vanishes it was a pass-through; if it spreads to every caller it
+  earns its place.
+- The interface is the test surface. Test through it; a test that reaches past
+  it pins the implementation.
+- One adapter is a hypothetical seam, two make it real. No abstraction for a
+  single implementation "for later", unless a test double or a second real
+  backend exists today.
+
+For this repository the public interface is the command line: arguments,
+stdout and stderr messages, and exit codes (0 verified, 1 check failed,
+2 could not check, 3 unknown in `--status-list` mode). Tests and the published
+vectors in `tests/vectors/v1/` exercise that, not internal functions. A
+refactor that keeps the interface must keep every vector passing unchanged.
+
+Locality: a verification rule (the check, its message and its exit code) lives
+in one place in the script, and its test case sits beside the others for that
+rule. A new rule should not need edits scattered across the script.
+
+Adapted from [aihero.dev /codebase-design](https://www.aihero.dev/skills-codebase-design).
+
 ## Commits
 
 - Commits must be signed.
+- A commit that fixes an issue says `Closes #N` in the commit message itself,
+  not only in the pull request body. GitHub closes the issue when the commit
+  reaches `main`; a merge into `dev` closes nothing. Use `Refs #N` for a commit
+  that only contributes to an issue.
 - Commit messages must not mention Claude or carry any AI-assistant
   attribution: no `Claude-Session:` or `Co-Authored-By: Claude` trailers, no
   claude.ai links. The same goes for pull request titles and bodies.
@@ -40,6 +84,27 @@ The `DCO` workflow checks this on commits of pull requests opened from forks.
   a fork each carry a `Signed-off-by` trailer matching their author. Commits
   published before the workflow was adopted (up to its `CUTOFF` commit) are not
   checked.
+
+## Issues
+
+No issue stays open once the code that fixes it is on `main`.
+
+- **After every promotion to `main`** (and every release), every open issue is
+  reviewed against what is now on `main`:
+  - **Fixed:** closed, with a comment citing the commit or pull request and the
+    file, line or test that shows it.
+  - **Partly fixed:** a comment says what is done and what remains, and it
+    stays open.
+  - **Still valid:** left as it is.
+  - **Obsolete** (superseded, duplicate, out of scope): closed with the reason
+    and a link.
+- **After a merge into `dev`:** the issues the pull request mentions (`Refs #N`,
+  its body, its branch name) are checked. They are closed only if the fix is
+  complete; otherwise a comment records the status.
+- A security issue is closed only with evidence that it is fixed or not
+  exploitable.
+- Closing comments are in English and, like everything in this public
+  repository, cite only public material.
 
 ## Dependencies
 

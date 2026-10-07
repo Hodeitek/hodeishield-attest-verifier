@@ -1,0 +1,69 @@
+name: The verifier cannot run or cannot check
+description: Exit code 2, missing or old tooling, or a problem with the container route.
+title: "usage: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when the verifier **cannot run or cannot check**: it exits 2, a tool is missing or too old, or the container route fails.
+
+        **Do not file these here.** Report them privately through [GitHub private vulnerability reporting](https://github.com/Hodeitek/hodeishield-attest-verifier/security/advisories/new) or to security@hodeitek.com:
+        - a suspected vulnerability in the verifier;
+        - a `VERIFIED` result you believe is wrong;
+        - a discrepancy between a document and what you can independently establish.
+
+        **Do not paste confidential data.** This issue is public. Remove anything you would not publish before pasting output or files.
+  - type: input
+    id: version
+    attributes:
+      label: Verifier version or commit
+      description: A release tag, or the commit you cloned, or the sha256 of the script.
+      placeholder: v1.2.1
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04, macOS 15, Windows 11 with WSL, ...
+    validations:
+      required: true
+  - type: input
+    id: openssl
+    attributes:
+      label: Output of `openssl version`
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Output of `python3 --version`
+    validations:
+      required: true
+  - type: input
+    id: jq
+    attributes:
+      label: Output of `jq --version`
+      description: Only if you use `--status-list`.
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command
+      description: As you ran it, including the container command if you used the container route.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: exit-code
+    attributes:
+      label: Exit code
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Full output
+      description: All of it, not a part.
+      render: text
+    validations:
+      required: true

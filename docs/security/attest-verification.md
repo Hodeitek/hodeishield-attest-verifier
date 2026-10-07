@@ -73,7 +73,7 @@ transport path is stated here rather than left for you to discover.
 
 | Requirement       | Why                                                                                                                                                                |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **OpenSSL ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Older builds cannot parse these artefacts at all — a failure there is a tooling limit, not evidence against the artefact. |
+| **OpenSSL ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Older builds cannot parse these artefacts at all, and LibreSSL (the `openssl` on macOS) has no ML-DSA whatever its version number. Before anything else the verifier checks that its `openssl` is OpenSSL, is 3.5 or later and lists ML-DSA-65 in `openssl list -signature-algorithms`; otherwise it stops with exit 2, "not ML-DSA capable". A failure there is a tooling limit, not evidence against the artefact. |
 | **`bash` ≥ 4**   | `verify-attestation.sh` is bash, not POSIX `sh`. No Node, no npm, no HodeiShield code.                                                                             |
 | **`python3`**     | Needed on the path the endpoint actually serves. `GET /api/public/attest/<slug>` returns a **detached** JWS, so the canonical bytes have to be re-derived from the JSON you can read — which is the point, and which needs a JSON parser and the encoder of §4.5. Standard library only. |
 | **`jq`**          | Required by the script only for `--status-list` (§7.1). The §4.6 by-hand path uses it throughout, so that path needs **OpenSSL, `python3` and `jq`**, plus `xxd` or `python3` to turn one hex constant into bytes. It does not work with OpenSSL alone. |
@@ -94,9 +94,11 @@ Without `python3` the verifier stops at step [0] with `exit 2` and the message
 bytes.` — exit **2** is "could not check", never "check failed"; see the exit
 codes in the repository README.
 
-If the second command prints nothing, stop and upgrade OpenSSL. Debian/Ubuntu
-ship 3.5+ from trixie/24.10 onward; on macOS, `brew install openssl@3` and put
-its `bin` ahead of the system LibreSSL.
+If the second command does not list ML-DSA-65, stop and upgrade OpenSSL.
+Debian/Ubuntu ship 3.5+ from trixie/24.10 onward; on macOS, `brew install
+openssl@3` and put its `bin` ahead of the system LibreSSL. If you cannot
+install it, the repository README's container route runs the same script in a
+digest-pinned Debian 13 image and needs only Docker or Podman on your machine.
 
 ---
 
@@ -916,6 +918,16 @@ does not make a document current.
 | `slug`          | Binds the attestation to one trust center. Check it against the organisation you think you are evaluating. `--expect-slug` does this for you.                                                                                                                       |
 | `visibility`    | `gated` postures are redacted by design — see §6.                                                                                                                                                                                                                   |
 
+A genuine document that fails only on age or expiry still exits 1 in the
+reference verifier: it is not one to rely on. Its last line tells it apart from
+a forged or altered one: `EXPIRED — the signature is valid, but this
+attestation expired on <expiresAt>.` (or `… was generated on <generatedAt>,
+more than the <N>s you allow (--max-age-seconds) ago.`), followed by the `curl`
+command that fetches a fresh copy. Every other failure ends with
+`VERIFICATION FAILED — … Do not rely on this document.` The `EXPIRED` line
+appears only when the signature verified and age or expiry was the only
+failure.
+
 #### The nonce — how to collapse the replay window to a single exchange
 
 `expiresAt` alone leaves a window. Inside it, a genuine attestation can be
@@ -1093,8 +1105,8 @@ artefacts, not your tools.
 ### 5.1 One bridge, not two implementations
 
 We sign in TypeScript with [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum)
-pinned to exactly `0.7.0` (verified against `app/package.json` on 2026-08-20;
-earlier editions of this document said `0.6.1`, which is stale). Our Rust
+pinned to exactly `0.7.1` (verified against `app/package.json` on 2026-10-07;
+earlier editions of this document said `0.6.1` and then `0.7.0`, both stale). Our Rust
 endpoint agent signs with RustCrypto `ml-dsa`. Deliberately the same algorithm and the same byte contract, so
 there is one cryptographic bridge to audit rather than two that might diverge.
 
@@ -1184,7 +1196,9 @@ This section matters more than the commands.
    binding. There is no out-of-band root of trust for the attestation key —
    no CA, no transparency log, no DNSSEC-anchored record. **Pin the key
    fingerprint on first use** and treat an unannounced change as an incident
-   (§7). This is a real limitation and we are not going to dress it up.
+   (§7). The fingerprint is the key's `kid`, derived from the public key bytes
+   (§4.2); the verifier recomputes it and prints it, and a JWKS whose `kid`
+   does not match its key is rejected. This is a real limitation and we are not going to dress it up.
 3. **Anything about the certification bodies.** A `band: advanced` for ISO 27001
    is _our_ computed maturity band, not a certificate issued by an accredited
    certification body. If you need the certification itself, ask for the
@@ -1541,7 +1555,7 @@ fingerprint rather than re-trust the fetch each time.
 | JWK type            | `"AKP"`, `pub` = base64url(1952-byte key)        | RFC 9964. COSE equivalent is algorithm `-49`.                                                                                                      |
 | Context string      | Always empty                                     | Mandated by RFC 9964; also the only thing the Rust `Signer` supports. A non-empty context would produce signatures our own agent could not verify. |
 | Private key at rest | 32-byte KeyGen seed                              | Mirrors the Rust side; the 4032-byte expanded key is never the storage or wire form.                                                               |
-| TS library          | `@noble/post-quantum`, pinned to exactly `0.7.0` | Pure TypeScript — no native addon, no WASM, no C or assembly in the trust path. Mirrors the agent's RustCrypto choice so there is one bridge.      |
+| TS library          | `@noble/post-quantum`, pinned to exactly `0.7.1` | Pure TypeScript — no native addon, no WASM, no C or assembly in the trust path. Mirrors the agent's RustCrypto choice so there is one bridge.      |
 | Rust library        | RustCrypto `ml-dsa` (pre-1.0)                    | Pure Rust, no `unsafe` FFI. `fips204` and `pqcrypto-*` were rejected as stale and as C/asm respectively.                                           |
 
 ### Known weakness, stated because you would find it anyway
@@ -1610,7 +1624,7 @@ complete list of what differs from the internal edition:
 | 2 | **§6 item 8** — the names of the secret store, namespace, environment variable, the enumerated access paths, and the file paths of the compensating controls | An exact target list. The risk statement, the "who can read it", the residual-risk paragraph and the "does not meet that bar today" conclusion are all kept. |
 | 3 | **§1 table cell** — where the private half lives | Same reason as #2. |
 | 4 | **Links to internal operator documents** (`k8s/**`, `docs/operations/**`, `docs/architecture/specs/**`) | Dead links for you; infrastructure layout for someone else. Named in prose above as provenance instead. |
-| 5 | **Corrected, not removed:** the library pin (`0.6.1` → `0.7.0`), the claim that no Python is needed, and a stale "no revocation status list" clause | These were wrong or out of date in the internal edition. They are fixed here and the fixes are flagged in place. |
+| 5 | **Corrected, not removed:** the library pin (`0.6.1` / `0.7.0` → `0.7.1`), the claim that no Python is needed, and a stale "no revocation status list" clause | These were wrong or out of date in the internal edition. They are fixed here and the fixes are flagged in place. |
 
 Nothing in the "does not prove" list was removed, shortened or reworded to read
 better. If you find a claim in this edition that the internal edition states

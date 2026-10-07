@@ -12,6 +12,9 @@ attestations, published by [Hodeitek](https://hodeitek.com), so that you do
 **not** have to take our word for one. No credentials, account or cooperation
 needed.
 
+Step-by-step guides: [Spanish](https://docs.hodeishield.com/integrations/attest-verifier/),
+[English](https://docs.hodeishield.com/en/integrations/attest-verifier/).
+
 ## The short version
 
 What an organisation shares with you is a **URL**, not a file:
@@ -63,12 +66,15 @@ organisation you think. It is a verifier you can read and run yourself, and the 
 here explains exactly what a `VERIFIED` result does and does not mean; §6 of it
 says what the tool cannot tell you.
 
+HodeiShield issues these attestations. An organisation that wants to publish its
+own starts at [hodeishield.com](https://hodeishield.com).
+
 ## What you need installed
 
 | | |
 |---|---|
 | `bash` ≥ 4 | This is bash, not POSIX `sh`. |
-| **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier says so and exits 2. |
+| **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier checks this itself, says so and exits 2. If you cannot upgrade, use the [container route](#run-it-without-installing-anything). |
 | **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
 | `jq` | Only for `--status-list` (revocation checking). |
@@ -143,7 +149,7 @@ Posture mode (the default, as above):
 |---|---|
 | **0** | Verified. The signature holds and every requested check passed. |
 | **1** | **Check failed.** Something did not hold. Do not rely on the document. |
-| **2** | **Could not check.** Missing tool, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
+| **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
 
 A genuine document that is only out of date also exits 1: it is not one to rely
 on. Its last line tells it apart from a tampered or invalid one. It starts with
@@ -239,9 +245,25 @@ the signature is post-quantum (ML-DSA-65, FIPS 204).
 *our* scoring of evidence supplied by the organisation — a signed document
 containing a wrong claim is a signed wrong claim. It does not prove the key
 belongs to Hodeitek (you are trusting the Web PKI for that one binding — pin the
-fingerprint). It does not prove anything about accredited certification bodies.
+key's `kid`, see [Pinning the key](#pinning-the-key)). It does not prove anything about accredited certification bodies.
 And §6 item 8 states, without softening, that the signing key is held in
 software rather than in an HSM, and what that means for you.
+
+### Pinning the key
+
+The fingerprint to pin is the key's `kid`. It is derived from the public key
+bytes: `BASE64URL(SHA-256("hodei-shield.attest.kid.v1" || pub)[0..16])`, see
+[§4.2 of the verification document](docs/security/attest-verification.md#42-the-kid-is-checked-not-trusted).
+The verifier recomputes it from the key bytes, prints it on the `kid:` line, and
+rejects a JWKS whose `kid` does not match its key. To compute it yourself from
+a downloaded `jwks.json`, one value per key:
+
+```bash
+python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
+```
+
+Compare the output with the `kid` you pinned. This repository does not yet
+publish the current values.
 
 ## Where this comes from, and what is redacted
 
@@ -285,7 +307,8 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   SHA256SUMS
 ```
 
-Replace `<TAG>` with the release tag. This proves that the file was built from
+Replace `<TAG>` with the release tag. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md). This proves that the file was built from
 that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
 the reason it is a short, single, readable script.
@@ -304,8 +327,9 @@ the reason it is a short, single, readable script.
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled
   signature check cannot pass the suite. `tests/run.sh` runs it too.
-- A job checks that, with an OpenSSL too old for ML-DSA, the verifier exits 2
-  ("could not check"), never 1.
+- Two jobs check that the verifier exits 2 ("could not check"), never 1, when
+  its `openssl` cannot do ML-DSA: one with an OpenSSL older than 3.5, one with
+  real LibreSSL in a digest-pinned Alpine image.
 - `bash tests/container.sh` extracts both container commands from this README
   and runs them as written (live example, plus offline rejection and revocation
   cases); the "Container route" workflow does so with Docker and Podman.
@@ -316,6 +340,11 @@ the reason it is a short, single, readable script.
   failure.
 
 ## Reporting a problem
+
+If the verifier cannot run or cannot check (exit 2, missing or old tooling, a
+container route problem), open a public issue with the
+[usage problem template](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/new?template=usage-problem.yml).
+Do not paste confidential data.
 
 If any check here fails, or if you find a discrepancy between what a document
 claims and what you can independently establish:
