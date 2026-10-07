@@ -1384,7 +1384,8 @@ if [ -n "$POSTURE_FILE" ]; then
 else
   warn "no claims JSON: freshness cannot be checked from opaque canonical bytes"
   if [ -n "$RETIRED_AT" ]; then
-    warn "key $(esc "$KID") is retired (at $(esc "$RETIRED_AT")) and there is no generatedAt to compare with it"
+    # Fail closed: retirement is only satisfied by showing the document predates it.
+    bad "retired_key — key $(esc "$KID") is retired (at $(esc "$RETIRED_AT")) and without the claims JSON there is no generatedAt to show this document predates the retirement; supply the claims JSON"
   fi
 fi
 

@@ -648,6 +648,15 @@ mint_attest --out "$T/ret-offset.json" --generated-at '2026-07-31T20:53:57.999+0
 expect 0 'before the retirement' 'an offset form of 18:53:57.999Z is compared as an instant' -- \
   --attestation "$T/ret-offset.json" "${RET_COMMON[@]}"
 
+# No claims JSON to read generatedAt from (an attached JWS whose payload is not
+# an envelope): a retired key cannot be shown to predate its retirement, so the
+# run fails closed (1) with retired_key, besides the failures it already has.
+IFS=. read -r UH _ US < <(jq -r '.attestation.signature' "$T/ret-before.json")
+printf '%s.AAAA.%s\n' "$UH" "$US" > "$T/ret-undecodable.jws"
+set_retired '"2026-07-31T18:53:58Z"'
+expect 1 "retired_key — key $ISSUER_KID is retired (at $RET_AT_S) and without the claims JSON there is no generatedAt" \
+  'a retired key with no claims JSON to compare fails closed' -- --jws "$T/ret-undecodable.jws" "${RET_COMMON[@]}"
+
 # The grammar: anything but YYYY-MM-DDTHH:MM:SSZ is a malformed key set (2).
 for bad_val in '"2026-07-31T18:53:58.000Z"' '"2026-07-31T18:53:58+00:00"' '"2026-07-31t18:53:58Z"' \
                '"2026-07-31T18:53:58z"' '"2026-07-31T18:53:58"' '"2026-07-31"' '""' '1785524038' 'null' 'true' \
