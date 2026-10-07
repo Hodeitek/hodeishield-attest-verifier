@@ -295,8 +295,9 @@ a downloaded `jwks.json`, one value per key:
 python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
 ```
 
-Compare the output with the `kid` you pinned. This repository does not yet
-publish the current values.
+Compare the output with the `kid` you pinned. The current values are listed in
+[docs/security/keys.md](docs/security/keys.md); the current attestation key is
+`roeFReafBOA_WF3cqfilHA`.
 
 Let the verifier do the comparison with `--expect-kid`:
 

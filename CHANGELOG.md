@@ -26,6 +26,11 @@ release.
   (the exit code was not affected). This affected every release from v1.0.0 to
   v1.2.1.
 
+### Added
+- `docs/security/keys.md`: the versioned list of the current signing keys (the
+  attestation key and the status-list key), how to check them yourself, and the
+  rotation policy. The README "Pinning the key" section points to it.
+
 ### Fixed
 - A verified document with a non-ASCII framework label no longer ends in an
   error when Python's stdout is not UTF-8 (`PYTHONIOENCODING=ascii`); a display
@@ -37,6 +42,11 @@ release.
   a list that was obtained but does not verify, or cannot settle the subject.
 
 ### Changed
+- Verification document §7: a retired key stays in the published key set, marked
+  as retired, instead of leaving it at the end of its overlap. A document signed
+  by a retired key is acceptable only if its `generatedAt` is before the
+  retirement time, and a compromise is handled by status-list revocation, not by
+  retirement. §6 item 2 points to `docs/security/keys.md`.
 - **Output change.** The overall band, the frameworks and the other claims about
   the organisation are no longer printed before the checks have finished. They
   appear in an "Attested content" block just before the verdict, and only when
