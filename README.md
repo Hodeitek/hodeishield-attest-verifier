@@ -284,8 +284,9 @@ publish the current values.
   **provenance** — they say where a constant or a rule came from. They are not
   steps you are expected to follow. The same holds for references to
   `docs/architecture/specs/…` (the revocation design document) in the script's
-  comments and in some of its messages: that document is not public. §7 of the
-  public document covers what a verifier needs.
+  comments: that document is not public, and nothing the script prints points to
+  it. Where a message sends you to a document, it is §7 or §7.1 of the public
+  one, which covers what a verifier needs.
 
 ## Verifying a release
 

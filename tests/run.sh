@@ -444,6 +444,24 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --attestation "$T/decoy-revoked.json" "${COMMON[@]}"
 
+# Nothing the verifier prints may send the reader to a document that is not
+# public (#34). Every run above left its stdout and stderr in $T/out.N, the
+# --status-list runs that end UNKNOWN among them.
+expect 3 'attest-verification.md' 'an UNKNOWN verdict points to the public verification document' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json"
+expect 3 '"Unknown is not good"' 'an UNKNOWN verdict cites the public paragraph that explains it' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json"
+mapfile -t leaks < <(grep -lE 'docs/architecture|design doc' "$T"/out.* 2>/dev/null || true)
+runs=("$T"/out.*)
+if [ "${#leaks[@]}" -eq 0 ]; then
+  printf 'ok - no run printed a reference to a non-public design document (%d runs)\n' "${#runs[@]}"
+  PASSED=$((PASSED + 1))
+else
+  printf 'not ok - output refers to a non-public design document:\n'
+  grep -nE 'docs/architecture|design doc' "${leaks[@]}" | sed 's/^/    # /'
+  FAILED=$((FAILED + 1))
+fi
+
 echo
 printf '# %d passed, %d failed\n' "$PASSED" "$FAILED"
 

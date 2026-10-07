@@ -1317,7 +1317,7 @@ fi # [ -n "$JWS_FILE" ] — end of posture-attestation sections 1-7
 if [ "$STATUS_LIST_MODE" -eq 1 ]; then
 
 printf '\n%s[8] Status list — hodei-shield.attest.statuslist.v1%s\n' "$BOLD" "$RESET"
-printf '        (design doc §6.1: docs/architecture/specs/2026-07-30-attest-revocation-design.md)\n'
+printf '        (how to check revocation yourself: docs/security/attest-verification.md §7.1)\n'
 
 STATUS_JWS=''; SH=''; SP=''; SS=''
 STATUS_DOC_VERSION=''; STATUS_LIST_KID=''; SALG=''; STYP=''
@@ -1487,7 +1487,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if python3 -c "$CANON_STATUS_PY" "$WORKDIR/list.json" > "$WORKDIR/status_canon.bin" \
        2>"$WORKDIR/status_canon_err"; then
     SCANON_LEN="$(wc -c < "$WORKDIR/status_canon.bin" | tr -d ' ')"
-    ok "re-derived ${SCANON_LEN} canonical bytes from statusList (independent encoder, §6.4)"
+    ok "re-derived ${SCANON_LEN} canonical bytes from statusList (independent encoder)"
   else
     stat_bad "encoding_failed — canonical encoder refused the document: $(cat "$WORKDIR/status_canon_err")"
   fi
@@ -1586,7 +1586,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
 else
   printf '\n%s%sthe status list does NOT verify%s (%d check(s) failed) — its content is UNKNOWN,\n' \
     "$YELLOW" "$BOLD" "$RESET" "$STATUS_FAILURES"
-  printf 'not "not revoked". §6.1: any failure here yields unknown, never good, never revoked.%s\n' "$RESET"
+  printf 'not "not revoked". Any failure here yields unknown, never good, never revoked.%s\n' "$RESET"
 fi
 
 fi # STATUS_LIST_MODE — section 8
@@ -1750,8 +1750,9 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
       printf '%s%sUNKNOWN%s (%s) — neither good nor revoked. A list you could not fetch or could\n' \
         "$YELLOW" "$BOLD" "$RESET" "${REVOCATION_UNKNOWN_BECAUSE:-unverified}" >&2
       printf 'not verify has NOT told you the subject is fine; treat this exactly as you would\n' >&2
-      printf 'treat an unreachable revocation authority. §4.5 of the design doc explains why this\n' >&2
-      printf 'is a distinct outcome from both "good" and "revoked", not a synonym for either.\n\n' >&2
+      printf 'treat an unreachable revocation authority. docs/security/attest-verification.md\n' >&2
+      printf '§7.1, "Unknown is not good", explains why this is a distinct outcome from both\n' >&2
+      printf '"good" and "revoked", not a synonym for either.\n\n' >&2
       exit 3
       ;;
   esac
