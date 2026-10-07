@@ -444,6 +444,64 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --attestation "$T/decoy-revoked.json" "${COMMON[@]}"
 
+# Attested content (#14). What a document SAYS (its bands and frameworks) is
+# printed only when the run ends VERIFIED/GOOD. A document that does not verify
+# shows none of it, even with --raw; it gets one line saying it was withheld.
+echo '# attested content'
+WITHHELD='attested content withheld: this document did not verify'
+# lacks_all NAME STRING... — the previous expect() output has none of the strings.
+lacks_all() {
+  local out="$T/out.$((PASSED + FAILED - 1))" name="$1" str bad=0; shift
+  for str in "$@"; do
+    if grep -qF -- "$str" "$out"; then
+      printf 'not ok - %s (output contains: %s)\n' "$name" "$str"; bad=1
+    fi
+  done
+  if [ "$bad" -eq 0 ]; then printf 'ok - %s\n' "$name"; PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); fi
+}
+SECRETS=(substantial basic advanced ISO27001 iso27001 NIS2 nis2 in_progress)
+
+expect 0 'ISO27001 (iso27001): substantial' 'a verified document shows its frameworks and their bands' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+expect 0 'overallBand: basic' 'a verified document shows its overallBand' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+lacks '"frameworks"' 'a verified document does not print the raw posture JSON without --raw'
+expect 0 'subject:     fixture-org  (visibility: public)' 'a verified document shows its subject slug and visibility' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'posture (E7' 'the raw posture heading is absent without --raw'
+expect 0 '"band": "substantial"' 'with --raw a verified document also prints the raw posture JSON' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --raw
+expect 0 'ISO27001 (iso27001): substantial' 'with --raw the readable summary is still there' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --raw
+expect 1 "$WITHHELD" 'a tampered document (exit 1) has its content withheld' -- \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}"
+lacks_all 'a tampered document shows none of its attested values' "${SECRETS[@]}"
+expect 1 "$WITHHELD" 'a tampered document has its content withheld even with --raw' -- \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
+lacks_all 'a tampered document shows none of its attested values, even with --raw' "${SECRETS[@]}" '"frameworks"' 'posture (E7'
+expect 1 "$WITHHELD" 'a genuine but expired document (exit 1) has its content withheld' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE" --raw
+lacks_all 'an expired document shows none of its attested values, even with --raw' "${SECRETS[@]}" '"frameworks"' 'posture (E7'
+expect 1 "$WITHHELD" 'a signature-valid document that fails another check has its content withheld' -- \
+  --attestation "$T/other-iss.json" "${COMMON[@]}" --raw
+lacks_all 'a document from another issuer shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+expect 2 "$WITHHELD" 'a document that could not be checked (exit 2) has its content withheld' -- \
+  --attestation "$T/att.json" --jwks "$T/other-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --raw
+lacks_all 'a document that could not be checked shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+# --status-list: the content is shown only when the list also says GOOD.
+expect 0 'ISO27001 (iso27001): substantial' 'under a GOOD status list the verified content is shown' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+expect 1 "$WITHHELD" 'a REVOKED document has its content withheld' -- \
+  "${SL[@]}" --status "$T/list-key.json" --raw
+lacks_all 'a revoked document shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+expect 3 "$WITHHELD" 'a document whose status is UNKNOWN has its content withheld' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json" --raw
+lacks_all 'a document whose status is UNKNOWN shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+expect 1 "$WITHHELD" 'in --status-list mode a failed posture check withholds the content' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
+lacks_all 'a tampered document under a GOOD list shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
 # parser accepts. The options are read from the parser's own `case` patterns, so

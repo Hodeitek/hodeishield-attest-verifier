@@ -163,6 +163,7 @@ JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
 EXPECT_SLUG=''; EXPECT_NONCE_SET=0; EXPECT_NONCE=''
 MAX_AGE_SECONDS=3600; NOW_OVERRIDE=''
+SHOW_RAW=0
 
 # --- status-list mode (--status-list) ---------------------------------------
 STATUS_LIST_MODE=0
@@ -211,6 +212,7 @@ Attestation mode (the default):
   --expect-nonce VALUE   require this challenge ('' requires none)
   --max-age-seconds N    reject a document older than N seconds (default 3600)
   --max-age-days N       the same, in days
+  --raw                  also print the full signed posture JSON (verified documents only)
   --now EPOCH            take this Unix time as now (for testing)
 
 Status-list mode (revocation):
@@ -253,6 +255,7 @@ while [ $# -gt 0 ]; do
     --max-age-seconds) MAX_AGE_SECONDS="${2:?}"; shift 2 ;;
     --max-age-days) MAX_AGE_SECONDS=$(( ${2:?} * 86400 )); shift 2 ;;
     --now)          NOW_OVERRIDE="${2:?}"; shift 2 ;;
+    --raw)          SHOW_RAW=1; shift ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
     --status)               STATUS_SRC="${2:?}"; shift 2 ;;
     --status-keys)          STATUS_KEYS_SRC="${2:?}"; shift 2 ;;
@@ -267,13 +270,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+CONTENT_WITHHELD='attested content withheld: this document did not verify'
 RED=''; GREEN=''; YELLOW=''; BOLD=''; RESET=''
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 fi
 ok()   { printf '  %sPASS%s  %s\n' "$GREEN" "$RESET" "$*"; }
 warn() { printf '  %sWARN%s  %s\n' "$YELLOW" "$RESET" "$*"; }
-die()  { printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 2; }
+# WITHHOLD_ON_DIE is set once a document is being read (after the banner below):
+# a run that stops there never established the document, so it shows none of it.
+WITHHOLD_ON_DIE=0
+die()  {
+  printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2
+  [ "$WITHHOLD_ON_DIE" -eq 0 ] || printf '%s\n' "$CONTENT_WITHHELD" >&2
+  exit 2
+}
 bad()  { printf '  %sFAIL%s  %s\n' "$RED" "$RESET" "$*" >&2; FAILURES=$((FAILURES+1)); }
 # Like bad(), but for the STATUS LIST's own verification (§6.1 of the design
 # doc). Deliberately a SEPARATE counter from $FAILURES: a status-list failure
@@ -336,6 +347,7 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
 else
   printf '\n%sHodeiShield posture attestation — offline verification%s\n\n' "$BOLD" "$RESET"
 fi
+if [ "$HAVE_ATTESTATION" -eq 1 ]; then WITHHOLD_ON_DIE=1; fi
 
 # --- 0. Environment ----------------------------------------------------------
 printf '%s[0] Environment%s\n' "$BOLD" "$RESET"
@@ -754,6 +766,20 @@ elif mode == "unsigned":
             if isinstance(f, dict):
                 extra += ["posture.frameworks[%d].%s" % (i, k) for k in f if k not in SIGNED_FRAMEWORK]
     sys.stdout.write("\n".join(extra))
+elif mode == "summary":
+    # What the signature covers, for a human: only members the canonical encoders
+    # read. Control characters are shown as ? so a value cannot drive the terminal.
+    def clean(v): return "".join(ch if ch.isprintable() else "?" for ch in str(v))
+    def show(v): return "null" if v is None else clean(v)
+    p = doc.get("posture") or {}
+    print("        overallBand: " + show(doc.get("overallBand")))
+    print("        subject:     %s  (visibility: %s)" % (show(p.get("slug")), show(p.get("visibility"))))
+    print("        generatedAt: " + show(p.get("generatedAt")))
+    print("        lastCheckedAt: %s" % ("null  (no monitoring heartbeat is claimed)" if p.get("lastCheckedAt") is None
+          else clean(p["lastCheckedAt"]) + "  (freshness of the underlying data, can be older than generatedAt)"))
+    fw = p.get("frameworks") or []
+    print("        frameworks:  " + ("none attested" if not fw else "%d attested" % len(fw)))
+    for f in fw: print("          %s (%s): %s" % (clean(f.get("label")), clean(f.get("code")), clean(f.get("band"))))
 else: raise SystemExit("document: unknown mode %r" % mode)
 '
 
@@ -1125,7 +1151,6 @@ if [ -n "$POSTURE_FILE" ]; then
   # signature does not cover; tests/run.sh holds the rejection cases.
   GENERATED="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field generatedAt)"
   EXPIRES="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field expiresAt)"
-  CHECKED="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field lastCheckedAt)"
   SLUG="$(python3 -c "$DOCX_PY" "$POSTURE_FILE" field slug)"
 
   # epoch_of() is defined globally (near b64url_encode) so --status-list mode
@@ -1192,13 +1217,6 @@ if [ -n "$POSTURE_FILE" ]; then
           Reject this document; do not substitute a tolerance of your own."
   fi
 
-  if [ -n "$CHECKED" ]; then
-    printf '        lastCheckedAt: %s  (freshness of the underlying data,\n' "$CHECKED"
-    printf '                       which can be older than generatedAt)\n'
-  else
-    warn "lastCheckedAt is null — no genuine monitoring heartbeat is being claimed"
-  fi
-
   if [ -n "$EXPECT_SLUG" ]; then
     if [ "$SLUG" = "$EXPECT_SLUG" ]; then
       ok "posture is for slug '${SLUG}', as expected"
@@ -1234,11 +1252,6 @@ if [ -n "$CLAIMS_FILE" ]; then
     printf '        nonce:       %s\n' "$CLAIMS_NONCE"
   else
     printf '        nonce:       null  (no challenge — see --expect-nonce)\n'
-  fi
-  if [ "$CLAIMS_BAND_PRESENT" = '1' ]; then
-    printf '        overallBand: %s\n' "$CLAIMS_BAND"
-  else
-    printf '        overallBand: null\n'
   fi
 
   if [ "$CLAIMS_DOCVERSION" = 'attest.attestation.v1' ]; then
@@ -1317,11 +1330,11 @@ PY
     if [ -z "$DERIVED_BAND" ]; then
       ok "overallBand (E6) is null and nothing is attested — consistent"
     else
-      ok "overallBand (E6) '${CLAIMS_BAND}' equals the weakest attested band — recomputed, not trusted"
+      ok "overallBand (E6) equals the weakest attested band — recomputed, not trusted"
     fi
   else
-    bad "overall_band_mismatch — the document claims overallBand '${CLAIMS_BAND:-null}', but the
-          weakest band in its own coverage list is '${DERIVED_BAND:-null}'"
+    bad "overall_band_mismatch — the document's overallBand is not the weakest band in its
+          own coverage list"
   fi
 
   # The gated-redaction contract, enforced at the RELYING PARTY: a `gated`
@@ -1338,16 +1351,9 @@ PY
     if [ "$FW_COUNT" -eq 0 ] && [ "$CHECKED_PRESENT" = '0' ] && [ "$CLAIMS_BAND_PRESENT" = '0' ]; then
       ok "gated posture is redacted as it must be: no coverage, no heartbeat, no overall band"
     else
-      bad "redaction_violation — a 'gated' posture is carrying coverage (${FW_COUNT} framework(s)),
+      bad "redaction_violation — a 'gated' posture is carrying coverage,
           a heartbeat or an overall band. Reject it: a signature must not make a leak authoritative."
     fi
-  fi
-
-  printf '\n        posture (E7, the frozen v1 bytes):\n'
-  if command -v jq >/dev/null 2>&1; then
-    jq . < "$POSTURE_FILE" | sed 's/^/        /'
-  else
-    sed 's/^/        /' "$POSTURE_FILE"
   fi
 else
   printf '        (canonical bytes only; supply --attestation or --claims to read the claims)\n'
@@ -1733,6 +1739,32 @@ case "$REVOCATION_STATUS" in
 esac
 
 fi # STATUS_LIST_MODE — section 9
+
+# --- Attested content --------------------------------------------------------
+# What the document SAYS is shown only once the whole run has established it:
+# every posture check held and, in --status-list mode, the list also says GOOD.
+# A document that is tampered, expired, revoked or of unknown status shows none
+# of it, so nothing unproven sits on the screen beside a PASS. Section 7 above
+# prints only the envelope fields the checks compare (docVersion, iss, kid, jti,
+# nonce); the posture and its bands are printed here, last, or not at all.
+if [ -n "$JWS_FILE" ]; then
+  if [ "$FAILURES" -eq 0 ] && { [ "$STATUS_LIST_MODE" -eq 0 ] || [ "${REVOCATION_STATUS:-}" = good ]; }; then
+    if [ -n "$CLAIMS_FILE" ]; then
+      printf '\n%sAttested content%s (covered by the signature, and the document verified)\n' "$BOLD" "$RESET"
+      python3 -c "$DOCX_PY" "$CLAIMS_FILE" summary
+      if [ "$SHOW_RAW" -eq 1 ]; then
+        printf '\n        posture (E7, the frozen v1 bytes):\n'
+        if command -v jq >/dev/null 2>&1; then
+          jq . < "$POSTURE_FILE" | sed 's/^/        /'
+        else
+          sed 's/^/        /' "$POSTURE_FILE"
+        fi
+      fi
+    fi
+  else
+    printf '\n%s\n' "$CONTENT_WITHHELD"
+  fi
+fi
 
 # --- Verdict -----------------------------------------------------------------
 printf '\n'

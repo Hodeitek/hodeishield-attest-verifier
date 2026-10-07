@@ -449,6 +449,13 @@ the key belongs to who you think, or that the document was meant to exist.
 Read docs/security/attest-verification.md §6 before relying on it.
 ```
 
+> **Note on the output above.** That run predates a change to what the script
+> prints. Today the overall band and the frameworks are shown in an "Attested
+> content" block just before the verdict, and only when the document verifies;
+> the full posture JSON is printed only with `--raw`; and a document that does
+> not verify prints `attested content withheld: this document did not verify`
+> in their place. The checks and the verdict are unchanged.
+
 **Always pass `--expect-issuer`.** `iss` decides whose key set is
 authoritative, and a verifier that never checks it will happily accept a
 perfectly valid document signed by somebody else's deployment of this software.

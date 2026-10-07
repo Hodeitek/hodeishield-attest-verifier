@@ -194,6 +194,23 @@ bash scripts/attest/verify-attestation.sh --status-list \
 interchangeable. What the list can and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 
+## What the output shows
+
+The checks print as `PASS`, `WARN` and `FAIL` lines, in numbered sections, with
+the last line giving the verdict. What the document *says* (its overall band
+and, for each framework, its name and band, plus the subject, `generatedAt`,
+`lastCheckedAt` and visibility) is printed in an "Attested content" block just
+before the verdict, and only when the run ends `VERIFIED` (or `GOOD` in
+`--status-list` mode). A document that is tampered, expired, revoked, of unknown
+status, or that could not be checked shows none of it: the output says
+`attested content withheld: this document did not verify` instead. The sections
+above still print what is needed to see why: which check failed, the `kid` and
+whether it can be derived from the key, the expected and found slug or issuer,
+and the document's `generatedAt` and `expiresAt` for a freshness failure.
+
+The full signed posture JSON is printed only with `--raw`, and under the same
+rule: a document that does not verify never shows it, even with `--raw`.
+
 ## Convince yourself it can fail
 
 A verifier that has only ever printed `PASS` has told you nothing. Each of these
