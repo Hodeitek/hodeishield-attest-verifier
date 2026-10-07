@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/Hodeitek/hodeishield-attest-verifier/security/advisories/new
+    about: A suspected vulnerability, a VERIFIED you believe is wrong, or a discrepancy between a document and reality. Do not file these as public issues.

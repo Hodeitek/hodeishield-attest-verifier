@@ -318,6 +318,11 @@ the reason it is a short, single, readable script.
 
 ## Reporting a problem
 
+If the verifier cannot run or cannot check (exit 2, missing or old tooling, a
+container route problem), open a public issue with the
+[usage problem template](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/new?template=usage-problem.yml).
+Do not paste confidential data.
+
 If any check here fails, or if you find a discrepancy between what a document
 claims and what you can independently establish:
 
