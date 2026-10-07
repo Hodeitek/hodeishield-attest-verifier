@@ -23,7 +23,8 @@ release.
   visible `\xHH` escape. Before, an edited document could carry a nonce, `iss`,
   `jti`, date or member name that forged lines such as an "Attested content"
   block or a `VERIFIED` verdict on stdout, above the real `FAIL` lines on stderr
-  (the exit code was not affected).
+  (the exit code was not affected). This affected every release from v1.0.0 to
+  v1.2.1.
 
 ### Fixed
 - A verified document with a non-ASCII framework label no longer ends in an
@@ -52,8 +53,9 @@ release.
   status-list header and the `UNKNOWN` verdict point to
   `docs/security/attest-verification.md` §7.1, which has a new paragraph,
   "Unknown is not good".
-- Verification document §7.1: the "Unknown is not good" paragraph, and a note
-  that the sample output in §4.3 predates the attested-content change.
+- Verification document §7.1: the "Unknown is not good" paragraph, a note
+  that the sample output in §4.3 predates the attested-content change, and two
+  passages that named a non-public design document no longer do.
 - CONTRIBUTING: "Issues" (when a fixed issue is closed) and "Design" (shared
   vocabulary for designing a change).
 - Verification document brought up to date with v1.2.1 (ML-DSA capability gate,

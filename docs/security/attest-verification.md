@@ -1351,11 +1351,9 @@ If a HodeiShield attestation that previously verified suddenly does not:
 2026-07-30 there is a signed, freshness-bounded **status list**, published at
 `GET /api/public/attest/status` and verified against its **own**, separate key
 set at `GET /api/public/attest/status-keys` — never the attestation key set at
-`/keys`. The two key sets are disjoint by construction (a holder of the
-attestation seed cannot sign a status list any conforming verifier will even
-look at, and vice versa — full argument in
-`docs/architecture/specs/2026-07-30-attest-revocation-design.md`). It gives
-you two real primitives:
+`/keys`. The two key sets are disjoint by construction (a holder of
+the attestation seed cannot sign a status list any conforming verifier
+will even look at, and vice versa). It gives you two real primitives:
 
 - **Key revocation, unconditional.** If the `kid` that signed your document
   appears in the list's `keys[]`, the document is **revoked** — full stop,
@@ -1374,12 +1372,10 @@ you two real primitives:
 still cannot recall the one mis-issued attestation without revoking either the
 key or the subject it belongs to. Combined with the 1-hour `MAX_TTL_SECONDS`
 ceiling, an isolated mis-issued document that does not warrant either of those
-simply expires — that has not changed.
-`docs/architecture/specs/2026-07-30-attest-revocation-design.md` argues the
-arithmetic in full: a per-`jti` entry would be worth, at best, the remaining
-minutes of a document that was going to die within the hour anyway, against a
-permanent cost (a durable write on every anonymous fetch of an attestation, an
-enumerable issuance corpus).
+simply expires — that has not changed. The arithmetic: a per-`jti` entry
+would be worth, at best, the remaining minutes of a document that was going
+to die within the hour anyway, against a permanent cost (a durable write on
+every anonymous fetch of an attestation, an enumerable issuance corpus).
 
 **If you never fetch the status list, nothing about your position changes.**
 A verifier who only performs the checks in §4, and who pinned the key
