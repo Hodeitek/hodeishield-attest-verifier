@@ -326,6 +326,22 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   it. Where a message sends you to a document, it is §7 or §7.1 of the public
   one, which covers what a verifier needs.
 
+## Compatibility
+
+The verifier checks two document formats, and no other version of either:
+
+| Verifier version | Attestation | Status list |
+|---|---|---|
+| every release so far (v1.0.0 to v1.2.1) | `attest.attestation.v1` | `attest.statuslist.v1` |
+
+- A change to either format that older verifiers cannot read is announced at
+  least 90 days before it takes effect.
+- Only the latest release is supported (see [SECURITY.md](SECURITY.md)). Update
+  to it before relying on a result, and see the [changelog](CHANGELOG.md) for
+  what each release changed.
+- A document with a format version the verifier does not know is not verified:
+  it fails, it is never read as an older format.
+
 ## Verifying a release
 
 Download these four files from the GitHub release you are using:
