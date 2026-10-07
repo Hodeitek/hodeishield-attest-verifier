@@ -1315,10 +1315,13 @@ you already hold keep verifying while the old key is still within its validity.
 **A retired key stays published.** It is not removed from the set when it is
 retired; it is marked as retired, so documents signed before its retirement can
 still be checked. A document signed by a retired key is acceptable only if its
-`generatedAt` is before the retirement time. The published key set will mark
-retired keys explicitly. Today it does not yet carry a machine-readable marker,
-and the verifier does not enforce retirement by itself; until a verifier release
-checks that marker, check that a document signed by a retired key has a
+`generatedAt` is before the retirement time. As policy, the key set marks a
+retired key with the member `hs_retired_at`, an RFC 3339 UTC time with seconds
+(`YYYY-MM-DDTHH:MM:SSZ`). Verifier v1.3.0 and later reject a document whose
+`generatedAt` is at or after it (exit 1, `retired_key`; the instants are
+compared exactly, milliseconds included), and a status list issued at or after
+the retirement of its own key is unknown (exit 3). Earlier versions ignore the
+member, so with them check that a document signed by a retired key has a
 `generatedAt` before the retirement time listed in [`keys.md`](keys.md). The
 one-hour validity ceiling means a document from a retired key cannot pass at the
 current time: a backdated one has already expired, and a current one is dated

@@ -149,7 +149,14 @@ Posture mode (the default, as above):
 |---|---|
 | **0** | Verified. The signature holds and every requested check passed. |
 | **1** | **Check failed.** Something did not hold. Do not rely on the document. |
-| **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
+| **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key, a key set whose `hs_retired_at` is malformed. This is *not* a statement about the document — do not read it as failure. |
+
+A document generated at or after the retirement of the key that signed it also
+exits 1, with a `FAIL` line starting `retired_key`: the key set marks a retired
+key with `hs_retired_at` (see [Current signing keys](docs/security/keys.md)).
+The signature may be genuine, but the document is not one to rely on, and a
+fresh copy signed by the same key would fail the same way. Its last line is
+`VERIFICATION FAILED`, not `EXPIRED`.
 
 A genuine document that is only out of date also exits 1: it is not one to rely
 on. Its last line tells it apart from a tampered or invalid one. It starts with
@@ -165,7 +172,7 @@ appears when the signature verified and age or expiry was the only problem.
 | **0** | Good. If a document was given, its posture checks passed **and** it is not revoked. |
 | **1** | **Revoked**, or the posture check of the document you gave failed. |
 | **2** | **Could not check.** Bad flags, a missing tool, or a status list that could not be fetched or read. |
-| **3** | **Unknown.** The list was obtained but does not verify, is stale, was rolled back, or names its own signer. This is neither "good" nor "revoked". |
+| **3** | **Unknown.** The list was obtained but does not verify, is stale, was rolled back, names its own signer, or was issued at or after the retirement of its key (`retired_key`). This is neither "good" nor "revoked". |
 
 Never test `$? -ne 0` and treat the result as one outcome. In `--status-list`
 mode that collapses "revoked" (1), "could not check" (2) and "unknown" (3) into

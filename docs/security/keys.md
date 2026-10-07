@@ -13,7 +13,7 @@ The values below were measured on 2026-10-07 by recomputing each `kid` from the
 | kid                      | Role        | Status  | Published at                                                | Active since         | Retired              | Next rotation due |
 | ------------------------ | ----------- | ------- | ----------------------------------------------------------- | -------------------- | -------------------- | ----------------- |
 | `roeFReafBOA_WF3cqfilHA` | attestation | active  | `https://app.hodeishield.com/api/public/attest/keys`        | 2026-07-31 (~18:53 UTC) | -                 | about 2027-07-31  |
-| `1_9j4Qa0yh0DaIWNdo5shw` | attestation | retired | `https://app.hodeishield.com/api/public/attest/keys`        | before 2026-07-31    | 2026-07-31 (~18:53 UTC) | -               |
+| `1_9j4Qa0yh0DaIWNdo5shw` | attestation | retired | `https://app.hodeishield.com/api/public/attest/keys`        | before 2026-07-31    | `2026-07-31T18:53:58Z` | -               |
 | `ybyUZ2JKT6PFvTREXyU9_A` | status list | active  | `https://app.hodeishield.com/api/public/attest/status-keys` | 2026-07-31           | -                    | about 2027-07-31  |
 
 The two key sets are separate and disjoint (§7 of the verification document).
@@ -64,11 +64,14 @@ expired, and a current one is dated after it. Retirement is not a response to
 compromise, so with `--now` set to a past instant a backdated document is judged
 as of that instant.
 
-The published key set will mark retired keys explicitly. Today it does not yet
-carry a machine-readable marker, and the verifier does not enforce retirement by
-itself. Until a verifier release checks that marker, check yourself that a
-document signed by a retired key has a `generatedAt` before the retirement time
-in the table above.
+As policy, the key set marks a retired key with the member `hs_retired_at`, an
+RFC 3339 UTC time with seconds (`YYYY-MM-DDTHH:MM:SSZ`). Verifier v1.3.0 and later reject a
+document whose `generatedAt` is at or after it (exit 1, `retired_key`), and a
+status list issued at or after the retirement of its key is unknown (exit 3).
+A `hs_retired_at` in any other form makes the key set invalid (exit 2 for the
+attestation key set, unknown for the status-list key set). Earlier versions
+ignore the member, so with them check yourself that a document signed by a
+retired key has a `generatedAt` before the retirement time in the table above.
 
 ## How this file changes
 
