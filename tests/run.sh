@@ -643,7 +643,7 @@ lacks 'set -euo pipefail' '--help is the usage text, not the header comment of t
 # The parser's patterns: from `while [ $# -gt 0 ]` to its `done`, the lines that
 # open a case arm, e.g. `    --jws)` or `    -h|--help)`.
 mapfile -t PARSER_OPTS < <(sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$VERIFIER" \
-  | sed -nE 's/^    (-[-A-Za-z|]+)\).*/\1/p' | tr '|' '\n' | grep -E '^--[a-z]' | sort -u)
+  | sed -nE 's/^    (-[-A-Za-z0-9|]+)\).*/\1/p' | tr '|' '\n' | grep -E '^--[a-z]' | sort -u)
 if [ "${#PARSER_OPTS[@]}" -ge 19 ]; then
   printf 'ok - found %d options in the argument parser\n' "${#PARSER_OPTS[@]}"; PASSED=$((PASSED + 1))
 else
