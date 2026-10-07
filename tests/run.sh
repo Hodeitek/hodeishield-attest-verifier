@@ -207,6 +207,46 @@ edit "$T/other-jwks.json" "$T/mislabelled-jwks.json" "d['keys'][0]['kid'] = '$IS
 expect 1 'kid mismatch — header says' 'a key published under a kid its bytes do not derive is rejected' -- \
   --attestation "$T/att.json" --jwks "$T/mislabelled-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
 
+# --expect-kid (#13): pin the key that signed. It is compared with the kid
+# recomputed from the key bytes, never with a label. It is a usage error when it
+# is not the shape of a kid, and it is not --check-kid (the status-list lookup).
+OTHER_KID="$(jq -r '.keys[0].kid' "$T/other-jwks.json")"
+expect 0 'one of the kids you pinned with --expect-kid' 'a pinned kid that matches the signing key verifies' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID"
+expect 0 'one of the kids you pinned with --expect-kid' 'two pinned kids, the first matching, verify (rotation overlap)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID" --expect-kid "$OTHER_KID"
+expect 0 'one of the kids you pinned with --expect-kid' 'two pinned kids, the second matching, verify (rotation overlap)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$OTHER_KID" --expect-kid "$ISSUER_KID"
+expect 1 "unexpected_kid — the key bytes derive kid '$ISSUER_KID'" 'a pinned kid that does not match is a failed check (1) that names the kid found' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$OTHER_KID"
+lacks 'one of the kids you pinned' 'a failed pin is never reported as matched'
+expect 1 "pinned with --expect-kid: $OTHER_KID AAAAAAAAAAAAAAAAAAAAAA" 'a failed pin lists every kid that was expected' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$OTHER_KID" --expect-kid AAAAAAAAAAAAAAAAAAAAAA
+expect 2 'is not a kid' 'a pinned value too short to be a kid is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid short
+expect 2 'is not a kid' 'a pinned value with characters outside base64url is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAA+A'
+expect 2 'is not a kid' 'a pinned value that no 16-byte digest can encode to is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid AAAAAAAAAAAAAAAAAAAAAB
+expect 2 'is not a kid' 'a malformed pin among valid ones is still a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID" --expect-kid nope
+expect 2 'needs a value' '--expect-kid without a value is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid
+expect 2 'it needs --attestation' '--expect-kid without a document to pin is a usage error, not silently ignored (2)' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" \
+  --check-kid "$ISSUER_KID" --expect-kid "$ISSUER_KID" --now "$NOW"
+# A key document that publishes the OTHER key under the issuer's kid (the header
+# kid of att.json). The existing rule already rejects it (the bytes do not derive
+# that label), and a pin cannot rescue it: pinning the label the document claims
+# fails on the recomputed kid, and pinning the bytes' real kid still leaves the
+# label mismatch. The pin never compares the label.
+expect 1 "unexpected_kid — the key bytes derive kid '$OTHER_KID'" 'a key relabelled to the pinned kid does not satisfy the pin (the bytes decide)' -- \
+  --attestation "$T/att.json" --jwks "$T/mislabelled-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" \
+  --expect-kid "$ISSUER_KID"
+expect 1 'kid mismatch — header says' 'a relabelled key whose real kid is pinned still fails the existing label rule' -- \
+  --attestation "$T/att.json" --jwks "$T/mislabelled-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" \
+  --expect-kid "$OTHER_KID"
+
 # The 2026-09-29 bypass: an unsigned nested object placed before the genuine
 # posture fields used to be what the slug/freshness checks read.
 edit "$T/att.json" "$T/decoy-slug.json" '
@@ -389,6 +429,11 @@ expect 1 'REVOKED — via subject' 'a document minted before its subject was wit
 
 expect 0 'GOOD — not revoked, per a verified status list' 'a document minted after the withdrawal notBefore is good' -- \
   "${SL[@]}" --status "$T/list-subj-before.json"
+
+expect 0 'one of the kids you pinned with --expect-kid' '--expect-kid works beside --status-list on the attestation key' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$ISSUER_KID"
+expect 1 'unexpected_kid' '--expect-kid does not look at the status list, only at the attestation key' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$OTHER_KID"
 
 edit "$T/list-key.json" "$T/list-key-stripped.json" 'd["statusList"]["keys"] = []'
 expect 3 'bad_signature' 'a list with a revocation removed after signing is UNKNOWN, never good' -- \

@@ -282,6 +282,27 @@ python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashl
 Compare the output with the `kid` you pinned. This repository does not yet
 publish the current values.
 
+Let the verifier do the comparison with `--expect-kid`:
+
+```bash
+bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com \
+  --expect-kid <the kid you pinned>
+```
+
+- The run exits 1 with a `FAIL` line, `unexpected_kid`, naming the kid found and
+  the kids expected, unless the key that signed has that kid. The comparison is
+  with the kid recomputed from the key bytes, never with a label in the
+  document or the JWKS, so a key relabelled to the kid you pinned does not pass.
+- Repeat the option to pin two kids during a key rotation overlap
+  (`--expect-kid <old> --expect-kid <new>`): the key may have either.
+- A value that is not the shape of a kid (22 base64url characters) is a usage
+  error, exit 2.
+- It is not `--check-kid`. `--check-kid` looks a kid up in a revocation status
+  list; `--expect-kid` requires the attestation's signing key to be one you
+  pinned. It does not apply to the key that signs the status list, which has no
+  pin option in this release.
+
 ## Where this comes from, and what is redacted
 
 - `scripts/attest/verify-attestation.sh` is the same script we keep, byte for

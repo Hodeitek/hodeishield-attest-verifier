@@ -73,6 +73,12 @@
 #                      A nonce you do not compare is decoration — this is the
 #                      comparison, and only you can make it.
 #   --expect-issuer    fail unless claims.iss equals this origin
+#   --expect-kid       fail unless the key that signed is one of these kids; repeat
+#                      it to pin two through a rotation overlap. Compared with the
+#                      kid RECOMPUTED from the key bytes, never with a label. Not
+#                      --check-kid, and it does not apply to the status-list key.
+#   --raw              also print the full signed posture JSON, but only when the
+#                      document verified (what it says is never shown otherwise)
 #   --max-age-seconds  staleness tolerance on `generatedAt` (default 3600 = 1 h)
 #   --max-age-days     deprecated alias, converted to seconds
 #   --now              override "now" (Unix seconds), for reproducible testing
@@ -164,6 +170,9 @@ ATTESTATION_FILE=''; CLAIMS_FILE=''
 EXPECT_SLUG=''; EXPECT_NONCE_SET=0; EXPECT_NONCE=''
 MAX_AGE_SECONDS=3600; NOW_OVERRIDE=''
 SHOW_RAW=0
+# --expect-kid, repeatable: the kids the attestation's signing key may have. Empty
+# means no pin. Not --check-kid, which looks a kid up in a status list.
+EXPECT_KIDS=()
 
 # --- status-list mode (--status-list) ---------------------------------------
 STATUS_LIST_MODE=0
@@ -210,6 +219,7 @@ Attestation mode (the default):
   --expect-slug SLUG     require this organisation slug
   --expect-issuer URL    require this issuer (iss)
   --expect-nonce VALUE   require this challenge ('' requires none)
+  --expect-kid KID       require the signing key to have this kid; repeat for a rotation overlap
   --max-age-seconds N    reject a document older than N seconds (default 3600)
   --max-age-days N       the same, in days
   --raw                  also print the full signed posture JSON (verified documents only)
@@ -219,7 +229,7 @@ Status-list mode (revocation):
   --status-list          check a signed revocation status list
   --status FILE|URL      the status list
   --status-keys FILE|URL the status list's own key set (never --jwks)
-  --check-kid KID        look this key up in the list
+  --check-kid KID        look this kid up in the list (not --expect-kid, which pins)
   --check-subject SLUG   look this organisation up in the list
   --check-generated-at T the document time to compare with the subject entry
   --min-seq N            reject a list older than sequence N (rollback)
@@ -256,6 +266,15 @@ while [ $# -gt 0 ]; do
     --max-age-days) MAX_AGE_SECONDS=$(( ${2:?} * 86400 )); shift 2 ;;
     --now)          NOW_OVERRIDE="${2:?}"; shift 2 ;;
     --raw)          SHOW_RAW=1; shift ;;
+    # Repeatable, so that two kids can be pinned through a key rotation overlap.
+    # A kid is BASE64URL of 16 bytes: 21 characters of the alphabet, then one of
+    # A Q g w (the last character carries only 2 bits). Anything else can never
+    # equal a derived kid, so it is a usage error, not a check that always fails.
+    --expect-kid)
+      [ $# -ge 2 ] || { printf 'error: --expect-kid needs a value\n' >&2; exit 2; }
+      [[ "$2" =~ ^[A-Za-z0-9_-]{21}[AQgw]$ ]] \
+        || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$2" >&2; exit 2; }
+      EXPECT_KIDS+=("$2"); shift 2 ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
     --status)               STATUS_SRC="${2:?}"; shift 2 ;;
     --status-keys)          STATUS_KEYS_SRC="${2:?}"; shift 2 ;;
@@ -327,6 +346,9 @@ Never the attestation --jwks — the two key sets are disjoint by design."
     || die "--status-list needs something to check: pass --attestation or --jws (check its \
 kid/slug), or --check-kid, or --check-subject. Run with --help."
 fi
+[ "${#EXPECT_KIDS[@]}" -eq 0 ] || [ "$HAVE_ATTESTATION" -eq 1 ] \
+  || die "--expect-kid pins the key that signed an attestation, so it needs --attestation (or --jws). \
+To look a kid up in a status list, use --check-kid."
 if [ "$HAVE_ATTESTATION" -eq 1 ] || [ "$STATUS_LIST_MODE" -eq 0 ]; then
   [ "$HAVE_ATTESTATION" -eq 1 ] || die "missing --attestation (or --jws). Run with --help."
   [ -z "$JWS_FILE" ] || [ -r "$JWS_FILE" ] || die "cannot read ${JWS_FILE}"
@@ -1058,6 +1080,24 @@ if [ "$DERIVED_KID" = "$KID" ]; then
 else
   bad "kid mismatch — header says '${KID}', the key bytes derive '${DERIVED_KID}'.
           The key document is mislabelled or you are holding the wrong key."
+fi
+
+# --expect-kid: the pin is compared with the kid RECOMPUTED from the key bytes
+# above, never with the label the header or the JWKS carries. A mislabelled key
+# therefore cannot satisfy a pin by naming itself after the kid you pinned. (A
+# mismatch between that label and the key already failed above; this is the
+# separate question of whether the key is one you meant to trust.)
+if [ "${#EXPECT_KIDS[@]}" -gt 0 ]; then
+  PIN_MATCH=0
+  for pinned_kid in "${EXPECT_KIDS[@]}"; do
+    if [ "$pinned_kid" = "$DERIVED_KID" ]; then PIN_MATCH=1; fi
+  done
+  if [ "$PIN_MATCH" -eq 1 ]; then
+    ok "the key bytes derive kid '${DERIVED_KID}', one of the kids you pinned with --expect-kid"
+  else
+    bad "unexpected_kid — the key bytes derive kid '${DERIVED_KID}', which is not one of the kids you
+          pinned with --expect-kid: ${EXPECT_KIDS[*]}"
+  fi
 fi
 
 # OpenSSL loads SubjectPublicKeyInfo; the JWK carries the bare FIPS 204 key.
