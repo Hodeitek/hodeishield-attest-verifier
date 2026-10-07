@@ -63,6 +63,9 @@ organisation you think. It is a verifier you can read and run yourself, and the 
 here explains exactly what a `VERIFIED` result does and does not mean; §6 of it
 says what the tool cannot tell you.
 
+HodeiShield issues these attestations. An organisation that wants to publish its
+own starts at [hodeishield.com](https://hodeishield.com).
+
 ## What you need installed
 
 | | |
