@@ -1196,7 +1196,9 @@ This section matters more than the commands.
    binding. There is no out-of-band root of trust for the attestation key —
    no CA, no transparency log, no DNSSEC-anchored record. **Pin the key
    fingerprint on first use** and treat an unannounced change as an incident
-   (§7). This is a real limitation and we are not going to dress it up.
+   (§7). The fingerprint is the key's `kid`, derived from the public key bytes
+   (§4.2); the verifier recomputes it and prints it, and a JWKS whose `kid`
+   does not match its key is rejected. This is a real limitation and we are not going to dress it up.
 3. **Anything about the certification bodies.** A `band: advanced` for ISO 27001
    is _our_ computed maturity band, not a certificate issued by an accredited
    certification body. If you need the certification itself, ask for the

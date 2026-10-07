@@ -245,9 +245,25 @@ the signature is post-quantum (ML-DSA-65, FIPS 204).
 *our* scoring of evidence supplied by the organisation — a signed document
 containing a wrong claim is a signed wrong claim. It does not prove the key
 belongs to Hodeitek (you are trusting the Web PKI for that one binding — pin the
-fingerprint). It does not prove anything about accredited certification bodies.
+key's `kid`, see [Pinning the key](#pinning-the-key)). It does not prove anything about accredited certification bodies.
 And §6 item 8 states, without softening, that the signing key is held in
 software rather than in an HSM, and what that means for you.
+
+### Pinning the key
+
+The fingerprint to pin is the key's `kid`. It is derived from the public key
+bytes: `BASE64URL(SHA-256("hodei-shield.attest.kid.v1" || pub)[0..16])`, see
+[§4.2 of the verification document](docs/security/attest-verification.md#42-the-kid-is-checked-not-trusted).
+The verifier recomputes it from the key bytes, prints it on the `kid:` line, and
+rejects a JWKS whose `kid` does not match its key. To compute it yourself from
+a downloaded `jwks.json`, one value per key:
+
+```bash
+python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
+```
+
+Compare the output with the `kid` you pinned. This repository does not yet
+publish the current values.
 
 ## Where this comes from, and what is redacted
 
