@@ -177,6 +177,7 @@ EXPECT_KIDS=()
 # --- status-list mode (--status-list) ---------------------------------------
 STATUS_LIST_MODE=0
 STATUS_SRC=''; STATUS_KEYS_SRC=''
+RETIRED_AT=''   # hs_retired_at of the selected attestation key, when it has one
 CHECK_KID=''; CHECK_SUBJECT=''; CHECK_GENERATED_AT=''
 MIN_SEQ=''; EXPECT_ISSUER=''
 
@@ -752,6 +753,57 @@ def vis(t):
 sys.stdout.write("\n".join(sorted(set(vis(x) for x in out))))
 '
 
+# Retirement of a signing key (the JWK member `hs_retired_at`). One reader for
+# both key sets, so the grammar, the instant arithmetic and the verdicts exist
+# once.
+#
+#   argv[1] = "key"  argv[2] = key file  argv[3] = kid
+#       line 1: absent | ok | malformed (the first entry with that kid and a
+#       string `pub`, the one the caller selects); then the member's value.
+#       A string is written raw (the caller escapes it before it is shown); any
+#       other JSON value is written as JSON text.
+#   argv[1] = "cmp"  argv[2] = instant of the document  argv[3] = hs_retired_at
+#       at_or_after | before | unparseable
+#
+# The grammar is exactly YYYY-MM-DDTHH:MM:SSZ with a real calendar date and
+# time: no fraction, no offset, no lowercase t or z, no leap second. Instants
+# are compared exactly (a `generatedAt` carries milliseconds), never as strings.
+RETIRED_PY='
+import calendar, datetime, fractions, json, re, sys
+RETIRED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", re.ASCII)
+INSTANT = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(?:Z|([+-])([0-9]{2}):([0-9]{2}))", re.ASCII)
+def strict(v):
+    return isinstance(v, str) and RETIRED.fullmatch(v) is not None and instant(v) is not None
+def instant(v):
+    m = INSTANT.fullmatch(v)
+    if m is None: return None
+    y, mo, d, h, mi, s = (int(m.group(i)) for i in range(1, 7))
+    try: datetime.datetime(y, mo, d, h, mi, s)
+    except ValueError: return None
+    off = 0
+    if m.group(8):
+        oh, om = int(m.group(9)), int(m.group(10))
+        if oh > 23 or om > 59: return None
+        off = (oh * 3600 + om * 60) * (1 if m.group(8) == "+" else -1)
+    frac = fractions.Fraction(int(m.group(7)[1:]), 10 ** (len(m.group(7)) - 1)) if m.group(7) else 0
+    return calendar.timegm((y, mo, d, h, mi, s)) - off + frac
+out = sys.stdout.buffer
+if sys.argv[1] == "key":
+    status, val = "absent", b""
+    doc = json.load(open(sys.argv[2], "rb"))
+    for k in (doc.get("keys") or []) if isinstance(doc, dict) else []:
+        if isinstance(k, dict) and k.get("kid") == sys.argv[3] and isinstance(k.get("pub"), str):
+            if "hs_retired_at" in k:
+                v = k["hs_retired_at"]
+                status = "ok" if strict(v) else "malformed"
+                val = (v if isinstance(v, str) else json.dumps(v)).encode("utf-8", "surrogatepass")
+            break
+    out.write(status.encode() + b"\n" + val)
+else:
+    a, b = instant(sys.argv[2]), instant(sys.argv[3])
+    out.write(b"unparseable" if a is None or b is None else b"at_or_after" if a >= b else b"before")
+'
+
 # Document surgery: pull the pieces out of whatever JSON the caller handed us.
 # Kept separate from the encoders above so the code that decides WHICH bytes to
 # hash stays readable, and so no JSON-shaped convenience can leak into the
@@ -1090,9 +1142,21 @@ for k in json.load(open(sys.argv[1])).get("keys") or []:
     die "no key in this JWKS carries kid '$(esc "${KID}")'.
        This is NOT evidence that the document is forged — it means you are
        holding the wrong or a stale key document. Re-fetch the JWKS and retry;
-       a retired key leaves the published set at the end of its overlap."
+       a retired key stays in the published set, marked with hs_retired_at."
   else
     ok "selected the JWKS key whose kid is '$(esc "${KID}")'"
+    # The retirement marker of the selected key (checked against generatedAt in
+    # section 6). A marker that is not exactly an RFC 3339 UTC second is an
+    # invalid key set, not evidence about the document: exit 2.
+    RETIRED_OUT="$(LC_ALL=C python3 -c "$RETIRED_PY" key "$JWKS_FILE" "$KID" 2>/dev/null; printf x)"
+    RETIRED_OUT="${RETIRED_OUT%x}"
+    case "${RETIRED_OUT%%$'\n'*}" in
+      absent) ;;
+      ok) RETIRED_AT="${RETIRED_OUT#*$'\n'}" ;;
+      *) die "the key document ${JWKS_FILE} is invalid: hs_retired_at of the key '$(esc "${KID}")' is
+       '$(esc "${RETIRED_OUT#*$'\n'}")', not an RFC 3339 UTC time with seconds (YYYY-MM-DDTHH:MM:SSZ).
+       Re-fetch the key document; do not edit it by hand." ;;
+    esac
   fi
 fi
 
@@ -1257,6 +1321,22 @@ if [ -n "$POSTURE_FILE" ]; then
     bad "no generatedAt — every genuine HodeiShield attestation carries one"
   fi
 
+  # A retired key: the document must predate the retirement. The signed
+  # generatedAt, the value the freshness check above uses, compared as exact
+  # instants. Not a staleness failure: a fresh copy of the same document would
+  # not help, so this is a plain FAIL (VERIFICATION FAILED, not EXPIRED).
+  if [ -n "$RETIRED_AT" ] && [ -n "$GENERATED" ]; then
+    case "$(LC_ALL=C python3 -c "$RETIRED_PY" cmp "$GENERATED" "$RETIRED_AT" 2>/dev/null)" in
+      at_or_after)
+        bad "retired_key — this document was generated at $(esc "$GENERATED"), at or after the retirement of key $(esc "$KID") at $(esc "$RETIRED_AT")" ;;
+      before)
+        ok "key $(esc "$KID") is retired (at $(esc "$RETIRED_AT")), but this document was generated at $(esc "$GENERATED"), before the retirement" ;;
+      *)
+        bad "date_unparseable — generatedAt '$(esc "$GENERATED")' is not an RFC 3339 time, so it cannot be
+          compared with the retirement of key $(esc "$KID") at $(esc "$RETIRED_AT")" ;;
+    esac
+  fi
+
   if [ -n "$EXPIRES" ]; then
     E="$(epoch_of "$EXPIRES")"
     printf '        expiresAt:   %s\n' "$(esc "$EXPIRES")"
@@ -1303,6 +1383,9 @@ if [ -n "$POSTURE_FILE" ]; then
   fi
 else
   warn "no claims JSON: freshness cannot be checked from opaque canonical bytes"
+  if [ -n "$RETIRED_AT" ]; then
+    warn "key $(esc "$KID") is retired (at $(esc "$RETIRED_AT")) and there is no generatedAt to compare with it"
+  fi
 fi
 
 # --- 7. Claims ---------------------------------------------------------------
@@ -1449,7 +1532,7 @@ printf '        (how to check revocation yourself: docs/security/attest-verifica
 
 STATUS_JWS=''; SH=''; SP=''; SS=''
 STATUS_DOC_VERSION=''; STATUS_LIST_KID=''; SALG=''; STYP=''
-STATUS_PUB_B64URL=''; STATUS_DERIVED_KID=''
+STATUS_PUB_B64URL=''; STATUS_DERIVED_KID=''; STATUS_RETIRED_AT=''
 LIST_KID=''; LIST_ISS=''
 STATUS_LIST_VALID=0
 
@@ -1566,6 +1649,17 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
     '.keys[]? | select(.kid==$kid) | .pub' "$WORKDIR/status-keys.json" | head -1)"
   if [ -n "$STATUS_PUB_B64URL" ]; then
     ok "selected the --status-keys entry whose kid is '$(esc "${STATUS_LIST_KID}")'"
+    # The retirement marker of this key (checked against issuedAt below). A
+    # defective status key set already leaves the list UNKNOWN (not strict JSON,
+    # a repeated member, an unknown kid), so a malformed marker does too.
+    STATUS_RETIRED_OUT="$(LC_ALL=C python3 -c "$RETIRED_PY" key "$WORKDIR/status-keys.json" "$STATUS_LIST_KID" 2>/dev/null; printf x)"
+    STATUS_RETIRED_OUT="${STATUS_RETIRED_OUT%x}"
+    case "${STATUS_RETIRED_OUT%%$'\n'*}" in
+      absent) ;;
+      ok) STATUS_RETIRED_AT="${STATUS_RETIRED_OUT#*$'\n'}" ;;
+      *) stat_bad "malformed_document — hs_retired_at of the --status-keys entry '$(esc "${STATUS_LIST_KID}")' is \
+'$(esc "${STATUS_RETIRED_OUT#*$'\n'}")', not an RFC 3339 UTC time with seconds (YYYY-MM-DDTHH:MM:SSZ)" ;;
+    esac
   else
     stat_bad "unknown_kid — '$(esc "${STATUS_LIST_KID}")' is not in --status-keys. Unresolvable is a \
 rejection, never a fallback to another key — and never a fallback to the attestation --jwks, \
@@ -1684,6 +1778,20 @@ ${STATUS_CLOCK_SKEW_SECONDS}s skew allowance. Re-fetch — do not rely on this l
       ok "not stale (nextUpdate has not passed, allowing for skew)"
     fi
   fi
+fi
+
+# --- a list issued at or after the retirement of its own key is not trusted ---
+if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$STATUS_RETIRED_AT" ]; then
+  case "$(LC_ALL=C python3 -c "$RETIRED_PY" cmp "$SISSUEDAT" "$STATUS_RETIRED_AT" 2>/dev/null)" in
+    at_or_after)
+      stat_bad "retired_key — this status list was issued at $(esc "$SISSUEDAT"), at or after the retirement of \
+key $(esc "$STATUS_LIST_KID") at $(esc "$STATUS_RETIRED_AT")" ;;
+    before)
+      ok "key $(esc "$STATUS_LIST_KID") is retired (at $(esc "$STATUS_RETIRED_AT")), but this list was issued at $(esc "$SISSUEDAT"), before the retirement" ;;
+    *)
+      stat_bad "malformed_document — issuedAt '$(esc "$SISSUEDAT")' cannot be compared with the retirement of key \
+$(esc "$STATUS_LIST_KID") at $(esc "$STATUS_RETIRED_AT")" ;;
+  esac
 fi
 
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$MIN_SEQ" ]; then
