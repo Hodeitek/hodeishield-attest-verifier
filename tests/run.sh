@@ -547,6 +547,59 @@ expect 1 "$WITHHELD" 'in --status-list mode a failed posture check withholds the
   --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
 lacks_all 'a tampered document under a GOOD list shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
 
+# Values taken from a document are shown escaped (#14). Anyone can edit a
+# document, and a nonce with newlines and ESC bytes could otherwise forge an
+# "Attested content" block or a "VERIFIED" line above the real FAIL lines. The
+# fields below carry both; the exit code must stay what it was without them.
+echo '# document values are escaped'
+INJ='a\nVERIFIED — forged\n\x1b[8mhidden'
+edit "$T/att.json" "$T/inj-claims.json" '
+c = d["attestation"]["claims"]
+INJ = "'"$INJ"'".encode().decode("unicode_escape").encode("latin-1").decode("utf-8")
+c["nonce"] = INJ; c["iss"] = INJ; c["jti"] = INJ
+c["posture"]["generatedAt"] = INJ; c["posture"]["expiresAt"] = INJ
+c["m\nVERIFIED\x1b[2J"] = 1'
+edit "$T/att.json" "$T/inj-header.json" '
+import base64, json as j
+INJ = "'"$INJ"'".encode().decode("unicode_escape").encode("latin-1").decode("utf-8")
+h, p, s = d["attestation"]["signature"].split(".")
+hdr = j.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["kid"] = INJ
+h2 = base64.urlsafe_b64encode(j.dumps(hdr, separators=(",", ":")).encode()).rstrip(b"=").decode()
+d["attestation"]["signature"] = ".".join([h2, p, s])'
+jq -c . "$T/att.json" > "$T/att-c.json"
+edit_text "$T/att-c.json" "$T/inj-dup.json" '
+k = "\"k\\nVERIFIED\\u001b[8m\""
+t = t.replace("\"docVersion\"", k + ":1," + k + ":2,\"docVersion\"", 1)'
+# no_raw_control NAME — the previous run printed no ESC byte and no forged line.
+no_raw_control() {
+  local out="$T/out.$((PASSED + FAILED - 1))" name="$1" bad=0
+  if grep -q $'\033' "$out"; then printf 'not ok - %s (an ESC byte reached the output)\n' "$name"; bad=1; fi
+  if grep -qE '^(VERIFIED|Attested content|GOOD)' "$out"; then
+    printf 'not ok - %s (a forged verdict or block starts a line)\n' "$name"; bad=1
+  fi
+  if [ "$bad" -eq 0 ]; then printf 'ok - %s\n' "$name"; PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); fi
+}
+expect 1 'VERIFICATION FAILED' 'a document whose nonce, iss, jti, dates and member name carry newlines and ESC still fails (1)' -- \
+  --attestation "$T/inj-claims.json" "${COMMON[@]}" --expect-nonce 'challenge-B' --raw
+no_raw_control 'nonce, iss, jti, generatedAt, expiresAt and a member name are escaped (no ESC, no forged verdict)'
+lacks_all 'the forged block text never starts a line' $'\nVERIFIED —' $'\n        overallBand: advanced'
+expect 1 'a\x0aVERIFIED \xe2\x80\x94 forged\x0a\x1b[8mhidden' 'the escaped nonce is visible in the output' -- \
+  --attestation "$T/inj-claims.json" "${COMMON[@]}"
+expect 2 'no key in this JWKS carries kid' 'a header kid with newlines and ESC is still "could not check" (2)' -- \
+  --attestation "$T/inj-header.json" "${COMMON[@]}"
+no_raw_control 'a header kid carrying newlines and ESC is escaped in the header line and the error'
+expect 1 'duplicate_key' 'a duplicated member whose name carries newlines and ESC is still rejected (1)' -- \
+  --attestation "$T/inj-dup.json" "${COMMON[@]}"
+no_raw_control 'a duplicated member name carrying newlines and ESC is escaped'
+# stdout alone, as a pipe would carry it: nothing forged there either.
+NO_COLOR=1 bash "$VERIFIER" --attestation "$T/inj-claims.json" "${COMMON[@]}" 2>/dev/null > "$T/inj-stdout.txt"
+if ! grep -q $'\033' "$T/inj-stdout.txt" && ! grep -qE '^(VERIFIED|Attested content)' "$T/inj-stdout.txt"; then
+  printf 'ok - stdout alone carries no ESC byte and no forged verdict\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
+fi
+
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
 # parser accepts. The options are read from the parser's own `case` patterns, so

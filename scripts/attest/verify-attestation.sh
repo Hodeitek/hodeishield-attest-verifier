@@ -247,6 +247,24 @@ Documentation: README.md and docs/security/attest-verification.md
 USAGE
 }
 
+# esc VALUE — print VALUE with every byte that is not printable ASCII shown as a
+# visible \xHH escape. EVERY value that comes from a document, a key set or a
+# status list goes through this before it reaches the terminal: anyone can edit
+# a document, and an unescaped newline or ESC inside a nonce could forge lines
+# (an "Attested content" block, a VERIFIED verdict) or hide text, whether or not
+# the signature verifies. The C locale makes it count bytes, so a multi-byte
+# character cannot slip through as one "printable" unit.
+esc() {
+  local LC_ALL=C
+  local s="$1" out='' c='' i=0 n=${#1}
+  local plain='^[ -~]*$' one='^[ -~]$'
+  if [[ "$s" =~ $plain ]]; then printf '%s' "$s"; return 0; fi
+  for (( i = 0; i < n; i++ )); do
+    c="${s:i:1}"
+    if [[ "$c" =~ $one ]]; then out+="$c"; else printf -v c '\\x%02x' "'$c"; out+="$c"; fi
+  done
+  printf '%s' "$out"
+}
 while [ $# -gt 0 ]; do
   case "$1" in
     --jws)          JWS_FILE="${2:?}"; shift 2 ;;
@@ -273,7 +291,7 @@ while [ $# -gt 0 ]; do
     --expect-kid)
       [ $# -ge 2 ] || { printf 'error: --expect-kid needs a value\n' >&2; exit 2; }
       [[ "$2" =~ ^[A-Za-z0-9_-]{21}[AQgw]$ ]] \
-        || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$2" >&2; exit 2; }
+        || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$(esc "$2")" >&2; exit 2; }
       EXPECT_KIDS+=("$2"); shift 2 ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
     --status)               STATUS_SRC="${2:?}"; shift 2 ;;
@@ -720,7 +738,10 @@ if isinstance(doc, Obj):
     top = [k for k, _ in doc]
     if "attestation" in top:
         out += [k + " (beside and inside attestation)" for k in ("claims", "signature") if k in top]
-sys.stdout.write("\n".join(sorted(set(out))))
+def vis(t):
+    return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
+# Member names come from the document; they are shown, so they are escaped here.
+sys.stdout.write("\n".join(sorted(set(vis(x) for x in out))))
 '
 
 # Document surgery: pull the pieces out of whatever JSON the caller handed us.
@@ -787,7 +808,9 @@ elif mode == "unsigned":
         for i, f in enumerate(p.get("frameworks") or []):
             if isinstance(f, dict):
                 extra += ["posture.frameworks[%d].%s" % (i, k) for k in f if k not in SIGNED_FRAMEWORK]
-    sys.stdout.write("\n".join(extra))
+    def vis(t):
+        return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
+    sys.stdout.write("\n".join(vis(x) for x in extra))
 elif mode == "summary":
     # What the signature covers, for a human: only members the canonical encoders
     # read. Control characters are shown as ? so a value cannot drive the terminal.
@@ -985,19 +1008,19 @@ json_str() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "
 ALG="$(json_str "$WORKDIR/header.json" alg)"
 KID="$(json_str "$WORKDIR/header.json" kid)"
 TYP="$(json_str "$WORKDIR/header.json" typ)"
-printf '        %s\n' "$(cat "$WORKDIR/header.json")"
+printf '        %s\n' "$(esc "$(cat "$WORKDIR/header.json")")"
 
 # Never dispatch on `alg` — compare it as a constant. The verification primitive
 # below is ML-DSA-65 unconditionally, so `alg: none` is a non-event.
 if [ "$ALG" = 'ML-DSA-65' ]; then
   ok "alg is ML-DSA-65 (RFC 9964, IANA-permanent)"
 else
-  bad "alg is '${ALG}', expected 'ML-DSA-65'. Refusing to verify under a substituted algorithm."
+  bad "alg is '$(esc "${ALG}")', expected 'ML-DSA-65'. Refusing to verify under a substituted algorithm."
 fi
 if [ "$TYP" = 'application/attest+jws' ]; then
   ok "typ is application/attest+jws — cannot be replayed into another JWS surface"
 else
-  bad "typ is '${TYP}', expected 'application/attest+jws'"
+  bad "typ is '$(esc "${TYP}")', expected 'application/attest+jws'"
 fi
 if grep -q '"crit"' "$WORKDIR/header.json"; then
   bad "header carries 'crit' — RFC 7515 §4.1.11 requires rejection of extensions we do not implement"
@@ -1019,7 +1042,7 @@ else: print(",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)
 if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
   ok "header is the closed set {alg, kid, typ}"
 else
-  bad "malformed_document — header members are '${HEADER_MEMBERS}', expected exactly alg,kid,typ"
+  bad "malformed_document — header members are '$(esc "${HEADER_MEMBERS}")', expected exactly alg,kid,typ"
 fi
 
 # --- 3. Public key -----------------------------------------------------------
@@ -1051,12 +1074,12 @@ for k in json.load(open(sys.argv[1])).get("keys") or []:
     # can only turn "I am holding the wrong key document" into a signature
     # failure that reads like a forged document. Those are different findings
     # and a verifier must not conflate them.
-    die "no key in this JWKS carries kid '${KID}'.
+    die "no key in this JWKS carries kid '$(esc "${KID}")'.
        This is NOT evidence that the document is forged — it means you are
        holding the wrong or a stale key document. Re-fetch the JWKS and retry;
        a retired key leaves the published set at the end of its overlap."
   else
-    ok "selected the JWKS key whose kid is '${KID}'"
+    ok "selected the JWKS key whose kid is '$(esc "${KID}")'"
   fi
 fi
 
@@ -1076,9 +1099,9 @@ openssl dgst -sha256 -binary -out "$WORKDIR/kiddigest.bin" "$WORKDIR/kidinput.bi
 head -c 16 "$WORKDIR/kiddigest.bin" > "$WORKDIR/kid16.bin"
 DERIVED_KID="$(b64url_encode "$WORKDIR/kid16.bin")"
 if [ "$DERIVED_KID" = "$KID" ]; then
-  ok "kid '${KID}' is derivable from these key bytes"
+  ok "kid '$(esc "${KID}")' is derivable from these key bytes"
 else
-  bad "kid mismatch — header says '${KID}', the key bytes derive '${DERIVED_KID}'.
+  bad "kid mismatch — header says '$(esc "${KID}")', the key bytes derive '${DERIVED_KID}'.
           The key document is mislabelled or you are holding the wrong key."
 fi
 
@@ -1105,7 +1128,7 @@ fi
 printf '308207b2300b0609608648016503040312038207a100' | hex_to_bin > "$WORKDIR/pub.der"
 cat "$WORKDIR/pub.raw" >> "$WORKDIR/pub.der"
 openssl pkey -pubin -inform DER -in "$WORKDIR/pub.der" -out "$WORKDIR/pub.pem" 2>"$WORKDIR/err" \
-  || die "OpenSSL rejected the reconstructed public key: $(cat "$WORKDIR/err")"
+  || die "OpenSSL rejected the reconstructed public key: $(esc "$(cat "$WORKDIR/err")")"
 ok "loaded as an ML-DSA-65 public key"
 
 # --- 4. Payload — the signing envelope ---------------------------------------
@@ -1147,12 +1170,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   if [ "$CLAIMS_KID" = "$KID" ]; then
     ok "claims.kid (E3) equals the protected-header kid — one key, named twice, agreeing"
   else
-    bad "kid_mismatch — the header says '${KID}', the signed body says '${CLAIMS_KID}'.
+    bad "kid_mismatch — the header says '$(esc "${KID}")', the signed body says '$(esc "${CLAIMS_KID}")'.
           A document cannot name one key in its body and be signed by another."
   fi
 elif [ -n "$ATTACHED_UNDECODABLE" ]; then
   bad "malformed_document — the attached payload is not a hodei-shield.attest.attestation.v1
-          envelope (${ATTACHED_UNDECODABLE}). There are no claims to check, so nothing here verifies."
+          envelope ($(esc "${ATTACHED_UNDECODABLE}")). There are no claims to check, so nothing here verifies."
   PAYLOAD_B64="$P"
 else
   ok "using the payload embedded in the attached JWS"
@@ -1201,7 +1224,7 @@ if [ -n "$POSTURE_FILE" ]; then
     G="$(epoch_of "$GENERATED")"
     if [ -n "$G" ]; then
       AGE=$(( NOW - G ))
-      printf '        generatedAt: %s  (age %ss)\n' "$GENERATED" "$AGE"
+      printf '        generatedAt: %s  (age %ss)\n' "$(esc "$GENERATED")" "$AGE"
       if [ $(( G - POSTURE_CLOCK_SKEW_SECONDS )) -gt "$NOW" ]; then
         bad "not_yet_valid — generatedAt is $(( G - NOW ))s in the future, beyond the
           ${POSTURE_CLOCK_SKEW_SECONDS}s clock-skew allowance"
@@ -1214,7 +1237,7 @@ if [ -n "$POSTURE_FILE" ]; then
       # A FAIL, as posture.ts rejects it (`malformed_document`): a document whose
       # age cannot be read has not had its age checked, and until 2026-09-29 this
       # was a warning that let it through with freshness unchecked.
-      bad "could not parse generatedAt '${GENERATED}' — freshness was NOT checked.
+      bad "could not parse generatedAt '$(esc "${GENERATED}")' — freshness was NOT checked.
           Do not read this as 'fresh'. Upgrade date(1) or install python3."
     fi
   else
@@ -1223,14 +1246,14 @@ if [ -n "$POSTURE_FILE" ]; then
 
   if [ -n "$EXPIRES" ]; then
     E="$(epoch_of "$EXPIRES")"
-    printf '        expiresAt:   %s\n' "$EXPIRES"
+    printf '        expiresAt:   %s\n' "$(esc "$EXPIRES")"
     if [ -z "$E" ]; then
       # NOT a pass and NOT a warning. Before 2026-08-20 this branch fell through
       # to `ok "not expired"`, so on any host whose date(1) could not parse the
       # string — BSD, macOS — an EXPIRED document reported PASS. A verifier that
       # cannot read the expiry has not checked the expiry, and the whole point
       # of this tool is that it never says otherwise.
-      bad "could not parse expiresAt '${EXPIRES}' — the expiry was NOT checked.
+      bad "could not parse expiresAt '$(esc "${EXPIRES}")' — the expiry was NOT checked.
           Do not read this as 'not expired'. Upgrade date(1) or install python3."
     elif [ "$NOW" -gt "$E" ]; then
       stale "EXPIRED $(( NOW - E ))s ago — re-fetch, do not accept"
@@ -1259,9 +1282,9 @@ if [ -n "$POSTURE_FILE" ]; then
 
   if [ -n "$EXPECT_SLUG" ]; then
     if [ "$SLUG" = "$EXPECT_SLUG" ]; then
-      ok "posture is for slug '${SLUG}', as expected"
+      ok "posture is for slug '$(esc "${SLUG}")', as expected"
     else
-      bad "posture is for slug '${SLUG}', not the expected '${EXPECT_SLUG}' —
+      bad "posture is for slug '$(esc "${SLUG}")', not the expected '${EXPECT_SLUG}' —
           this attestation belongs to a different organisation"
     fi
   fi
@@ -1284,12 +1307,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   CLAIMS_BAND="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" field overallBand)"
   CLAIMS_BAND_PRESENT="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" has overallBand)"
 
-  printf '        docVersion:  %s\n' "${CLAIMS_DOCVERSION:-$MISSING_LABEL}"
-  printf '        iss:         %s\n' "${CLAIMS_ISS:-$MISSING_LABEL}"
-  printf '        kid:         %s\n' "${CLAIMS_KID:-$MISSING_LABEL}"
-  printf '        jti:         %s\n' "${CLAIMS_JTI:-$MISSING_LABEL}"
+  printf '        docVersion:  %s\n' "$(esc "${CLAIMS_DOCVERSION:-$MISSING_LABEL}")"
+  printf '        iss:         %s\n' "$(esc "${CLAIMS_ISS:-$MISSING_LABEL}")"
+  printf '        kid:         %s\n' "$(esc "${CLAIMS_KID:-$MISSING_LABEL}")"
+  printf '        jti:         %s\n' "$(esc "${CLAIMS_JTI:-$MISSING_LABEL}")"
   if [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
-    printf '        nonce:       %s\n' "$CLAIMS_NONCE"
+    printf '        nonce:       %s\n' "$(esc "$CLAIMS_NONCE")"
   else
     printf '        nonce:       null  (no challenge — see --expect-nonce)\n'
   fi
@@ -1297,7 +1320,7 @@ if [ -n "$CLAIMS_FILE" ]; then
   if [ "$CLAIMS_DOCVERSION" = 'attest.attestation.v1' ]; then
     ok "docVersion (E1) is attest.attestation.v1 — and it is inside the signature, so it cannot be rewritten on the wire"
   else
-    bad "unsupported_version — docVersion is '${CLAIMS_DOCVERSION:-$MISSING_LABEL}'"
+    bad "unsupported_version — docVersion is '$(esc "${CLAIMS_DOCVERSION:-$MISSING_LABEL}")'"
   fi
 
   # The canonical encoders read a CLOSED set of members and silently skip the
@@ -1326,12 +1349,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   # by somebody else's HodeiShield deployment.
   if [ -n "$EXPECT_ISSUER" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
-      ok "iss (E2) is '${CLAIMS_ISS}', as expected"
+      ok "iss (E2) is '$(esc "${CLAIMS_ISS}")', as expected"
     else
-      bad "issuer_mismatch — iss is '${CLAIMS_ISS}', not the expected '${EXPECT_ISSUER}'"
+      bad "issuer_mismatch — iss is '$(esc "${CLAIMS_ISS}")', not the expected '${EXPECT_ISSUER}'"
     fi
   else
-    warn "no --expect-issuer: iss is '${CLAIMS_ISS}' and nothing pinned it. The key set you"
+    warn "no --expect-issuer: iss is '$(esc "${CLAIMS_ISS}")' and nothing pinned it. The key set you"
     warn "verified against must be the one THAT origin publishes, or this proves nothing."
   fi
 
@@ -1342,13 +1365,13 @@ if [ -n "$CLAIMS_FILE" ]; then
       if [ "$CLAIMS_NONCE_PRESENT" = '0' ]; then
         ok "nonce (E5) is null, as required by --expect-nonce ''"
       else
-        bad "nonce_mismatch — you required no challenge, the document carries '${CLAIMS_NONCE}'"
+        bad "nonce_mismatch — you required no challenge, the document carries '$(esc "${CLAIMS_NONCE}")'"
       fi
     elif [ "$CLAIMS_NONCE_PRESENT" = '1' ] && [ "$CLAIMS_NONCE" = "$EXPECT_NONCE" ]; then
       ok "nonce (E5) echoes your challenge verbatim — this document was minted for you, now"
     else
       bad "nonce_mismatch — you challenged with '${EXPECT_NONCE}', the document carries \
-'${CLAIMS_NONCE:-null}'. A replayed or substituted document, however well it verifies."
+'$(esc "${CLAIMS_NONCE:-null}")'. A replayed or substituted document, however well it verifies."
     fi
   elif [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
     warn "the document carries a nonce but you did not pass --expect-nonce, so nothing"
@@ -1443,7 +1466,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$STATUS_DOC_VERSION" = 'attest.statuslist.v1' ]; then
     ok "docVersion is attest.statuslist.v1"
   else
-    stat_bad "unsupported_version — statusList.docVersion is '${STATUS_DOC_VERSION:-$MISSING_LABEL}', \
+    stat_bad "unsupported_version — statusList.docVersion is '$(esc "${STATUS_DOC_VERSION:-$MISSING_LABEL}")', \
 expected 'attest.statuslist.v1'"
   fi
 fi
@@ -1504,7 +1527,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
     ok "header is the closed set {alg, kid, typ} — nothing unexamined can carry meaning"
   else
-    stat_bad "malformed_document — header members are '${HEADER_MEMBERS}', expected exactly alg,kid,typ"
+    stat_bad "malformed_document — header members are '$(esc "${HEADER_MEMBERS}")', expected exactly alg,kid,typ"
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
@@ -1515,12 +1538,12 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$SALG" = 'ML-DSA-65' ]; then
     ok "alg is ML-DSA-65"
   else
-    stat_bad "unsupported_alg — alg is '${SALG}', expected 'ML-DSA-65'"
+    stat_bad "unsupported_alg — alg is '$(esc "${SALG}")', expected 'ML-DSA-65'"
   fi
   if [ "$STYP" = 'application/attest-status+jws' ]; then
     ok "typ is application/attest-status+jws — cannot be replayed as a posture attestation"
   else
-    stat_bad "unexpected_typ — typ is '${STYP}', expected 'application/attest-status+jws'"
+    stat_bad "unexpected_typ — typ is '$(esc "${STYP}")', expected 'application/attest-status+jws'"
   fi
 fi
 
@@ -1529,9 +1552,9 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   STATUS_PUB_B64URL="$(jq -r --arg kid "$STATUS_LIST_KID" \
     '.keys[]? | select(.kid==$kid) | .pub' "$WORKDIR/status-keys.json" | head -1)"
   if [ -n "$STATUS_PUB_B64URL" ]; then
-    ok "selected the --status-keys entry whose kid is '${STATUS_LIST_KID}'"
+    ok "selected the --status-keys entry whose kid is '$(esc "${STATUS_LIST_KID}")'"
   else
-    stat_bad "unknown_kid — '${STATUS_LIST_KID}' is not in --status-keys. Unresolvable is a \
+    stat_bad "unknown_kid — '$(esc "${STATUS_LIST_KID}")' is not in --status-keys. Unresolvable is a \
 rejection, never a fallback to another key — and never a fallback to the attestation --jwks, \
 which is a disjoint set by design (status-keys.ts)."
   fi
@@ -1555,9 +1578,9 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   head -c 16 "$WORKDIR/status_kiddigest.bin" > "$WORKDIR/status_kid16.bin"
   STATUS_DERIVED_KID="$(b64url_encode "$WORKDIR/status_kid16.bin")"
   if [ "$STATUS_DERIVED_KID" = "$STATUS_LIST_KID" ]; then
-    ok "kid '${STATUS_LIST_KID}' is derivable from these key bytes"
+    ok "kid '$(esc "${STATUS_LIST_KID}")' is derivable from these key bytes"
   else
-    stat_bad "kid mismatch — status-keys entry claims '${STATUS_LIST_KID}', its bytes derive \
+    stat_bad "kid mismatch — status-keys entry claims '$(esc "${STATUS_LIST_KID}")', its bytes derive \
 '${STATUS_DERIVED_KID}'"
   fi
 fi
@@ -1570,7 +1593,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
        2>"$WORKDIR/status_err"; then
     ok "loaded as an ML-DSA-65 public key"
   else
-    stat_bad "OpenSSL rejected the reconstructed status public key: $(cat "$WORKDIR/status_err")"
+    stat_bad "OpenSSL rejected the reconstructed status public key: $(esc "$(cat "$WORKDIR/status_err")")"
   fi
 fi
 
@@ -1581,7 +1604,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
     SCANON_LEN="$(wc -c < "$WORKDIR/status_canon.bin" | tr -d ' ')"
     ok "re-derived ${SCANON_LEN} canonical bytes from statusList (independent encoder)"
   else
-    stat_bad "encoding_failed — canonical encoder refused the document: $(cat "$WORKDIR/status_canon_err")"
+    stat_bad "encoding_failed — canonical encoder refused the document: $(esc "$(cat "$WORKDIR/status_canon_err")")"
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
@@ -1603,16 +1626,16 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ "$LIST_KID" = "$STATUS_LIST_KID" ]; then
     ok "claims.kid equals the JWS header kid (signed twice, deliberately)"
   else
-    stat_bad "kid_mismatch — statusList.kid ('${LIST_KID}') != JWS header kid ('${STATUS_LIST_KID}')"
+    stat_bad "kid_mismatch — statusList.kid ('$(esc "${LIST_KID}")') != JWS header kid ('$(esc "${STATUS_LIST_KID}")')"
   fi
 fi
 
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$EXPECT_ISSUER" ]; then
   LIST_ISS="$(jq -r '.iss' "$WORKDIR/list.json")"
   if [ "$LIST_ISS" = "$EXPECT_ISSUER" ]; then
-    ok "iss is '${LIST_ISS}', as expected"
+    ok "iss is '$(esc "${LIST_ISS}")', as expected"
   else
-    stat_bad "issuer_mismatch — iss is '${LIST_ISS}', expected '${EXPECT_ISSUER}'"
+    stat_bad "issuer_mismatch — iss is '$(esc "${LIST_ISS}")', expected '${EXPECT_ISSUER}'"
   fi
 fi
 
@@ -1623,8 +1646,8 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   SNEXTUPDATE="$(jq -r '.nextUpdate' "$WORKDIR/list.json")"
   SIAT="$(epoch_of "$SISSUEDAT")"
   SNUP="$(epoch_of "$SNEXTUPDATE")"
-  printf '        issuedAt:   %s\n' "$SISSUEDAT"
-  printf '        nextUpdate: %s\n' "$SNEXTUPDATE"
+  printf '        issuedAt:   %s\n' "$(esc "$SISSUEDAT")"
+  printf '        nextUpdate: %s\n' "$(esc "$SNEXTUPDATE")"
   if [ -z "$SIAT" ] || [ -z "$SNUP" ]; then
     stat_bad "malformed_document — could not parse issuedAt/nextUpdate as RFC 3339"
   else
@@ -1653,16 +1676,16 @@ fi
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$MIN_SEQ" ]; then
   SSEQ="$(jq -r '.seq' "$WORKDIR/list.json")"
   if [ "$SSEQ" -lt "$MIN_SEQ" ] 2>/dev/null; then
-    stat_bad "rolled_back — seq ${SSEQ} is lower than the highest previously accepted (${MIN_SEQ})"
+    stat_bad "rolled_back — seq $(esc "${SSEQ}") is lower than the highest previously accepted (${MIN_SEQ})"
   else
-    ok "seq ${SSEQ} >= previously accepted ${MIN_SEQ} — not a rollback"
+    ok "seq $(esc "${SSEQ}") >= previously accepted ${MIN_SEQ} — not a rollback"
   fi
 fi
 
 # --- Rule S: a list may not revoke its own signer ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
   if jq -e --arg kid "$LIST_KID" '.keys[]? | select(.kid==$kid)' "$WORKDIR/list.json" >/dev/null 2>&1; then
-    stat_bad "self_revocation — the list revokes its own signing key ('${LIST_KID}')"
+    stat_bad "self_revocation — the list revokes its own signing key ('$(esc "${LIST_KID}")')"
   else
     ok "the list does not name its own signing key among the revoked keys (Rule S)"
   fi
@@ -1672,8 +1695,8 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   STATUS_LIST_VALID=1
   printf '        %s revoked key(s), %s revoked subject(s), truncated=%s, seq=%s, iss=%s\n' \
     "$(jq '.keys | length' "$WORKDIR/list.json")" "$(jq '.subjects | length' "$WORKDIR/list.json")" \
-    "$(jq -r '.truncated' "$WORKDIR/list.json")" "$(jq -r '.seq' "$WORKDIR/list.json")" \
-    "$(jq -r '.iss' "$WORKDIR/list.json")"
+    "$(jq -r '.truncated' "$WORKDIR/list.json")" "$(esc "$(jq -r '.seq' "$WORKDIR/list.json")")" \
+    "$(esc "$(jq -r '.iss' "$WORKDIR/list.json")")"
   printf '\n%s%sthe status list itself verifies.%s\n' "$GREEN" "$BOLD" "$RESET"
 else
   printf '\n%s%sthe status list does NOT verify%s (%d check(s) failed) — its content is UNKNOWN,\n' \
@@ -1726,7 +1749,7 @@ else
     { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$EFFECTIVE_SLUG"; } \
       | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
     SUBJECT_HASH="$(b64url_encode "$WORKDIR/subject_hash.bin")"
-    printf '        subjectHash(%s) = %s\n' "$EFFECTIVE_SLUG" "$SUBJECT_HASH"
+    printf '        subjectHash(%s) = %s\n' "$(esc "$EFFECTIVE_SLUG")" "$SUBJECT_HASH"
 
     SUBJ_ENTRY="$(jq -c --arg h "$SUBJECT_HASH" \
       '.subjects[]? | select(.subjectHash==$h)' "$WORKDIR/list.json" | head -1)"
@@ -1735,8 +1758,8 @@ else
       SUBJ_REASON="$(printf '%s' "$SUBJ_ENTRY" | jq -r '.reason')"
       if [ -z "$EFFECTIVE_GENAT" ]; then
         REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
-        warn "subject '${EFFECTIVE_SLUG}' IS listed, but no generatedAt was given \
-(--check-generated-at, or --attestation/--claims) to compare against notBefore='${SUBJ_NOTBEFORE}' \
+        warn "subject '$(esc "${EFFECTIVE_SLUG}")' IS listed, but no generatedAt was given \
+(--check-generated-at, or --attestation/--claims) to compare against notBefore='$(esc "${SUBJ_NOTBEFORE}")' \
 — cannot \
 decide, so UNKNOWN, never 'good'"
       else
@@ -1765,12 +1788,12 @@ fi
 case "$REVOCATION_STATUS" in
   good)
     printf '\n%s%sGOOD%s' "$GREEN" "$BOLD" "$RESET"
-    [ -n "$EFFECTIVE_KID" ]  && printf ' — kid %s is not revoked' "$EFFECTIVE_KID"
-    [ -n "$EFFECTIVE_SLUG" ] && printf ', subject %s carries no earlier withdrawal' "$EFFECTIVE_SLUG"
-    printf ' (list seq %s).\n' "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')"
+    [ -n "$(esc "$EFFECTIVE_KID")" ]  && printf ' — kid %s is not revoked' "$(esc "$EFFECTIVE_KID")"
+    [ -n "$(esc "$EFFECTIVE_SLUG")" ] && printf ', subject %s carries no earlier withdrawal' "$(esc "$EFFECTIVE_SLUG")"
+    printf ' (list seq %s).\n' "$(esc "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')")"
     ;;
   revoked)
-    printf '\n%s%sREVOKED%s — via %s, reason "%s".\n' "$RED" "$BOLD" "$RESET" "$REVOCATION_VIA" "$REVOCATION_REASON"
+    printf '\n%s%sREVOKED%s — via %s, reason "%s".\n' "$RED" "$BOLD" "$RESET" "$REVOCATION_VIA" "$(esc "$REVOCATION_REASON")"
     ;;
   unknown)
     printf '\n%s%sUNKNOWN%s (%s). Neither good nor revoked — do not treat this as "not revoked".\n' \
@@ -1818,10 +1841,10 @@ stale_only() {
 stale_verdict() {
   if [ "$STALE_EXPIRED" -eq 1 ]; then
     printf '%s%sEXPIRED%s — the signature is valid, but this attestation expired on %s.\n' \
-      "$RED" "$BOLD" "$RESET" "${EXPIRES:-}" >&2
+      "$RED" "$BOLD" "$RESET" "$(esc "${EXPIRES:-}")" >&2
   else
     printf '%s%sEXPIRED%s — the signature is valid, but this attestation was generated on %s,\n' \
-      "$RED" "$BOLD" "$RESET" "${GENERATED:-}" >&2
+      "$RED" "$BOLD" "$RESET" "$(esc "${GENERATED:-}")" >&2
     printf 'more than the %ss you allow (--max-age-seconds) ago.\n' "$MAX_AGE_SECONDS" >&2
   fi
   printf 'It was not altered, but it no longer says anything about the organisation now:\n' >&2
@@ -1831,7 +1854,7 @@ stale_verdict() {
   # shape of an origin and a slug, so nothing odd is ever printed as a command.
   if [[ "${CLAIMS_ISS:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
      && [[ "${SLUG:-}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-    printf '\n  curl -fsS %s/api/public/attest/%s -o att.json\n' "$CLAIMS_ISS" "$SLUG" >&2
+    printf '\n  curl -fsS %s/api/public/attest/%s -o att.json\n' "$(esc "$CLAIMS_ISS")" "$(esc "$SLUG")" >&2
   fi
   printf '\n' >&2
   exit 1
@@ -1861,7 +1884,7 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
       exit 0
       ;;
     revoked)
-      printf '%s%sREVOKED%s — reason "%s". Do not rely on this document.\n\n' "$RED" "$BOLD" "$RESET" "$REVOCATION_REASON" >&2
+      printf '%s%sREVOKED%s — reason "%s". Do not rely on this document.\n\n' "$RED" "$BOLD" "$RESET" "$(esc "$REVOCATION_REASON")" >&2
       exit 1
       ;;
     *)
