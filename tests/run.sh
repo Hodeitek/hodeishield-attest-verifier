@@ -600,6 +600,14 @@ else
   printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
 fi
 
+# A display problem must never change a verdict (#14): the summary is written as
+# UTF-8 bytes, so a non-UTF-8 stdout does not turn a verified document into an error.
+mint_attest --out "$T/label.json" --framework 'ens—alto=basic'
+PYTHONIOENCODING=ascii expect 0 'ENS—ALTO (ens—alto): basic' 'a non-ASCII framework label under an ASCII Python stdout still verifies (0)' -- \
+  --attestation "$T/label.json" "${COMMON[@]}"
+PYTHONIOENCODING=ascii expect 0 'VERIFIED — this document was signed' 'the same document still reaches its VERIFIED verdict' -- \
+  --attestation "$T/label.json" "${COMMON[@]}" --raw
+
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
 # parser accepts. The options are read from the parser's own `case` patterns, so

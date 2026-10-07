@@ -789,7 +789,9 @@ elif mode == "posture":
     json.dump(p, open(sys.argv[3], "w"), indent=2)
 elif mode == "field":
     v = doc.get(sys.argv[3])
-    if isinstance(v, str): sys.stdout.write(v)
+    # Bytes, not text: a non-UTF-8 stdout (PYTHONIOENCODING) must not make a
+    # value unreadable and so change a verdict.
+    if isinstance(v, str): sys.stdout.buffer.write(v.encode("utf-8", "surrogatepass"))
     elif v is not None: sys.stdout.write(json.dumps(v))
 elif mode == "has":
     sys.stdout.write("0" if doc.get(sys.argv[3]) is None else "1")
@@ -817,14 +819,17 @@ elif mode == "summary":
     def clean(v): return "".join(ch if ch.isprintable() else "?" for ch in str(v))
     def show(v): return "null" if v is None else clean(v)
     p = doc.get("posture") or {}
-    print("        overallBand: " + show(doc.get("overallBand")))
-    print("        subject:     %s  (visibility: %s)" % (show(p.get("slug")), show(p.get("visibility"))))
-    print("        generatedAt: " + show(p.get("generatedAt")))
-    print("        lastCheckedAt: %s" % ("null  (no monitoring heartbeat is claimed)" if p.get("lastCheckedAt") is None
-          else clean(p["lastCheckedAt"]) + "  (freshness of the underlying data, can be older than generatedAt)"))
+    lines = ["        overallBand: " + show(doc.get("overallBand")),
+             "        subject:     %s  (visibility: %s)" % (show(p.get("slug")), show(p.get("visibility"))),
+             "        generatedAt: " + show(p.get("generatedAt")),
+             "        lastCheckedAt: %s" % ("null  (no monitoring heartbeat is claimed)" if p.get("lastCheckedAt") is None
+                else clean(p["lastCheckedAt"]) + "  (freshness of the underlying data, can be older than generatedAt)")]
     fw = p.get("frameworks") or []
-    print("        frameworks:  " + ("none attested" if not fw else "%d attested" % len(fw)))
-    for f in fw: print("          %s (%s): %s" % (clean(f.get("label")), clean(f.get("code")), clean(f.get("band"))))
+    lines.append("        frameworks:  " + ("none attested" if not fw else "%d attested" % len(fw)))
+    for f in fw: lines.append("          %s (%s): %s" % (clean(f.get("label")), clean(f.get("code")), clean(f.get("band"))))
+    # Written as UTF-8 bytes whatever the terminal encoding: a label such as
+    # "ens—alto" must not turn a verified document into an error.
+    sys.stdout.buffer.write(("\n".join(lines) + "\n").encode("utf-8", "backslashreplace"))
 else: raise SystemExit("document: unknown mode %r" % mode)
 '
 
@@ -1814,7 +1819,8 @@ if [ -n "$JWS_FILE" ]; then
   if [ "$FAILURES" -eq 0 ] && { [ "$STATUS_LIST_MODE" -eq 0 ] || [ "${REVOCATION_STATUS:-}" = good ]; }; then
     if [ -n "$CLAIMS_FILE" ]; then
       printf '\n%sAttested content%s (covered by the signature, and the document verified)\n' "$BOLD" "$RESET"
-      python3 -c "$DOCX_PY" "$CLAIMS_FILE" summary
+      # A display failure must never change the verdict.
+      python3 -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
       if [ "$SHOW_RAW" -eq 1 ]; then
         printf '\n        posture (E7, the frozen v1 bytes):\n'
         if command -v jq >/dev/null 2>&1; then
