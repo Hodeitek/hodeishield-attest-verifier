@@ -384,6 +384,14 @@ if [ "$HAVE_ATTESTATION" -eq 1 ] || [ "$STATUS_LIST_MODE" -eq 0 ]; then
 fi
 [ -z "$CLAIMS_FILE" ] || [ -r "$CLAIMS_FILE" ] || die "cannot read ${CLAIMS_FILE}"
 
+# The same rule for the key: a --jwks next to a --pub-b64url would be read by
+# neither the kid check nor the retirement check, and the run would report on a
+# key set it never looked at.
+if [ -n "$JWKS_FILE" ] && [ -n "$PUB_B64URL" ]; then
+  die "--pub-b64url cannot be combined with --jwks: they are two sources for the signing key, and a \
+raw key has no kid, no retirement marker and no key set to look them up in. Drop one."
+fi
+
 # Refused rather than resolved by precedence. Two sources for the same document
 # is exactly the situation where a verifier reads one and reports on the other.
 if [ -n "$POSTURE_FILE" ] && { [ -n "$CLAIMS_FILE" ] || [ -n "$ATTESTATION_FILE" ]; }; then
@@ -753,15 +761,18 @@ def vis(t):
 sys.stdout.write("\n".join(sorted(set(vis(x) for x in out))))
 '
 
-# Retirement of a signing key (the JWK member `hs_retired_at`). One reader for
-# both key sets, so the grammar, the instant arithmetic and the verdicts exist
-# once.
+# Key selection and retirement of a signing key (the JWK member
+# `hs_retired_at`). One reader for both key sets, so which entry is selected,
+# the grammar, the instant arithmetic and the verdicts exist once.
 #
-#   argv[1] = "key"  argv[2] = key file  argv[3] = kid
-#       line 1: absent | ok | malformed (the first entry with that kid and a
-#       string `pub`, the one the caller selects); then the member's value.
-#       A string is written raw (the caller escapes it before it is shown); any
-#       other JSON value is written as JSON text.
+#   argv[1] = "key"  argv[2] = key file  argv[3] = kid  argv[4] = file for `pub`
+#       line 1: invalid (`keys` is not an array of objects) | duplicate (two
+#       entries carry the same kid, so which one counts would depend on the
+#       order) | none (no entry with that kid and a string `pub`) | absent |
+#       ok | malformed (the selected entry has no marker / a valid marker / a
+#       bad one); then the member's value. A string is written raw (the caller
+#       escapes it before it is shown); any other JSON value as JSON text. The
+#       selected entry's `pub` is written to argv[4].
 #   argv[1] = "cmp"  argv[2] = instant of the document  argv[3] = hs_retired_at
 #       at_or_after | before | unparseable
 #
@@ -789,15 +800,26 @@ def instant(v):
     return calendar.timegm((y, mo, d, h, mi, s)) - off + frac
 out = sys.stdout.buffer
 if sys.argv[1] == "key":
-    status, val = "absent", b""
+    status, val, pub = "none", b"", b""
     doc = json.load(open(sys.argv[2], "rb"))
-    for k in (doc.get("keys") or []) if isinstance(doc, dict) else []:
-        if isinstance(k, dict) and k.get("kid") == sys.argv[3] and isinstance(k.get("pub"), str):
-            if "hs_retired_at" in k:
-                v = k["hs_retired_at"]
-                status = "ok" if strict(v) else "malformed"
-                val = (v if isinstance(v, str) else json.dumps(v)).encode("utf-8", "surrogatepass")
-            break
+    keys = doc.get("keys") if isinstance(doc, dict) else None
+    if not isinstance(keys, list) or not all(isinstance(k, dict) for k in keys):
+        status = "invalid"
+    else:
+        kids = [k.get("kid") for k in keys if isinstance(k.get("kid"), str)]
+        if len(kids) != len(set(kids)):
+            status = "duplicate"
+        else:
+            for k in keys:
+                if k.get("kid") == sys.argv[3] and isinstance(k.get("pub"), str):
+                    pub = k["pub"].encode("utf-8", "surrogatepass")
+                    status = "absent"
+                    if "hs_retired_at" in k:
+                        v = k["hs_retired_at"]
+                        status = "ok" if strict(v) else "malformed"
+                        val = (v if isinstance(v, str) else json.dumps(v)).encode("utf-8", "surrogatepass")
+                    break
+    open(sys.argv[4], "wb").write(pub)
     out.write(status.encode() + b"\n" + val)
 else:
     a, b = instant(sys.argv[2]), instant(sys.argv[3])
@@ -1123,16 +1145,19 @@ if [ -z "$PUB_B64URL" ]; then
   [ -z "$JWKS_DUPS" ] || die "the key document ${JWKS_FILE} repeats members ($(printf '%s' "$JWKS_DUPS" | tr '\n' ' ')).
        Which key it names depends on the parser. Re-fetch it; do not edit it by hand."
   # Selected as JSON: the entry of `keys` whose `kid` is the header kid, and its
-  # `pub` — never the first line of text that looks like one. `|| true` is
-  # load-bearing under `set -euo pipefail`: with no match the assignment must
-  # not abort the script (a silent exit 1, indistinguishable from a failed
-  # signature), so that the unknown-kid diagnosis below can run.
-  PUB_B64URL="$(python3 -c '
-import json, sys
-for k in json.load(open(sys.argv[1])).get("keys") or []:
-    if isinstance(k, dict) and k.get("kid") == sys.argv[2] and isinstance(k.get("pub"), str):
-        sys.stdout.write(k["pub"]); break
-' "$JWKS_FILE" "$KID" 2>/dev/null || true)"
+  # `pub` — never the first line of text that looks like one. The same reader
+  # gives the retirement marker of that entry. `|| true` is load-bearing under
+  # `set -euo pipefail`: a reader that fails must not abort the script (a
+  # silent exit 1, indistinguishable from a failed signature).
+  RETIRED_OUT="$(LC_ALL=C python3 -c "$RETIRED_PY" key "$JWKS_FILE" "$KID" "$WORKDIR/jwks-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
+  RETIRED_OUT="${RETIRED_OUT%x}"
+  case "${RETIRED_OUT%%$'\n'*}" in
+    invalid) die "the key document ${JWKS_FILE} is invalid: \`keys\` is not an array of objects.
+       Re-fetch it; do not edit it by hand." ;;
+    duplicate) die "the key document ${JWKS_FILE} is invalid: two of its keys carry the same kid, so
+       which one counts would depend on the order. Re-fetch it; do not edit it by hand." ;;
+  esac
+  PUB_B64URL="$(cat "$WORKDIR/jwks-pub.txt" 2>/dev/null || true)"
   if [ -z "$PUB_B64URL" ]; then
     # A HARD stop, never a fallback to keys[0] — the same rule the status-list
     # path applies to an unknown kid, and for the same reason. Guessing a key
@@ -1141,15 +1166,13 @@ for k in json.load(open(sys.argv[1])).get("keys") or []:
     # and a verifier must not conflate them.
     die "no key in this JWKS carries kid '$(esc "${KID}")'.
        This is NOT evidence that the document is forged — it means you are
-       holding the wrong or a stale key document. Re-fetch the JWKS and retry;
-       a retired key stays in the published set, marked with hs_retired_at."
+       holding the wrong or a stale key document. Re-fetch the JWKS and retry.
+       By policy, a retired key stays published and is marked with hs_retired_at."
   else
     ok "selected the JWKS key whose kid is '$(esc "${KID}")'"
-    # The retirement marker of the selected key (checked against generatedAt in
-    # section 6). A marker that is not exactly an RFC 3339 UTC second is an
-    # invalid key set, not evidence about the document: exit 2.
-    RETIRED_OUT="$(LC_ALL=C python3 -c "$RETIRED_PY" key "$JWKS_FILE" "$KID" 2>/dev/null; printf x)"
-    RETIRED_OUT="${RETIRED_OUT%x}"
+    # A marker that is not exactly an RFC 3339 UTC second is an invalid key
+    # set, not evidence about the document: exit 2. Checked against generatedAt
+    # in section 6.
     case "${RETIRED_OUT%%$'\n'*}" in
       absent) ;;
       ok) RETIRED_AT="${RETIRED_OUT#*$'\n'}" ;;
@@ -1646,15 +1669,20 @@ fi
 
 # --- key resolution: against --status-keys ONLY, never --jwks ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  STATUS_PUB_B64URL="$(jq -r --arg kid "$STATUS_LIST_KID" \
-    '.keys[]? | select(.kid==$kid) | .pub' "$WORKDIR/status-keys.json" | head -1)"
-  if [ -n "$STATUS_PUB_B64URL" ]; then
+  STATUS_RETIRED_OUT="$(LC_ALL=C python3 -c "$RETIRED_PY" key "$WORKDIR/status-keys.json" "$STATUS_LIST_KID" "$WORKDIR/status-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
+  STATUS_RETIRED_OUT="${STATUS_RETIRED_OUT%x}"
+  STATUS_PUB_B64URL="$(cat "$WORKDIR/status-pub.txt" 2>/dev/null || true)"
+  case "${STATUS_RETIRED_OUT%%$'\n'*}" in
+    invalid) stat_bad "malformed_document — status-keys.json: \`keys\` is not an array of objects" ;;
+    duplicate) stat_bad "duplicate_key — status-keys.json has two keys with the same kid — which one counts depends on the order" ;;
+  esac
+  if [ "$STATUS_FAILURES" -ne 0 ]; then
+    :  # already UNKNOWN: the key set is defective
+  elif [ -n "$STATUS_PUB_B64URL" ]; then
     ok "selected the --status-keys entry whose kid is '$(esc "${STATUS_LIST_KID}")'"
     # The retirement marker of this key (checked against issuedAt below). A
     # defective status key set already leaves the list UNKNOWN (not strict JSON,
     # a repeated member, an unknown kid), so a malformed marker does too.
-    STATUS_RETIRED_OUT="$(LC_ALL=C python3 -c "$RETIRED_PY" key "$WORKDIR/status-keys.json" "$STATUS_LIST_KID" 2>/dev/null; printf x)"
-    STATUS_RETIRED_OUT="${STATUS_RETIRED_OUT%x}"
     case "${STATUS_RETIRED_OUT%%$'\n'*}" in
       absent) ;;
       ok) STATUS_RETIRED_AT="${STATUS_RETIRED_OUT#*$'\n'}" ;;

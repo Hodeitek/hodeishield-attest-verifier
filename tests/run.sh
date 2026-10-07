@@ -722,6 +722,32 @@ expect 1 'retired_key' 'the attestation key retired long ago still fails a recen
   --status-list --attestation "$T/ret-before.json" --jwks "$T/jwks-ret.json" --expect-slug "$SLUG" \
   --expect-issuer "$ISS" --now "$RET_NOW" --status-keys "$T/status-keys.json" --status "$T/list-ret-before.json"
 
+# A key set that cannot be read one way: `keys` that is not an array of objects,
+# or two keys with the same kid (the first would win, so a marker could be dodged
+# by ordering). --jwks: could not check (2). --status-keys: UNKNOWN (3).
+for variant in dup-first dup-last keys-object str-entry; do
+  case "$variant" in
+    dup-first)   PY="k = d['keys'][0]; d['keys'] = [dict(k), dict(k, hs_retired_at='$RET_AT_S')]" ;;
+    dup-last)    PY="k = d['keys'][0]; d['keys'] = [dict(k, hs_retired_at='$RET_AT_S'), dict(k)]" ;;
+    keys-object) PY="d['keys'] = {'a': dict(d['keys'][0], hs_retired_at='$RET_AT_S')}" ;;
+    str-entry)   PY="d['keys'] = ['str', d['keys'][0]]" ;;
+  esac
+  edit "$T/jwks.json" "$T/jwks-bad.json" "$PY"
+  expect 2 'is invalid' "attestation key set, $variant: could not check (2)" -- \
+    --attestation "$T/ret-before.json" --jwks "$T/jwks-bad.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+  edit "$T/status-keys.json" "$T/status-keys-bad.json" "$PY"
+  expect 3 'status-keys.json' "status key set, $variant: UNKNOWN (3), never a crash" -- \
+    "${RETS[@]}" --status-keys "$T/status-keys-bad.json" --status "$T/list-ret-at.json"
+done
+
+# --pub-b64url and --jwks are two sources for the same key.
+expect 2 'cannot be combined with --jwks' '--pub-b64url together with --jwks is a usage error (2)' -- \
+  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable --jwks is a usage error too' -- \
+  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
 # parser accepts. The options are read from the parser's own `case` patterns, so
