@@ -1148,7 +1148,8 @@ PYBIN="$(command -v python3)"
 jexpect() {
   local want="$1" name="$2" check="$3"; shift 4
   local out="$T/jout.$((PASSED + FAILED))" got why
-  NO_COLOR=1 bash "$VERIFIER" "$@" --json > "$out" 2> "$out.err"
+  if [ -n "${JSON_FIRST:-}" ]; then NO_COLOR=1 bash "$VERIFIER" --json "$@" > "$out" 2> "$out.err"
+  else NO_COLOR=1 bash "$VERIFIER" "$@" --json > "$out" 2> "$out.err"; fi
   got=$?
   why="$("$PYBIN" -I - "$out" "$out.err" "$got" "$want" "$check" <<'PY'
 import json, os, sys
@@ -1236,12 +1237,28 @@ for opt in --jws --jwks --attestation --claims --posture --pub-b64url --expect-s
            --expect-nonce --max-age-seconds --max-age-days --now --anchor-file --anchor-bundle --status --status-keys \
            --check-kid --check-subject --check-generated-at --min-seq; do
   expect 2 "error: $opt needs a value" "$opt without a value is a usage error (2)" -- "$opt"
-  jexpect 2 "$opt without a value is a usage error" 'o["reason"] == "usage" and o["message"].startswith("error: '"$opt"' needs a value")' -- "$opt"
+  # --json goes first for the options that would take a trailing --json as their value
+  JSON_FIRST=1 jexpect 2 "$opt without a value is a usage error" 'o["reason"] == "usage" and o["message"].startswith("error: '"$opt"' needs a value")' -- "$opt"
 done
 for opt in --jws --jwks --status --expect-slug; do
   expect 2 "error: $opt needs a value" "$opt followed by another option does not take it as its value (2)" -- "$opt" --raw
 done
 expect 2 "error: --jwks needs a value" '--jwks --json is a usage error, --json is not its value' -- --jwks --json
+# Base64url and opaque values can start with --; only an absent value is missing.
+KID_DASH='--AAAAAAAAAAAAAAAAAAAA'
+expect 1 'unexpected_kid' 'a kid that starts with -- is a value of --expect-kid, not a missing one' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$KID_DASH"
+lacks 'needs a value' '--expect-kid --AAAA... is not reported as a missing value'
+expect 2 'is not a kid' 'an option given as the kid fails the kid shape check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid --raw
+expect 1 'nonce_mismatch' '--expect-nonce --abc is a nonce, not a missing value' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-nonce --abc
+lacks 'needs a value' '--expect-nonce --abc is not reported as a missing value'
+expect 2 'public key is 3 bytes' '--pub-b64url with a key that starts with - is a value' -- \
+  --attestation "$T/att.json" --pub-b64url -AAA --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+lacks 'needs a value' '--pub-b64url -AAA is not reported as a missing value'
+expect 0 'GOOD' '--check-kid --abc is a kid to look up, not a missing value' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid --abc --now "$NOW"
 expect 0 'VERIFIED — this document was signed' "--expect-nonce '' keeps its meaning: an empty challenge is a value" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-nonce ''
 
