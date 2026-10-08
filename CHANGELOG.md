@@ -14,6 +14,14 @@ before it takes effect. Only the latest release is supported, as
 
 ## Unreleased
 
+### Tests
+- The mutant check can be skipped locally with `VERIFIER_SKIP_MUTANTS=1`, which
+  allows contributors to run the suite without building the signature-disabled
+  verifier. CI always runs the mutant check and fails if the variable is set in
+  a GitHub Actions environment.
+
+## v1.3.0 - not yet released
+
 `scripts/attest/verify-attestation.sh` changes, so there will be a new sha256 at
 release.
 
