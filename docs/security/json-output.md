@@ -131,7 +131,7 @@ Present (not null) when `--anchor-file` is used:
 | Member | Meaning |
 |---|---|
 | `verified` | True when the key statement was verified with cosign and every check about it held: the key (and, in `--status-list` mode, the status-list key) is listed under the right role, with a matching retirement, and `iss` is the issuer the statement names. |
-| `release_tag` | The release the statement was signed for (read from the verified certificate), for example `v1.4.0`; null if the statement was not verified far enough to read it. |
+| `release_tag` | The release the statement was signed for (read from the certificate, once cosign has verified it under that exact identity), for example `v1.4.0`; null if the statement was not verified far enough to read it. |
 | `kids` | The keys asked about: `[{"kid", "role", "listed"}, ...]` with `role` `attestation` or `status-list`. `listed` is true when the statement lists that kid under that role. Empty when the statement could not be checked. |
 
 ## Stability

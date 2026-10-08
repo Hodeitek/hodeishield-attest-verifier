@@ -162,8 +162,10 @@ the bundle is unreadable, the trust root could not be obtained) is in the text o
 retirement is the existing `retired_key`, compared with the statement's
 `retired_at` as well as the key set's `hs_retired_at`.
 
-**Anti-rollback.** The release tag is read from the verified certificate and
-compared, number by number, with the version of the script. A statement from an
+**Anti-rollback.** The release tag is read from the verified certificate (a
+bundle that is not exactly v0.3 is refused first, `anchor_bundle_unsupported`,
+and cosign is asked a second time for the exact identity read, so the
+certificate is the one it verified) and compared, number by number, with the version of the script. A statement from an
 older release is refused (`anchor_statement_older`), and a tag that cannot be
 read strictly is refused too (`anchor_tag_unreadable`), both exit 2 and both
 before the statement is read, because any older statement that was genuinely
@@ -173,7 +175,8 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 |---|---|---|---|---|---|
 | `anchor_bundle_without_file` | `--anchor-bundle` without `--anchor-file`. | fail | 2 | both |  |
 | `anchor_cosign_unavailable` | cosign is missing, older than 3.1.3, or its version cannot be read. | fail | 2 | both |  |
-| `anchor_unverified` | cosign did not verify the statement (identity, signature, bundle or trust root), or the statement or bundle cannot be read. | fail | 2 | both | 2: `anchor-tampered-statement`, `anchor-wrong-identity` |
+| `anchor_bundle_unsupported` | The bundle is not exactly a Sigstore bundle v0.3 (strict JSON, the v0.3 `mediaType`, exactly `mediaType`, `verificationMaterial` and `messageSignature`, one `certificate`, `tlogEntries`). Checked before cosign runs: cosign reads any other bundle in its legacy format, and then verifies a certificate other than the one the release tag is read from. | fail | 2 | both |  |
+| `anchor_unverified` | cosign did not verify the statement (identity, signature, bundle or trust root), or did not verify it a second time under the exact identity read from the certificate, or the statement or bundle cannot be read. | fail | 2 | both | 2: `anchor-tampered-statement`, `anchor-wrong-identity` |
 | `anchor_tag_unreadable` | The release tag of the verified certificate identity cannot be read: no tag, a pre-release, build metadata, a leading zero, not `vN.N.N`, or an identity that is not this repository's release workflow. | fail | 2 | both |  |
 | `anchor_statement_older` | The statement is from a release older than this verifier (`VERIFIER_VERSION`), compared numerically. Checked before the content is read. | fail | 2 | both | 1: `anchor-statement-older-than-verifier` |
 | `anchor_malformed` | The verified statement is not strict JSON, has a duplicate member, or is not a well-formed `hodeishield.keys.statement.v1`. | fail | 2 | both |  |

@@ -43,7 +43,7 @@ EXP='2026-01-01T00:15:00.000Z'
 NOW=1767225900            # GEN + 5 min: inside the validity window
 NOW_LATE=1767312000       # GEN + 1 day: long expired
 
-PASSED=0; FAILED=0
+PASSED=0; FAILED=0; SKIPPED=0
 
 # expect CODE PATTERN NAME -- verifier args...
 expect() {
@@ -760,12 +760,20 @@ expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable
 # runs with cosign installed.
 echo '# anchor (--anchor-file), cosign test double'
 STUB="$T/stub"; mkdir -p "$STUB"
+# The verifier calls cosign twice: first with the fixed identity pattern, then
+# with the exact identity it read from the certificate. The first call's
+# arguments go to COSIGN_STUB_LOG, the second's to COSIGN_STUB_LOG.identity, and
+# COSIGN_STUB_RC_IDENTITY makes the second one fail on its own.
 cat > "$STUB/cosign" <<'STUBEOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = version ]; then printf 'GitVersion:    %s\n' "${COSIGN_STUB_VERSION-v3.1.3}"; exit 0; fi
-printf '%s\n' "$@" > "${COSIGN_STUB_LOG:-/dev/null}"
+log="${COSIGN_STUB_LOG:-}"; rc="${COSIGN_STUB_RC:-0}"
+case " $* " in
+  *' --certificate-identity '*) log="${log:+$log.identity}"; rc="${COSIGN_STUB_RC_IDENTITY:-$rc}" ;;
+esac
+printf '%s\n' "$@" > "${log:-/dev/null}"
 [ -z "${COSIGN_STUB_ERR:-}" ] || printf '%b\n' "$COSIGN_STUB_ERR" >&2
-exit "${COSIGN_STUB_RC:-0}"
+exit "$rc"
 STUBEOF
 chmod +x "$STUB/cosign"
 # A PATH with the tools the verifier needs and no cosign.
@@ -798,13 +806,15 @@ st() { edit "$T/stmt-base.json" "$1" "$2"; }
 # single SAN is the workflow identity at a tag: the verifier reads the release tag
 # from it, as it does from the certificate cosign has just verified.
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -out "$T/anchor-k.pem" 2>/dev/null
-# mint_bundle OUT SAN — a bundle whose certificate has this subjectAltName ('' for none).
+# mint_bundle OUT SAN — a Sigstore v0.3 bundle (in shape: the stub verifies
+# nothing) whose certificate has this subjectAltName ('' for none).
 mint_bundle() {
   local ext=()
   if [ -n "$2" ]; then ext=(-addext "subjectAltName=$2"); fi
   openssl req -new -x509 -key "$T/anchor-k.pem" -subj '/CN=anchor-test' -days 2 ${ext[@]+"${ext[@]}"} \
     -outform DER -out "$T/anchor-c.der" 2>/dev/null
-  printf '{"verificationMaterial":{"certificate":{"rawBytes":"%s"}}}\n' "$(openssl base64 -A -in "$T/anchor-c.der")" > "$1"
+  printf '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","verificationMaterial":{"certificate":{"rawBytes":"%s"},"tlogEntries":[{"logIndex":"1"}],"timestampVerificationData":{}},"messageSignature":{"messageDigest":{"algorithm":"SHA2_256","digest":"AAAA"},"signature":"AAAA"}}\n' \
+    "$(openssl base64 -A -in "$T/anchor-c.der")" > "$1"
 }
 ANCHOR_WF='https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/'
 VER="$(bash "$VERIFIER" --version | awk '{print $2}')"
@@ -826,11 +836,12 @@ expect 0 "iss (E2) is the issuer '$ISS' the signed key statement names" 'the iss
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
 # What cosign was asked to do: the exact fixed identity pattern and issuer, the
 # bundle and the statement, and nothing that could name another identity.
-argv_has() {
-  if grep -qxF -- "$1" "$COSIGN_STUB_LOG"; then
+argv_has() {   # ARG DESCRIPTION [LOG]
+  local log="${3:-$COSIGN_STUB_LOG}"
+  if grep -qxF -- "$1" "$log" 2>/dev/null; then
     printf 'ok - cosign was called with %s\n' "$2"; PASSED=$((PASSED + 1))
   else
-    printf 'not ok - cosign was not called with %s\n' "$2"; sed 's/^/    # /' "$COSIGN_STUB_LOG"; FAILED=$((FAILED + 1))
+    printf 'not ok - cosign was not called with %s\n' "$2"; sed 's/^/    # /' "$log" 2>/dev/null; FAILED=$((FAILED + 1))
   fi
 }
 argv_has verify-blob 'verify-blob'
@@ -846,6 +857,29 @@ if [ "$(wc -l < "$COSIGN_STUB_LOG" | tr -d ' ')" -eq 8 ] && ! grep -qxE -- '--ce
 else
   printf 'not ok - cosign was given other arguments\n'; sed 's/^/    # /' "$COSIGN_STUB_LOG"; FAILED=$((FAILED + 1))
 fi
+# The second call: the EXACT identity read from the certificate, the same issuer,
+# bundle and statement, and no pattern. It binds the tag to what cosign verified.
+IDLOG="$COSIGN_STUB_LOG.identity"
+argv_has verify-blob 'verify-blob, a second time' "$IDLOG"
+argv_has '--certificate-identity' '--certificate-identity (exact), the second time' "$IDLOG"
+argv_has "${ANCHOR_WF}v${VER}" 'the exact identity read from the certificate, the second time' "$IDLOG"
+argv_has '--certificate-oidc-issuer' '--certificate-oidc-issuer, the second time' "$IDLOG"
+argv_has "$ANCHOR_ISSUER_URL" 'the GitHub Actions OIDC issuer, the second time' "$IDLOG"
+argv_has 'b/stmt.json.sigstore.json' 'the same bundle, the second time' "$IDLOG"
+argv_has 's/stmt.json' 'the same statement, the second time' "$IDLOG"
+if [ "$(wc -l < "$IDLOG" | tr -d ' ')" -eq 8 ] && ! grep -qxE -- '--certificate-identity-regexp|--certificate|--key|--insecure-ignore-tlog|--trusted-root' "$IDLOG"; then
+  printf 'ok - the second cosign call has exactly 8 arguments and no pattern\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - the second cosign call was given other arguments\n'; sed 's/^/    # /' "$IDLOG"; FAILED=$((FAILED + 1))
+fi
+# The second call fails on its own: the certificate the tag is read from is not
+# the one cosign verified. Could not check (2), and no tag is reported.
+COSIGN_STUB_RC_IDENTITY=1 COSIGN_STUB_ERR='Error: no matching CertificateIdentity found' \
+  expect 2 'anchor could not be checked: cosign did not verify the certificate the release tag is read from' \
+  'the second, exact-identity cosign call fails: could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+lacks 'VERIFIED' 'no verdict on the attestation when the exact identity does not verify'
+lacks 'older than this verifier' 'the tag of a certificate cosign did not verify is not used'
 # No option and no environment variable changes who may sign the statement.
 COSIGN_CERTIFICATE_IDENTITY='x' COSIGN_CERTIFICATE_OIDC_ISSUER='https://evil.test' SIGSTORE_ROOT_FILE='' \
   bash "$VERIFIER" --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}" > /dev/null 2>&1
@@ -915,12 +949,67 @@ tagcase 'another repository' "URI:https://github.com/evil/hodeishield-attest-ver
 tagcase 'two identities in the certificate' "URI:${ANCHOR_WF}v${VER},URI:${ANCHOR_WF}v0.0.1" 2 "$CANNOT"
 tagcase 'an identity that is not a URI' "email:someone@example.test" 2 "$CANNOT"
 tagcase 'a certificate without an identity' "" 2 "$CANNOT"
-printf '{}\n' > "$T/tag-bundle.json"
-expect 2 "$CANNOT" 'a bundle without a certificate' -- \
-  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/tag-bundle.json"
-printf 'not a bundle\n' > "$T/tag-bundle.json"
-expect 2 "$CANNOT" 'a bundle that is not JSON' -- \
-  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/tag-bundle.json"
+
+# --- the bundle is exactly a Sigstore v0.3 bundle, before cosign sees it --------------
+# cosign reads a bundle that does not load as v0.3 in its LEGACY format, and then
+# verifies the certificate in "cert", not the one the tag is read from. Each of
+# these is refused (anchor_bundle_unsupported, exit 2) and cosign is never called.
+UNSUPPORTED='anchor could not be checked: the bundle is not a Sigstore v0.3 bundle'
+mint_bundle "$T/v03.json" "URI:${ANCHOR_WF}v${VER}"
+bundle_case() {   # NAME PYTHON (over `d`, the v0.3 bundle) | NAME --text PYTHON (over `t`)
+  if [ "$2" = --text ]; then edit_text "$T/v03.json" "$T/shape-bundle.json" "$3"
+  else edit "$T/v03.json" "$T/shape-bundle.json" "$2"; fi
+  rm -f "$COSIGN_STUB_LOG" "$COSIGN_STUB_LOG.identity"
+  expect 2 "$UNSUPPORTED" "bundle, $1: could not check (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/shape-bundle.json"
+  if [ ! -e "$COSIGN_STUB_LOG" ]; then printf 'ok - bundle, %s: cosign is not called\n' "$1"; PASSED=$((PASSED + 1))
+  else printf 'not ok - bundle, %s: cosign was called\n' "$1"; FAILED=$((FAILED + 1)); fi
+}
+# The legacy format: the signature and certificate cosign would verify, beside a
+# decoy certificate where this script reads the tag.
+bundle_case 'the legacy format beside a v0.3 certificate' '
+d.update(base64Signature="AAAA", cert="AAAA", rekorBundle={"SignedEntryTimestamp": "AAAA", "Payload": {}})'
+bundle_case 'the legacy format alone' '
+d = {"base64Signature": "AAAA", "cert": "AAAA", "rekorBundle": {}, "verificationMaterial": d["verificationMaterial"]}'
+bundle_case 'a payload member' 'd["payload"] = "AAAA"'
+bundle_case 'an extra member' 'd["note"] = 1'
+bundle_case 'a DSSE envelope as well' 'd["dsseEnvelope"] = {"payload": "AAAA", "payloadType": "x", "signatures": []}'
+bundle_case 'a DSSE envelope instead of a message signature' 'd["dsseEnvelope"] = d.pop("messageSignature")'
+bundle_case 'no mediaType' 'del d["mediaType"]'
+bundle_case 'a v0.2 mediaType' 'd["mediaType"] = "application/vnd.dev.sigstore.bundle+json;version=0.2"'
+bundle_case 'a v0.1 mediaType' 'd["mediaType"] = "application/vnd.dev.sigstore.bundle+json;version=0.1"'
+bundle_case 'a protobuf field name at the top' 'd["verification_material"] = d.pop("verificationMaterial")'
+bundle_case 'a certificate chain instead of one certificate' '
+m = d["verificationMaterial"]; m["x509CertificateChain"] = {"certificates": [m.pop("certificate")]}'
+bundle_case 'a certificate chain beside the certificate' '
+m = d["verificationMaterial"]; m["x509CertificateChain"] = {"certificates": [m["certificate"]]}'
+bundle_case 'a public key beside the certificate' 'd["verificationMaterial"]["publicKey"] = {"hint": "x"}'
+bundle_case 'no tlogEntries' 'del d["verificationMaterial"]["tlogEntries"]'
+bundle_case 'empty tlogEntries' 'd["verificationMaterial"]["tlogEntries"] = []'
+bundle_case 'a protobuf field name for rawBytes' 'c = d["verificationMaterial"]["certificate"]; c["raw_bytes"] = c.pop("rawBytes")'
+bundle_case 'a second member in the certificate' 'd["verificationMaterial"]["certificate"]["x"] = 1'
+bundle_case 'a certificate that is not base64' 'd["verificationMaterial"]["certificate"]["rawBytes"] = "not base64!"'
+bundle_case 'an empty certificate' 'd["verificationMaterial"]["certificate"]["rawBytes"] = ""'
+bundle_case 'a message signature without a signature' 'del d["messageSignature"]["signature"]'
+bundle_case 'an extra member in the message signature' 'd["messageSignature"]["x"] = 1'
+bundle_case 'a duplicated member (the certificate)' --text '
+t = t.replace("\"certificate\":{", "\"certificate\":{\"rawBytes\":\"AAAA\"},\"certificate\":{", 1)'
+bundle_case 'a duplicated top-level member' --text 't = t.replace("{", "{\"mediaType\":\"x\",", 1)'
+bundle_case 'a byte order mark' --text 't = "﻿" + t'
+bundle_case 'not JSON' --text 't = "not a bundle"'
+bundle_case 'an empty object' --text 't = "{}"'
+bundle_case 'two JSON values' --text 't = t + t'
+edit "$T/v03.json" "$T/legacy-named.json" 'd["base64Signature"] = "AAAA"'
+expect 2 'its members are not exactly mediaType, verificationMaterial and messageSignature' \
+  'the reason a bundle is not v0.3 is named' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/legacy-named.json"
+# The genuine shape, with and without timestampVerificationData, is accepted.
+expect 0 "$ANCHOR_SIGNED" 'a v0.3 bundle with timestampVerificationData is accepted' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/v03.json"
+edit "$T/v03.json" "$T/v03-nots.json" 'del d["verificationMaterial"]["timestampVerificationData"]; del d["messageSignature"]["messageDigest"]'
+expect 0 "$ANCHOR_SIGNED" 'a v0.3 bundle without timestampVerificationData or messageDigest is accepted' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/v03-nots.json"
+
 # The tag is checked before the content: an old statement that is also malformed is "older".
 st "$T/stmt-old-bad.json" 'd["schema"] = "x"'
 mint_bundle "$T/stmt-old-bad.json.sigstore.json" "URI:${ANCHOR_WF}v0.0.1"
@@ -1058,7 +1147,7 @@ expect 1 "anchor_issuer_mismatch — iss is '$ISS', the signed key statement nam
 # compared with the recomputed one, so the statement cannot be satisfied by a label.
 edit "$T/other-jwks.json" "$T/other-as-issuer.json" "d['keys'][0]['kid'] = '$ISSUER_KID'"
 "${MINT[@]}" attest --key "$T/other.pem" --slug "$SLUG" --iss "$ISS" --generated-at "$GEN" --expires-at "$EXP" \
-  --framework iso27001=substantial --declare-kid "$ISSUER_KID" --out "$T/att-other-label.json" >/dev/null
+  --framework iso27001=substantial --declare-kid="$ISSUER_KID" --out "$T/att-other-label.json" >/dev/null
 expect 1 "anchor_kid_absent" 'a key that names a listed kid but derives another is not admitted by its label' -- \
   --attestation "$T/att-other-label.json" --jwks "$T/other-as-issuer.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --anchor-file "$T/stmt.json"
 
@@ -1330,6 +1419,13 @@ jexpect 1 'a key the statement does not list: anchor not verified, kid not liste
 COSIGN_STUB_RC=1 COSIGN_STUB_ERR='Error: something nobody has seen' jexpect 2 'cosign says no: could not check, anchor not verified' \
   'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None and o["anchor"]["kids"] == []' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+COSIGN_STUB_RC_IDENTITY=1 jexpect 2 'the exact identity does not verify: could not check, and the tag read is not reported' \
+  'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+jexpect 2 'a bundle in the legacy format: anchor_bundle_unsupported' \
+  'o["reason"] == "anchor_bundle_unsupported" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None
+   and "not a Sigstore v0.3 bundle" in o["message"]' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/legacy-named.json"
 
 # Two different checks that share a code are two entries: generatedAt and expiresAt
 # both unparseable are two date_unparseable failures, at two places in the script.
@@ -1372,6 +1468,59 @@ PATH="$NOPY" jexpect 2 'without python3: exit 2, a valid object, no attested con
 
 export PATH="$PATH_BEFORE_STUB"
 unset COSIGN_STUB_LOG
+
+# --- real cosign: a legacy-format bundle cannot lend the tag a certificate -----------
+# Needs cosign 3.1.3 or later (CI installs it); skipped, never passed, without it.
+# The genuine v1.3.0 bundle is rewritten in cosign's legacy format, which cosign
+# falls back to when a bundle does not load as v0.3: its real signature, real
+# certificate and real Rekor entry, which cosign verifies, and beside them a
+# decoy self-signed certificate at verificationMaterial.certificate whose SAN is
+# this repository's release workflow at v99.0.0. Reading the tag from the decoy
+# would pass the anti-rollback check and go on to read the statement (an old
+# SHA256SUMS, so anchor_malformed). It must stop before: exit 2, not malformed.
+echo '# anchor, real cosign'
+real_cosign_ok=0
+if command -v cosign >/dev/null 2>&1; then
+  real_cosign_v="$(cosign version 2>/dev/null | awk '$1 == "GitVersion:" { print $2; exit }' || true)"
+  if python3 -I -c '
+import re, sys
+m = re.fullmatch(r"v?([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})(-.*)?", sys.argv[1])
+n = tuple(int(x) for x in m.groups()[:3]) if m else (0, 0, 0)
+sys.exit(0 if n > (3, 1, 3) or (n == (3, 1, 3) and not m.group(4)) else 1)
+' "$real_cosign_v"; then real_cosign_ok=1; fi
+fi
+if [ "$real_cosign_ok" -eq 1 ]; then
+  RELB="$ROOT/tests/vectors/v1/anchor/release-v1.3.0"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -out "$T/decoy-k.pem" 2>/dev/null
+  openssl req -new -x509 -key "$T/decoy-k.pem" -subj '/CN=decoy' -days 2 \
+    -addext "subjectAltName=URI:${ANCHOR_WF}v99.0.0" -outform DER -out "$T/decoy.der" 2>/dev/null
+  python3 -I - "$RELB/SHA256SUMS.sigstore.json" "$T/decoy.der" "$T/legacy.sigstore.json" <<'PY'
+import base64, json, sys, textwrap
+b = json.load(open(sys.argv[1], encoding="utf-8"))
+decoy = open(sys.argv[2], "rb").read()
+m = b["verificationMaterial"]; e = m["tlogEntries"][0]
+der = base64.b64decode(m["certificate"]["rawBytes"])
+pem = ("-----BEGIN CERTIFICATE-----\n" + "\n".join(textwrap.wrap(base64.b64encode(der).decode(), 64))
+       + "\n-----END CERTIFICATE-----\n")
+legacy = {
+    "base64Signature": b["messageSignature"]["signature"],
+    "cert": base64.b64encode(pem.encode()).decode(),
+    "rekorBundle": {
+        "SignedEntryTimestamp": e["inclusionPromise"]["signedEntryTimestamp"],
+        "Payload": {"body": e["canonicalizedBody"], "integratedTime": int(e["integratedTime"]),
+                    "logIndex": int(e["logIndex"]), "logID": base64.b64decode(e["logId"]["keyId"]).hex()}},
+    "verificationMaterial": {"certificate": {"rawBytes": base64.b64encode(decoy).decode()}},
+}
+json.dump(legacy, open(sys.argv[3], "w", encoding="utf-8"))
+PY
+  jexpect 2 'real cosign: a legacy bundle with a decoy v99.0.0 certificate stops before the statement is read' \
+    'o["exit_code"] == 2 and o["reason"] == "anchor_bundle_unsupported"
+     and all(c["code"] != "anchor_malformed" for c in o["checks"]) and o["anchor"]["release_tag"] is None' -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$RELB/SHA256SUMS" --anchor-bundle "$T/legacy.sigstore.json"
+else
+  printf 'skipped - real cosign: a legacy bundle with a decoy certificate (needs cosign 3.1.3 or later, not available here)\n'
+  SKIPPED=$((SKIPPED + 1))
+fi
 
 # --- version consistency (tests/version-consistency.sh) --------------------------
 # VERIFIER_VERSION is what --anchor-file compares the statement's release tag with,
@@ -1509,7 +1658,7 @@ else
 fi
 
 echo
-printf '# %d passed, %d failed\n' "$PASSED" "$FAILED"
+printf '# %d passed, %d failed, %d skipped\n' "$PASSED" "$FAILED" "$SKIPPED"
 
 # The published vectors (tests/vectors/v1) are part of the same gate, and so
 # is the proof that they catch a verifier whose signature check does nothing.

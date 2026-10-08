@@ -113,6 +113,27 @@ script from v1.4.0. It behaves as follows:
   issuer above. The reader does not choose the identity: there is no option and
   no environment variable for it. The script verifies and parses one private
   copy of the statement, so the file cannot change between the two.
+- **The bundle is exactly a Sigstore bundle v0.3**, checked before cosign sees
+  it: strict JSON with no duplicate member, `mediaType`
+  `application/vnd.dev.sigstore.bundle.v0.3+json`, the top-level members exactly
+  `mediaType`, `verificationMaterial` and `messageSignature` (no `dsseEnvelope`,
+  and none of the legacy members `base64Signature`, `cert`, `rekorBundle`,
+  `payload`), a `verificationMaterial` that is one `certificate` (exactly
+  `rawBytes`), a non-empty `tlogEntries` and optionally
+  `timestampVerificationData`, and a `messageSignature` with a `signature`.
+  Anything else is exit 2 (`anchor_bundle_unsupported`, "the bundle is not a
+  Sigstore v0.3 bundle"). The reason: when a bundle does not load as a v0.3
+  bundle, cosign 3.1.3 falls back to its legacy bundle format and verifies the
+  certificate in `cert`, which is not the certificate the script reads the
+  release tag from. A legacy bundle could therefore carry a genuine old
+  signature for cosign and a decoy certificate with a newer tag for the script.
+  The bundles the release workflow publishes are v0.3.
+- **The certificate the tag is read from is the one cosign verified.** After
+  reading the identity from the bundle's certificate, the script runs
+  `cosign verify-blob` a second time with `--certificate-identity` set to that
+  exact identity (not a pattern) and the same issuer. If cosign does not verify
+  it, the run ends with exit 2 (`anchor_unverified`), and no release tag is
+  reported.
 - cosign may contact the Sigstore TUF repository to refresh its trust root, so
   the option can need network access even though the rest of the verifier does
   not.
@@ -178,9 +199,9 @@ A reader who runs an OLD verifier can still be served a statement as old as that
 ### The reason codes
 
 The codes are in [reason-codes.md](reason-codes.md#the-anchor---anchor-file).
-`anchor_cosign_unavailable`, `anchor_unverified`, `anchor_tag_unreadable`,
-`anchor_statement_older` and `anchor_malformed` are exit
-2. `anchor_kid_absent`, `anchor_role_mismatch`, `anchor_retired_mismatch` and
+`anchor_cosign_unavailable`, `anchor_bundle_unsupported`, `anchor_unverified`,
+`anchor_tag_unreadable`, `anchor_statement_older` and `anchor_malformed` are
+exit 2. `anchor_kid_absent`, `anchor_role_mismatch`, `anchor_retired_mismatch` and
 `anchor_issuer_mismatch` are exit 1; the retirement itself is the existing
 `retired_key`. The three `anchor_status_*` failures are exit 3.
 

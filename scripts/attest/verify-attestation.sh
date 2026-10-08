@@ -85,7 +85,11 @@
 #                      name plus .sigstore.json), under an identity FIXED in this
 #                      script (the release workflow of this repository at a tag
 #                      vN.N.N, issued by GitHub Actions); there is no option and no
-#                      environment variable to change it. It then requires the key
+#                      environment variable to change it. The bundle must be exactly
+#                      a Sigstore bundle v0.3 (anything else is exit 2), and cosign
+#                      is asked a second time for the exact identity read from its
+#                      certificate, whose release tag must not be older than this
+#                      script. It then requires the key
 #                      that signed to be listed, under the right role, with a
 #                      retirement that agrees with hs_retired_at. cosign is an
 #                      OPTIONAL dependency, needed only here, version 3.1.3 or later.
@@ -1389,14 +1393,51 @@ anchor_diagnostics() {
   done < "$1"
 }
 
-# The leaf certificate (base64 DER) of the bundle cosign has just accepted. Its
-# SAN is the verified signing identity, whose tag is compared with this version.
-ANCHOR_IDENTITY_PY='
-import json, sys
-b = json.load(open(sys.argv[1], "rb"))
-m = b["verificationMaterial"]
-c = m.get("certificate") or m["x509CertificateChain"]["certificates"][0]
-sys.stdout.write(c["rawBytes"])
+# The bundle, read by this script (it has already been read strictly: UTF-8, no
+# BOM, one value, no duplicate member).
+#
+#   argv[1] = "shape"  argv[2] = bundle
+#       ok | bad, then a fixed reason. The bundle must be EXACTLY a Sigstore
+#       bundle v0.3 with a message signature and one leaf certificate. cosign
+#       falls back to its LEGACY bundle format (base64Signature, cert,
+#       rekorBundle) when a bundle does not load as a v0.3 one, and then it
+#       verifies the certificate in "cert", not the one this script reads. So no
+#       member is accepted that a v0.3 bundle does not have, at the levels read
+#       here; the names a protobuf JSON parser would also accept
+#       (verification_material, raw_bytes, ...) are refused with the rest.
+#   argv[1] = "cert"   argv[2] = bundle  argv[3] = out
+#       writes the leaf certificate (DER) to argv[3].
+ANCHOR_BUNDLE_PY='
+import base64, binascii, json, sys
+b = json.load(open(sys.argv[2], "rb"))
+def why(b):
+    if not isinstance(b, dict) or set(b) != {"mediaType", "verificationMaterial", "messageSignature"}:
+        return "its members are not exactly mediaType, verificationMaterial and messageSignature"
+    if b["mediaType"] != "application/vnd.dev.sigstore.bundle.v0.3+json":
+        return "its mediaType is not application/vnd.dev.sigstore.bundle.v0.3+json"
+    m = b["verificationMaterial"]
+    if not isinstance(m, dict) or not {"certificate", "tlogEntries"} <= set(m) <= {"certificate", "tlogEntries", "timestampVerificationData"}:
+        return "its verificationMaterial is not one certificate, tlogEntries and (optionally) timestampVerificationData"
+    c = m["certificate"]
+    if not isinstance(c, dict) or set(c) != {"rawBytes"} or not isinstance(c["rawBytes"], str) or not c["rawBytes"]:
+        return "its certificate is not exactly one rawBytes"
+    try:
+        base64.b64decode(c["rawBytes"], validate=True)
+    except (binascii.Error, ValueError):
+        return "its certificate is not base64"
+    t = m["tlogEntries"]
+    if not isinstance(t, list) or not t or not all(isinstance(e, dict) for e in t):
+        return "its tlogEntries are not a non-empty array of objects"
+    s = b["messageSignature"]
+    if not isinstance(s, dict) or not {"signature"} <= set(s) <= {"messageDigest", "signature"} or not isinstance(s["signature"], str):
+        return "its messageSignature is not a signature and (optionally) a messageDigest"
+    return None
+if sys.argv[1] == "shape":
+    r = why(b)
+    sys.stdout.write("bad\n" + r if r else "ok\n")
+else:
+    if why(b): raise SystemExit("bundle: not a v0.3 bundle")
+    open(sys.argv[3], "wb").write(base64.b64decode(b["verificationMaterial"]["certificate"]["rawBytes"], validate=True))
 '
 
 if [ -n "$ANCHOR_FILE" ]; then
@@ -1435,6 +1476,23 @@ if [ -n "$ANCHOR_FILE" ]; then
   cp -- "$ANCHOR_FILE" "$WORKDIR/anchor/s/$anchor_fs"
   cp -- "$ANCHOR_BUNDLE" "$WORKDIR/anchor/b/$anchor_fb"
   ANCHOR_STMT="$WORKDIR/anchor/s/$anchor_fs"
+  # The bundle must be exactly a Sigstore v0.3 bundle (see ANCHOR_BUNDLE_PY),
+  # read strictly, BEFORE cosign sees it: a bundle cosign reads in its legacy
+  # format carries a certificate other than the one this script reads the tag from.
+  anchor_bundle_bad=''
+  if ! anchor_bdups="$(python3 -I -c "$DUPKEY_PY" "$WORKDIR/anchor/b/$anchor_fb" 2>/dev/null)"; then
+    anchor_bundle_bad='it is not strict JSON (UTF-8, no BOM, one value)'
+  elif [ -n "$anchor_bdups" ]; then
+    anchor_bundle_bad="it repeats members ($(printf '%s' "$anchor_bdups" | tr '\n' ' '))"
+  else
+    anchor_bshape="$(python3 -I -c "$ANCHOR_BUNDLE_PY" shape "$WORKDIR/anchor/b/$anchor_fb" 2>/dev/null || printf 'bad\nit could not be read')"
+    if [ "${anchor_bshape%%$'\n'*}" != ok ]; then anchor_bundle_bad="${anchor_bshape#*$'\n'}"; fi
+  fi
+  if [ -n "$anchor_bundle_bad" ]; then
+    die anchor_bundle_unsupported "anchor could not be checked: the bundle is not a Sigstore v0.3 bundle.
+       The bundle $(esc "$anchor_bn"): $(esc "$anchor_bundle_bad").
+       Use the .sigstore.json file published with the release. This is not evidence against the attestation."
+  fi
   # cosign may contact the Sigstore TUF repository here to refresh its trust root.
   anchor_rc=0
   ( cd "$WORKDIR/anchor" && cosign verify-blob --bundle "b/$anchor_fb" \
@@ -1465,22 +1523,40 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign.out")"
   # accepted, so a statement from a release older than this script is refused,
   # BEFORE its content is read. An unreadable or unusual tag is refused too.
   anchor_id=''; anchor_tag=''
-  anchor_san="$( { python3 -c "$ANCHOR_IDENTITY_PY" "$WORKDIR/anchor/b/$anchor_fb" | openssl base64 -d -A \
-      | openssl x509 -inform DER -noout -ext subjectAltName; } 2>/dev/null || true)"
+  python3 -I -c "$ANCHOR_BUNDLE_PY" cert "$WORKDIR/anchor/b/$anchor_fb" "$WORKDIR/anchor/cert.der" 2>/dev/null \
+    || : > "$WORKDIR/anchor/cert.der"
+  anchor_san="$(openssl x509 -inform DER -in "$WORKDIR/anchor/cert.der" -noout -ext subjectAltName 2>/dev/null || true)"
   mapfile -t anchor_san_lines <<< "$anchor_san"
   anchor_prefix='https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/'
   anchor_tag_re='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
-  anchor_tag_ok=0
+  # anchor_tag_ok is set only once the tag is bound to what cosign verified (below).
+  anchor_tag_ok=0; anchor_tag_shape=0
   if [ "${#anchor_san_lines[@]}" -eq 2 ] && [[ "${anchor_san_lines[1]}" =~ ^[[:space:]]*URI:([^[:space:],]+)$ ]]; then
     anchor_id="${BASH_REMATCH[1]}"
     anchor_tag="${anchor_id#"$anchor_prefix"}"
-    if [ "$anchor_tag" != "$anchor_id" ] && [[ "$anchor_tag" =~ $anchor_tag_re ]]; then anchor_tag_ok=1; fi
+    if [ "$anchor_tag" != "$anchor_id" ] && [[ "$anchor_tag" =~ $anchor_tag_re ]]; then anchor_tag_shape=1; fi
   fi
-  if [ "$anchor_tag_ok" -ne 1 ]; then
+  if [ "$anchor_tag_shape" -ne 1 ]; then
     die anchor_tag_unreadable "anchor could not be checked: the statement's release tag cannot be read.
        The signing identity of the bundle is not this repository's release workflow at a tag vN.N.N (no pre-release, no
        build metadata, no leading zeros). This is not evidence against the attestation."
   fi
+  # The certificate read above must be the one cosign verified: cosign is asked a
+  # second time, now for that EXACT identity (not a pattern). A bundle whose
+  # certificate cosign did not verify cannot pass, so the tag is bound to it.
+  anchor_rc=0
+  ( cd "$WORKDIR/anchor" && cosign verify-blob --bundle "b/$anchor_fb" \
+      --certificate-identity "$anchor_id" \
+      --certificate-oidc-issuer "$ANCHOR_OIDC_ISSUER" "s/$anchor_fs" ) \
+    > "$WORKDIR/anchor/cosign-identity.out" 2>&1 < /dev/null || anchor_rc=$?
+  if [ "$anchor_rc" -ne 0 ]; then
+    die anchor_unverified "anchor could not be checked: cosign did not verify the certificate the release tag is read from.
+       The identity read from the bundle, $(esc "$anchor_id"), is not the one cosign verified.
+       This is not evidence that the attestation is forged. The run ends without a verdict on it: re-fetch the statement and
+       its bundle from the release you trust, or drop --anchor-file.
+$(anchor_diagnostics "$WORKDIR/anchor/cosign-identity.out")"
+  fi
+  anchor_tag_ok=1
   IFS=. read -r -a anchor_tv <<< "${anchor_tag#v}"
   IFS=. read -r -a anchor_vv <<< "$VERIFIER_VERSION"
   for i in 0 1 2; do

@@ -59,6 +59,18 @@ before it takes effect. Only the latest release is supported, as
   [docs/security/reason-codes.md](docs/security/reason-codes.md). The text
   output is unchanged.
 
+### Security
+- `--anchor-file` read the release tag from a certificate cosign may not have
+  verified. cosign reads a bundle that does not load as a Sigstore v0.3 bundle
+  in its legacy format, and then verifies the certificate in `cert`, while the
+  script read the tag from `verificationMaterial.certificate`. A genuine old
+  signature could so be given a decoy certificate with a newer tag and pass the
+  anti-rollback check. The bundle must now be exactly a v0.3 bundle before
+  cosign runs (`anchor_bundle_unsupported`, exit 2), and cosign is asked a
+  second time for the exact identity read from the certificate (a failure is
+  `anchor_unverified`, exit 2). `--anchor-file` is new in this release; no
+  earlier release is affected.
+
 ### Fixed
 - An option given without its value exited 1, as if a check had failed. It is now
   a usage error, exit 2, with `error: --jws needs a value` (and likewise for

@@ -420,9 +420,14 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
 - The identity cosign must see is fixed in the script (this repository's release
   workflow at a tag `vN.N.N`, issued by GitHub Actions). No option or environment
   variable changes it.
-- Exit 2, "anchor could not be checked", when cosign is missing or older, or the
-  statement does not verify (wrong identity, altered statement, unreadable
-  bundle, no trust root), or is not a well-formed statement. This is by design:
+- The bundle must be exactly a Sigstore bundle v0.3, as the release publishes
+  it; any other shape, such as cosign's legacy bundle format, is refused before
+  cosign runs (exit 2). cosign is then asked a second time for the exact
+  identity read from the bundle's certificate, so the release tag below comes
+  from the certificate cosign verified.
+- Exit 2, "anchor could not be checked", when cosign is missing or older, the
+  bundle is not v0.3, or the statement does not verify (wrong identity, altered
+  statement, unreadable bundle, no trust root), or is not a well-formed statement. This is by design:
   a statement that does not verify says nothing about the attestation, just as a
   wrong key document does not. The run never ends in `VERIFIED` then, and the
   message says which cause it found.
