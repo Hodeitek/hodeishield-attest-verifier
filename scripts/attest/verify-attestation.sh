@@ -360,20 +360,39 @@ fi
 # REASON CODES. Every check below names itself with a stable machine code, the
 # first argument of ok/warn/bad/stale/stat_bad/die (docs/security/reason-codes.md
 # lists them; they are only ever added, never renamed). record() keeps one entry
-# per call in CHECKS as "code|result|exit-class": result is pass, warn or fail,
-# and the class is the exit code that check leads to (0, 1, 2 or 3). Text mode
-# never prints them; they are kept for a machine-readable output. The text
-# below each call is unchanged.
+# per call as "site|code|result|exit-class": result is pass, warn or fail, and
+# the class is the exit code that check leads to (0, 1, 2 or 3). The site is the
+# function and line that made the check (internal; never printed), so two
+# different checks that share a code stay two entries.
+#
+# Entries are appended to a file in the private work directory, not only held
+# in a variable: a check recorded inside $(...) or any other subshell would
+# otherwise be lost with it. Until the work directory exists they wait in
+# CHECKS and are written out when it is created (see record_flush).
 CHECKS=()
+CHECKS_FILE=''
 record() {
-  local entry="$1|$2|$3"
-  # A warning spread over several printed lines is one check: collapse repeats.
-  if [ "${#CHECKS[@]}" -eq 0 ] || [ "${CHECKS[${#CHECKS[@]}-1]}" != "$entry" ]; then
-    CHECKS+=("$entry")
-  fi
+  local i=1 site='' entry=''
+  # The site is the first frame outside the helpers that wrap record().
+  while :; do
+    case "${FUNCNAME[i]:-main}" in
+      ok|warn|warn_unknown|die|bad|stale|stat_bad|record) i=$((i + 1)) ;;
+      *) break ;;
+    esac
+  done
+  site="${FUNCNAME[i]:-main}:${BASH_LINENO[i-1]:-0}"
+  entry="$site|$1|$2|$3"
+  if [ -n "$CHECKS_FILE" ]; then printf '%s\n' "$entry" >> "$CHECKS_FILE"; else CHECKS+=("$entry"); fi
+}
+record_flush() {
+  local e=''
+  for e in "${CHECKS[@]+"${CHECKS[@]}"}"; do printf '%s\n' "$e" >> "$CHECKS_FILE"; done
+  CHECKS=()
 }
 ok()   { record "$1" pass 0; shift; printf '  %sPASS%s  %s\n' "$GREEN" "$RESET" "$*"; }
 warn() { record "$1" warn 0; shift; printf '  %sWARN%s  %s\n' "$YELLOW" "$RESET" "$*"; }
+# The further lines of a warning that one warn() began: printed, not recorded.
+warn_more() { printf '  %sWARN%s  %s\n' "$YELLOW" "$RESET" "$*"; }
 # A warning in section 9 that leaves the revocation status UNKNOWN (exit 3).
 warn_unknown() { record "$1" warn 3; shift; printf '  %sWARN%s  %s\n' "$YELLOW" "$RESET" "$*"; }
 # WITHHOLD_ON_DIE is set once a document is being read (after the banner below):
@@ -413,6 +432,10 @@ stale() { bad "$@"; STALE_FAILURES=$((STALE_FAILURES+1)); }
 WORKDIR=''
 cleanup() { if [ -n "$WORKDIR" ]; then rm -rf -- "$WORKDIR"; fi; return 0; }
 trap cleanup EXIT
+# Created before the first check can run, so that every check lands in CHECKS_FILE.
+WORKDIR="$(mktemp -d)"; chmod 700 "$WORKDIR"
+CHECKS_FILE="$WORKDIR/checks"; : > "$CHECKS_FILE"
+record_flush
 
 # Is a posture attestation being checked at all? `--attestation` carries its own
 # signature, so it stands in for `--jws` everywhere below.
@@ -535,8 +558,6 @@ hex_to_bin() {
   fi
 }
 
-WORKDIR="$(mktemp -d)"; chmod 700 "$WORKDIR"
-
 b64url_decode() {
   local s="${1//-/+}"
   s="${s//_//}"
@@ -650,8 +671,8 @@ fetch_or_read() {
          verify-attestation.sh --status-list --status-keys status-keys.json ..."
       fi
       warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${src}"
-      warn fetch_cleartext_http "the list is signed, so tampering shows up as a failed signature (=> unknown),"
-      warn fetch_cleartext_http "but use https:// — a downgrade you did not notice is not a threat model."
+      warn_more "the list is signed, so tampering shows up as a failed signature (=> unknown),"
+      warn_more "but use https:// — a downgrade you did not notice is not a threat model."
       curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
       ;;
     *)
@@ -1589,7 +1610,7 @@ else
   b64url_decode "$P" > "$WORKDIR/canon.bin" || die payload_not_base64url "payload segment is not valid base64url"
   PAYLOAD_B64="$P"
   warn opaque_bytes "no --attestation/--claims given: you are verifying opaque bytes. Supply the"
-  warn opaque_bytes "claims JSON so the facts you read are provably the facts that were signed."
+  warn_more "claims JSON so the facts you read are provably the facts that were signed."
 fi
 
 # --- 5. Signature ------------------------------------------------------------
@@ -1782,7 +1803,7 @@ if [ -n "$CLAIMS_FILE" ]; then
     fi
   else
     warn issuer_unpinned "no --expect-issuer: iss is '$(esc "${CLAIMS_ISS}")' and nothing pinned it. The key set you"
-    warn issuer_unpinned "verified against must be the one THAT origin publishes, or this proves nothing."
+    warn_more "verified against must be the one THAT origin publishes, or this proves nothing."
   fi
 
   # THE NONCE. Only the party that invented the challenge can check it, and a
@@ -1802,7 +1823,7 @@ if [ -n "$CLAIMS_FILE" ]; then
     fi
   elif [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
     warn nonce_unchecked "the document carries a nonce but you did not pass --expect-nonce, so nothing"
-    warn nonce_unchecked "compared it. Only the party that invented the challenge can check it."
+    warn_more "compared it. Only the party that invented the challenge can check it."
   fi
 
   # overallBand is DERIVED — the weakest attested band — so a verifier can
