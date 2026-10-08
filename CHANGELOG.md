@@ -14,6 +14,23 @@ before it takes effect. Only the latest release is supported, as
 
 ## Unreleased
 
+### Added
+- [`docs/security/keys.json`](docs/security/keys.json), the machine-readable
+  list of the issuer's signing keys (schema `hodeishield.keys.statement.v1`),
+  kept identical to `docs/security/keys.md` by a CI check. Releases from the
+  next one publish it as `keys-statement.json`, in `SHA256SUMS` and signed with
+  Sigstore (`keys-statement.json.sigstore.json`).
+- [A decision record for the key anchor](docs/security/key-anchor.md): the
+  signed statement, checked by a coming `--anchor-file` option, with "anchor
+  could not be checked" as exit 2. The option is not in the script yet.
+- A daily check that the live key sets contain no key, and no retirement time,
+  that `keys.json` does not list.
+
+### Changed
+- §6 item 2 of the verification document no longer says the Web PKI is the only
+  channel for the attestation key: from the release that carries the key
+  statement there is a second one, signed by this repository's release workflow.
+
 ### Documentation
 - [An evaluation of Rust ML-DSA-65 implementations](docs/security/rust-mldsa-evaluation.md)
   for a port of the verifier: version, stability, verification API, audits,

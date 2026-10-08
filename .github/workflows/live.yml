@@ -40,3 +40,8 @@ jobs:
       # revoked or unknown status, or a 404 on the README's example fail.
       - name: tests/live.sh
         run: bash tests/live.sh
+      # A rotation alarm: every live kid, recomputed from its pub bytes, must be
+      # in docs/security/keys.json under the right role, and a live
+      # hs_retired_at must equal its retired_at. Read-only.
+      - name: tests/keys-drift.sh
+        run: bash tests/keys-drift.sh

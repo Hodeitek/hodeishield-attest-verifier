@@ -4,6 +4,10 @@ This is the versioned list of the keys that sign HodeiShield attestations and
 status lists. It is a second channel to compare against, not a root of trust:
 see [How this file changes](#how-this-file-changes).
 
+The same list is kept in machine-readable form in [keys.json](keys.json), and
+each release from v1.4.0 publishes it as `keys-statement.json`, signed with
+Sigstore. See [the key anchor decision](key-anchor.md).
+
 A key is named by its `kid`, `BASE64URL(SHA-256("hodei-shield.attest.kid.v1" ||
 raw ML-DSA-65 public key)[0..16])`, see
 [§4.2 of the verification document](attest-verification.md#42-the-kid-is-checked-not-trusted).
@@ -81,7 +85,9 @@ retired key has a `generatedAt` before the retirement time in the table above.
 ## How this file changes
 
 This file changes only through a signed commit in a pull request, in the same
-window as the key change. Each change is listed in [CHANGELOG.md](../../CHANGELOG.md)
+window as the key change. A rotation changes this file and [keys.json](keys.json)
+in the same signed commit; CI fails if they differ, and a daily check fails if
+the live key sets contain a key that keys.json does not list. Each change is listed in [CHANGELOG.md](../../CHANGELOG.md)
 and in the release notes. The repository's signed tags and Sigstore-signed
 releases (see [Verifying a release](../../README.md#verifying-a-release)) reach
 you by a channel independent of the issuer's web host.
