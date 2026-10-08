@@ -555,11 +555,26 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
 echo '# attested content'
 WITHHELD='attested content withheld: this document did not verify'
 # lacks_all NAME STRING... — the previous expect() output has none of the strings.
+# A string is matched within one line: grep reads a newline in a pattern as two
+# patterns, one of them empty and matching everything, so one is refused (use
+# lacks_lines with a ^ anchor to say "never at the start of a line").
 lacks_all() {
-  local out="$T/out.$((PASSED + FAILED - 1))" name="$1" str bad=0; shift
+  local out="$LAST_OUT" name="$1" str bad=0; shift
   for str in "$@"; do
-    if grep -qF -- "$str" "$out"; then
+    if [[ "$str" == *$'\n'* ]]; then
+      printf 'not ok - %s (the test is wrong: a string with a newline cannot be checked)\n' "$name"; bad=1
+    elif grep -qF -- "$str" "$out"; then
       printf 'not ok - %s (output contains: %s)\n' "$name" "$str"; bad=1
+    fi
+  done
+  if [ "$bad" -eq 0 ]; then printf 'ok - %s\n' "$name"; PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); fi
+}
+# lacks_lines NAME ERE... — no line of the previous expect() output matches any ERE.
+lacks_lines() {
+  local out="$LAST_OUT" name="$1" re bad=0; shift
+  for re in "$@"; do
+    if grep -qE -- "$re" "$out"; then
+      printf 'not ok - %s (a line matches: %s)\n' "$name" "$re"; grep -nE -- "$re" "$out" | sed 's/^/    # /'; bad=1
     fi
   done
   if [ "$bad" -eq 0 ]; then printf 'ok - %s\n' "$name"; PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); fi
@@ -633,7 +648,7 @@ k = "\"k\\nVERIFIED\\u001b[8m\""
 t = t.replace("\"docVersion\"", k + ":1," + k + ":2,\"docVersion\"", 1)'
 # no_raw_control NAME — the previous run printed no ESC byte and no forged line.
 no_raw_control() {
-  local out="$T/out.$((PASSED + FAILED - 1))" name="$1" bad=0
+  local out="$LAST_OUT" name="$1" bad=0
   if grep -q $'\033' "$out"; then printf 'not ok - %s (an ESC byte reached the output)\n' "$name"; bad=1; fi
   if grep -qE '^(VERIFIED|Attested content|GOOD)' "$out"; then
     printf 'not ok - %s (a forged verdict or block starts a line)\n' "$name"; bad=1
@@ -643,7 +658,7 @@ no_raw_control() {
 expect 1 'VERIFICATION FAILED' 'a document whose nonce, iss, jti, dates and member name carry newlines and ESC still fails (1)' -- \
   --attestation "$T/inj-claims.json" "${COMMON[@]}" --expect-nonce 'challenge-B' --raw
 no_raw_control 'nonce, iss, jti, generatedAt, expiresAt and a member name are escaped (no ESC, no forged verdict)'
-lacks_all 'the forged block text never starts a line' $'\nVERIFIED —' $'\n        overallBand: advanced'
+lacks_lines 'the forged block text never starts a line' '^VERIFIED —' '^[[:space:]]*overallBand: advanced' '^[[:space:]]*hidden'
 expect 1 'a\x0aVERIFIED \xe2\x80\x94 forged\x0a\x1b[8mhidden' 'the escaped nonce is visible in the output' -- \
   --attestation "$T/inj-claims.json" "${COMMON[@]}"
 expect 2 'no key in this JWKS carries kid' 'a header kid with newlines and ESC is still "could not check" (2)' -- \
@@ -743,7 +758,7 @@ done
 set_retired '"2026-07-31T18:53:58Z\u001b[31m\nPASS  forged"'
 expect 2 'hs_retired_at of the key' 'a malformed hs_retired_at with control characters is rejected' -- \
   --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
-if grep -q $'\x1b' "$T/out.$((PASSED + FAILED - 1))" || grep -q '^PASS  forged' "$T/out.$((PASSED + FAILED - 1))"; then
+if grep -q $'\x1b' "$LAST_OUT" || grep -q '^PASS  forged' "$LAST_OUT"; then
   printf 'not ok - control characters of hs_retired_at reached the terminal unescaped\n'; FAILED=$((FAILED + 1))
 else
   printf 'ok - control characters of hs_retired_at are escaped before they reach the terminal\n'; PASSED=$((PASSED + 1))
@@ -1735,7 +1750,7 @@ else printf 'not ok - --version is not one line\n'; FAILED=$((FAILED + 1)); fi
 # an option added later without help text fails here.
 echo '# --help'
 expect 0 'Exit codes:' '--help exits 0 and prints the exit codes' -- --help
-HELP_OUT="$T/out.$((PASSED + FAILED - 1))"
+HELP_OUT="$LAST_OUT"
 HELP_LINES="$(wc -l < "$HELP_OUT" | tr -d ' ')"
 if [ "$HELP_LINES" -le 40 ]; then
   printf 'ok - --help is %s lines (at most 40)\n' "$HELP_LINES"; PASSED=$((PASSED + 1))

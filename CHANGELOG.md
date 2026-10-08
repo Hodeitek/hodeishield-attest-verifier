@@ -127,6 +127,11 @@ before it takes effect. Only the latest release is supported, as
   case of `tests/vectors.sh --json` on which the checker raised. Both are now
   failures with the traceback, and each harness checks itself first. The five
   checks written over several lines now run, and hold.
+- The tests: the check that a forged verdict never starts a line read an output
+  file that did not exist, and its strings carried a newline, which grep reads
+  as a pattern that matches everything; it always passed. The helpers now read
+  the output of the run they follow, refuse such a string, and the check is
+  written as line-anchored patterns. It holds.
 
 ### Changed
 - §6 item 2 of the verification document no longer says the Web PKI is the only
