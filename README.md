@@ -409,7 +409,9 @@ the reason it is a short, single, readable script.
 - `bash tests/mutants.sh` builds a copy of the verifier whose signature check
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled
-  signature check cannot pass the suite. `tests/run.sh` runs it too.
+  signature check cannot pass the suite. `tests/run.sh` runs it too;
+  `VERIFIER_SKIP_MUTANTS=1 bash tests/run.sh` skips it locally. CI always runs
+  it and fails if that variable is set there.
 - Two jobs check that the verifier exits 2 ("could not check"), never 1, when
   its `openssl` cannot do ML-DSA: one with an OpenSSL older than 3.5, one with
   real LibreSSL in a digest-pinned Alpine image.

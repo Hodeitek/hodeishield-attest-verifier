@@ -20,7 +20,8 @@
 #
 # It finishes by running the published test vectors (tests/vectors.sh) and the
 # signature-disabled mutant check (tests/mutants.sh), and fails if any part
-# fails.
+# fails. The mutant check can be skipped locally with VERIFIER_SKIP_MUTANTS=1,
+# but CI always runs it and fails if the variable is set there.
 #
 # Needs: bash >= 4, OpenSSL >= 3.5, python3, jq. No network.
 #   bash tests/run.sh                    # the script in this repository
@@ -815,5 +816,15 @@ VECTORS_RC=0
 VERIFIER="$VERIFIER" bash "$ROOT/tests/vectors.sh" || VECTORS_RC=$?
 echo
 MUTANTS_RC=0
-VERIFIER="$VERIFIER" bash "$ROOT/tests/mutants.sh" || MUTANTS_RC=$?
+if [ "${VERIFIER_SKIP_MUTANTS:-}" = "1" ]; then
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "# mutants: VERIFIER_SKIP_MUTANTS is not honoured in CI"
+    MUTANTS_RC=1
+  else
+    echo "# mutants: skipped (VERIFIER_SKIP_MUTANTS=1); CI runs them"
+    MUTANTS_RC=0
+  fi
+else
+  VERIFIER="$VERIFIER" bash "$ROOT/tests/mutants.sh" || MUTANTS_RC=$?
+fi
 [ "$FAILED" -eq 0 ] && [ "$VECTORS_RC" -eq 0 ] && [ "$MUTANTS_RC" -eq 0 ]
