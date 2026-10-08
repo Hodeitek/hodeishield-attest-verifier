@@ -22,6 +22,13 @@
 # whose requirement is absent is reported as SKIPPED, never as passed.
 #   bash tests/vectors.sh
 #   VERIFIER=/path/to/copy bash tests/vectors.sh
+#
+#   bash tests/vectors.sh --json
+#       runs every case a second time with --json added and asserts, instead of
+#       the text: stdout is exactly one JSON object and nothing else (printable
+#       ASCII), stderr is empty, schema is hodeishield.verifier.result.v1,
+#       exit_code is the process exit code, reason is the case's expect.code,
+#       and attested is null unless the exit code is 0. The same skip rule applies.
 # =============================================================================
 set -uo pipefail
 
@@ -33,6 +40,12 @@ T="$(mktemp -d)"; chmod 700 "$T"
 trap 'rm -rf -- "$T"' EXIT
 
 PASSED=0; FAILED=0; SKIPPED=0
+JSON_MODE=0; MODE_LABEL=''
+case "${1:-}" in
+  '') ;;
+  --json) JSON_MODE=1; MODE_LABEL=' --json' ;;
+  *) echo "usage: tests/vectors.sh [--json]" >&2; exit 2 ;;
+esac
 
 # Whether the requirement $1 of a case is available here.
 have_requirement() {
@@ -129,27 +142,59 @@ while IFS= read -r -d '' id; do
   fi
 
   out="$T/out.$((PASSED + FAILED + SKIPPED))"
-  NO_COLOR=1 bash "$VERIFIER" "${args[@]}" > "$out" 2>&1 < /dev/null
-  got=$?
   why=''
-  if [ "$got" -ne "$want" ]; then
-    why="exit $got, expected $want"
-  elif ! grep -qF -- "$match" "$out"; then
-    why="exit $got as expected, but no line containing: $match"
+  if [ "$JSON_MODE" -eq 1 ]; then
+    NO_COLOR=1 bash "$VERIFIER" "${args[@]}" --json > "$out" 2> "$out.err" < /dev/null
+    got=$?
+    why="$(python3 -I -c '
+import json, sys
+out, err, got, want, code = sys.argv[1:6]
+raw = open(out, "rb").read()
+if open(err, "rb").read():
+    print("something on stderr"); sys.exit()
+if not raw.endswith(b"\n") or any(b < 0x20 or b > 0x7e for b in raw[:-1]):
+    print("stdout is not a single line of printable ASCII"); sys.exit()
+try:
+    o = json.loads(raw)
+except ValueError:
+    print("stdout is not JSON"); sys.exit()
+if not isinstance(o, dict):
+    print("stdout is not one JSON object"); sys.exit()
+if o.get("schema") != "hodeishield.verifier.result.v1": print("schema is %r" % (o.get("schema"),))
+elif o.get("exit_code") != int(got): print("exit_code %r, process exit %s" % (o.get("exit_code"), got))
+elif int(got) != int(want): print("exit %s, expected %s" % (got, want))
+elif o.get("reason") != code and not (
+        # A document that breaks several rules: the manifest names one of them, and
+        # it must at least be among the failed checks of this exit class.
+        sum(1 for c in o.get("checks", []) if c.get("result") == "fail" and c.get("exit_class") == int(got)) > 1
+        and any(c.get("code") == code and c.get("result") == "fail" and c.get("exit_class") == int(got)
+                for c in o.get("checks", []))):
+    print("reason %r, expected %r" % (o.get("reason"), code))
+elif int(got) != 0 and o.get("attested") is not None: print("attested is not null on exit %s" % got)
+elif int(got) == 0 and not isinstance(o.get("attested"), (dict, type(None))): print("attested is not an object or null")
+' "$out" "$out.err" "$got" "$want" "$code")"
   else
-    for a in "${absent[@]+"${absent[@]}"}"; do
-      if grep -qF -- "$a" "$out"; then why="output contains: $a"; break; fi
-    done
-    if [ -z "$why" ] && [ -n "$canon" ] && ! grep -qF -- "sha-256: $canon" "$out"; then
-      why="canonical sha-256 $canon not printed"
-    fi
-    if [ -z "$why" ] && [ -n "$scanon" ] && ! grep -qF -- "sha-256: $scanon" "$out"; then
-      why="status-list canonical sha-256 $scanon not printed"
+    NO_COLOR=1 bash "$VERIFIER" "${args[@]}" > "$out" 2>&1 < /dev/null
+    got=$?
+    if [ "$got" -ne "$want" ]; then
+      why="exit $got, expected $want"
+    elif ! grep -qF -- "$match" "$out"; then
+      why="exit $got as expected, but no line containing: $match"
+    else
+      for a in "${absent[@]+"${absent[@]}"}"; do
+        if grep -qF -- "$a" "$out"; then why="output contains: $a"; break; fi
+      done
+      if [ -z "$why" ] && [ -n "$canon" ] && ! grep -qF -- "sha-256: $canon" "$out"; then
+        why="canonical sha-256 $canon not printed"
+      fi
+      if [ -z "$why" ] && [ -n "$scanon" ] && ! grep -qF -- "sha-256: $scanon" "$out"; then
+        why="status-list canonical sha-256 $scanon not printed"
+      fi
     fi
   fi
   if [ -n "$why" ]; then
     printf 'not ok - %s [%s] (%s)\n' "$id" "$code" "$why"
-    sed 's/^/    # /' "$out"
+    head -c 2000 "$out" | sed 's/^/    # /'
     FAILED=$((FAILED + 1))
   else
     printf 'ok - %s (exit %s, %s)\n' "$id" "$got" "$code"
@@ -158,5 +203,5 @@ while IFS= read -r -d '' id; do
 done < "$T/cases.bin"
 
 echo
-printf '# vectors v1: %d passed, %d failed, %d skipped\n' "$PASSED" "$FAILED" "$SKIPPED"
+printf '# vectors v1%s: %d passed, %d failed, %d skipped\n' "$MODE_LABEL" "$PASSED" "$FAILED" "$SKIPPED"
 [ "$FAILED" -eq 0 ] && [ "$PASSED" -gt 0 ]

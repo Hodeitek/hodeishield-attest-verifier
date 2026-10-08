@@ -1135,6 +1135,183 @@ mem statusret2 "d['keys'][1].update(status='retired', retired_at='2027-01-01T00:
 expect 0 'GOOD — not revoked' 'a status key retired in both places, with a list that predates it, is good' -- \
   --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys-anchor-ret.json" --check-kid "$ISSUER_KID" --now "$NOW" --anchor-file "$T/stmt-statusret2.json"
 
+# --- --json (#38) ----------------------------------------------------------------
+# The same runs with --json: stdout is exactly one JSON object (printable ASCII,
+# so no control character or ESC byte can reach a terminal raw), stderr is empty,
+# and the exit code is the one of the text mode. The object is described in
+# docs/security/json-output.md. The cosign test double is still first on PATH.
+echo '# --json'
+PYBIN="$(command -v python3)"
+# jexpect CODE NAME CHECK -- verifier args... — run with --json added; CODE is the
+# expected exit code and CHECK a Python expression over the object `o` (and the
+# exit code `rc`) that must be true. JTEXT, when set, is a text-mode output file.
+jexpect() {
+  local want="$1" name="$2" check="$3"; shift 4
+  local out="$T/jout.$((PASSED + FAILED))" got why
+  NO_COLOR=1 bash "$VERIFIER" "$@" --json > "$out" 2> "$out.err"
+  got=$?
+  why="$("$PYBIN" -I - "$out" "$out.err" "$got" "$want" "$check" <<'PY'
+import json, os, sys
+out, err, got, want, check = sys.argv[1:6]
+raw = open(out, "rb").read()
+if open(err, "rb").read(): print("something on stderr"); sys.exit()
+if not raw.endswith(b"\n") or any(b < 0x20 or b > 0x7e for b in raw[:-1]):
+    print("stdout is not one line of printable ASCII"); sys.exit()
+o = json.loads(raw)
+rc = int(got)
+if not isinstance(o, dict) or o.get("schema") != "hodeishield.verifier.result.v1": print("not the v1 object"); sys.exit()
+if o.get("exit_code") != rc: print("exit_code %r, process exit %d" % (o.get("exit_code"), rc)); sys.exit()
+if rc != int(want): print("exit %d, expected %s" % (rc, want)); sys.exit()
+env = {"o": o, "rc": rc, "text": open(os.environ["JTEXT"], encoding="utf-8").read() if os.environ.get("JTEXT") else ""}
+# eval() on the expression written in this file, never on anything from a document.
+if not eval(check, env): print("false: " + check)
+PY
+)"
+  if [ -z "$why" ]; then printf 'ok - json: %s\n' "$name"; PASSED=$((PASSED + 1))
+  else printf 'not ok - json: %s (%s)\n' "$name" "$why"; head -c 1500 "$out" | sed 's/^/    # /'; FAILED=$((FAILED + 1)); fi
+}
+
+# A verified document: the attested content equals the text block.
+expect 0 'ISO27001 (iso27001): substantial' 'text reference for the JSON of a verified document' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+JTEXT="$LAST_OUT" jexpect 0 'a verified document: verdict, reason, attested content and the frameworks of the text block' \
+  'o["verdict"] == "verified" and o["reason"] == "verified" and o["mode"] == "attestation" and o["verifier"]["version"]
+   and o["attested"]["overallBand"] == "basic" and o["attested"]["slug"] == "fixture-org" and o["attested"]["visibility"] == "public"
+   and o["attested"]["generatedAt"] == "2026-01-01T00:00:00.000Z" and "posture" not in o["attested"]
+   and ["%s (%s): %s" % (f["label"], f["code"], f["band"]) for f in o["attested"]["frameworks"]]
+       == [l.strip() for l in text.splitlines() if "): " in l and l.startswith("          ")]
+   and o["checks"][-1] == {"code": "verified", "result": "pass", "exit_class": 0} and o["anchor"] is None' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+jexpect 0 'the same document from --jws and --claims' 'o["verdict"] == "verified" and o["attested"]["frameworks"][0]["code"] == "iso27001"' -- \
+  --jws "$T/att.jws" --claims "$T/claims.json" "${COMMON[@]}"
+jexpect 0 'with --raw the signed posture is there too' \
+  'o["attested"]["posture"]["slug"] == "fixture-org" and o["attested"]["posture"]["frameworks"][0]["band"] == "substantial"' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --raw
+jexpect 0 'the envelope values the text mode shows are in "unverified", named as such' \
+  'o["unverified"]["iss"] == "https://issuer.test" and o["unverified"]["kid"] == "'"$ISSUER_KID"'" and o["unverified"]["nonce"] is None
+   and o["unverified"]["docVersion"] == "attest.attestation.v1" and o["unverified"]["slug"] == "fixture-org" and "attested" in o' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+
+# Not verified: attested is null, even with --raw, as the text mode withholds it.
+jexpect 1 'a tampered document: failed, signature_invalid, attested null even with --raw' \
+  'o["verdict"] == "failed" and o["reason"] == "signature_invalid" and o["attested"] is None and "frameworks" not in text' -- \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
+jexpect 1 'a genuine but expired document: expired, attested null' \
+  'o["verdict"] == "expired" and o["reason"] == "expired" and o["attested"] is None' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE" --raw
+jexpect 2 'a key set that is not the signer: could not check' \
+  'o["verdict"] == "could_not_check" and o["reason"] == "unknown_kid" and o["attested"] is None and o["message"]' -- \
+  --attestation "$T/att.json" --jwks "$T/other-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --raw
+
+# Control characters and ESC in a document are JSON-escaped; the printable-ASCII
+# rule of jexpect already fails a raw ESC byte in stdout.
+jexpect 1 'newlines and ESC in the nonce, iss and jti are escaped and survive as the document wrote them' \
+  'o["unverified"]["nonce"] == "a\nVERIFIED — forged\n\x1b[8mhidden" and o["unverified"]["jti"] == o["unverified"]["iss"] and o["attested"] is None' -- \
+  --attestation "$T/inj-claims.json" "${COMMON[@]}" --expect-nonce 'challenge-B' --raw
+jexpect 2 'a header kid with newlines and ESC is only in the message, escaped' 'o["reason"] == "unknown_kid" and "hidden" in o["message"]' -- \
+  --attestation "$T/inj-header.json" "${COMMON[@]}"
+
+# Argument errors are JSON too, wherever --json is, with exit 2.
+jexpect 2 'an unknown argument is a usage error' \
+  'o["reason"] == "usage" and o["verdict"] == "could_not_check" and o["checks"] == [] and o["attested"] is None
+   and o["unverified"] == {} and o["anchor"] is None and o["message"] == "unknown argument: --bogus"' -- --bogus
+jexpect 2 'a malformed --expect-kid is a usage error' 'o["reason"] == "usage" and "is not a kid" in o["message"]' -- \
+  --attestation "$T/att.json" --expect-kid nope
+jexpect 2 'an option with an empty value is a usage error' 'o["reason"] == "usage" and "--jwks needs a value" in o["message"]' -- \
+  --attestation "$T/att.json" --jwks ''
+jexpect 2 '--min-seq that is not a number is a usage error' 'o["reason"] == "usage"' -- \
+  --attestation "$T/att.json" --min-seq x
+# --json first or last makes no difference, and a check failure keeps its own code.
+out="$T/json-first.out"
+NO_COLOR=1 bash "$VERIFIER" --json --attestation "$T/att.json" "${COMMON[@]}" > "$out" 2>&1
+if [ "$("$PYBIN" -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$out")" = verified ]; then
+  printf 'ok - json: --json as the first argument\n'; PASSED=$((PASSED + 1))
+else printf 'not ok - json: --json as the first argument\n'; FAILED=$((FAILED + 1)); fi
+jexpect 2 'an environment problem is a die: the check, the message' \
+  'o["reason"] == "attestation_missing" and o["checks"][-1]["exit_class"] == 2 and "--attestation" in o["message"]' --
+
+# --help and --version print their usual text, even with --json.
+NO_COLOR=1 bash "$VERIFIER" --json --help > "$T/jhelp.out" 2> "$T/jhelp.err"; got=$?
+if [ "$got" -eq 0 ] && grep -q '^Exit codes:' "$T/jhelp.out" && [ ! -s "$T/jhelp.err" ] && ! grep -q '^{' "$T/jhelp.out"; then
+  printf 'ok - json: --help with --json prints the usual text (exit 0)\n'; PASSED=$((PASSED + 1))
+else printf 'not ok - json: --help with --json (exit %s)\n' "$got"; FAILED=$((FAILED + 1)); fi
+NO_COLOR=1 bash "$VERIFIER" --version --json > "$T/jver.out" 2> "$T/jver.err"; got=$?
+if [ "$got" -eq 0 ] && [ "$(cat "$T/jver.out")" = "verify-attestation.sh $VER" ] && [ ! -s "$T/jver.err" ]; then
+  printf 'ok - json: --version with --json prints the usual line (exit 0)\n'; PASSED=$((PASSED + 1))
+else printf 'not ok - json: --version with --json (exit %s)\n' "$got"; FAILED=$((FAILED + 1)); fi
+
+# --status-list: good, revoked, unknown.
+jexpect 0 'status-list good' \
+  'o["mode"] == "status-list" and o["verdict"] == "good" and o["reason"] == "good" and o["attested"]["slug"] == "fixture-org"' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+jexpect 1 'status-list revoked (the key): attested null even with --raw' \
+  'o["verdict"] == "revoked" and o["reason"] == "revoked_key" and o["attested"] is None' -- \
+  "${SL[@]}" --status "$T/list-key.json" --raw
+jexpect 1 'status-list revoked (the subject)' 'o["verdict"] == "revoked" and o["reason"] == "revoked_subject"' -- \
+  "${SL[@]}" --status "$T/list-subj-after.json"
+jexpect 3 'status-list unknown: the list does not verify' \
+  'o["verdict"] == "unknown" and o["reason"] == "status_unknown_bad_signature" and o["attested"] is None' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json" --raw
+jexpect 0 'a standalone status query: good, nothing attested' \
+  'o["verdict"] == "good" and o["attested"] is None and o["unverified"] == {}' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW"
+jexpect 1 'a tampered document under a good list: failed' 'o["verdict"] == "failed" and o["attested"] is None' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" --attestation "$T/tampered-field.json" "${COMMON[@]}"
+
+# --anchor-file, with the cosign test double.
+jexpect 0 'the anchor object: verified, the release tag, the attestation key listed' \
+  'o["anchor"]["verified"] is True and o["anchor"]["release_tag"] == "v'"$VER"'"
+   and o["anchor"]["kids"] == [{"kid": "'"$ISSUER_KID"'", "role": "attestation", "listed": True}]' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+jexpect 0 'the anchor object under --status-list lists both keys' \
+  '[k["role"] for k in o["anchor"]["kids"]] == ["attestation", "status-list"] and all(k["listed"] for k in o["anchor"]["kids"])' -- \
+  "${SL[@]}" --status "$T/list-empty.json" "${A[@]}"
+jexpect 1 'a key the statement does not list: anchor not verified, kid not listed' \
+  'o["reason"] == "anchor_kid_absent" and o["anchor"]["verified"] is False and o["anchor"]["kids"][0]["listed"] is False' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-nokid.json"
+COSIGN_STUB_RC=1 COSIGN_STUB_ERR='Error: something nobody has seen' jexpect 2 'cosign says no: could not check, anchor not verified' \
+  'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None and o["anchor"]["kids"] == []' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+
+# Two different checks that share a code are two entries: generatedAt and expiresAt
+# both unparseable are two date_unparseable failures, at two places in the script.
+mint_attest --generated-at 'not-a-date' --expires-at 'also-not' --out "$T/baddates.json"
+jexpect 1 'two distinct failures with one code stay two entries' \
+  '[c["code"] for c in o["checks"]].count("date_unparseable") == 2 and o["reason"] != "usage"' -- \
+  --attestation "$T/baddates.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+# A warning printed over several lines is one check.
+jexpect 0 'a warning printed over two lines is one entry' \
+  '[c["code"] for c in o["checks"]].count("issuer_unpinned") == 1' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --now "$NOW"
+
+# A check recorded in a subshell is not lost. A copy of the script gets two probes
+# after its first check: one in ( ), one in $( ) with the same code twice.
+PROBE="$T/probe-verifier.sh"
+"$PYBIN" - "$VERIFIER" "$PROBE" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+anchor = 'ok openssl_mldsa65_available "OpenSSL ${OSSL_V} offers ML-DSA-65"\n'
+assert t.count(anchor) == 1
+probe = anchor + '( warn probe_in_subshell "probe" )\np="$(\nbad probe_twice "a"\nbad probe_twice "b"\n)" || true\n'
+open(sys.argv[2], "w").write(t.replace(anchor, probe))
+PY
+VERIFIER_REAL="$VERIFIER"; VERIFIER="$PROBE"
+jexpect 0 'a check recorded in a subshell appears, in order, and two same-code checks stay two' \
+  '[c["code"] for c in o["checks"]][:4] == ["openssl_mldsa65_available", "probe_in_subshell", "probe_twice", "probe_twice"]
+   and o["checks"][1]["result"] == "warn"' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+VERIFIER="$VERIFIER_REAL"
+
+# Without python3 a smaller, still valid object is written (nothing attested).
+NOPY="$T/nopy"; mkdir -p "$NOPY"
+for tool in bash env openssl jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then ln -sf "$tool_path" "$NOPY/$tool"; fi
+done
+PATH="$NOPY" jexpect 2 'without python3: exit 2, a valid object, no attested content' \
+  'o["reason"] == "python3_missing" and o["verdict"] == "could_not_check" and o["attested"] is None and o["checks"][-1]["code"] == "python3_missing"' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+
 export PATH="$PATH_BEFORE_STUB"
 unset COSIGN_STUB_LOG
 
@@ -1281,6 +1458,8 @@ printf '# %d passed, %d failed\n' "$PASSED" "$FAILED"
 echo
 VECTORS_RC=0
 VERIFIER="$VERIFIER" bash "$ROOT/tests/vectors.sh" || VECTORS_RC=$?
+echo
+VERIFIER="$VERIFIER" bash "$ROOT/tests/vectors.sh" --json || VECTORS_RC=$?
 echo
 MUTANTS_RC=0
 if [ "${VERIFIER_SKIP_MUTANTS:-}" = "1" ]; then
