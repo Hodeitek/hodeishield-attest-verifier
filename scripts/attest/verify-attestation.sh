@@ -268,8 +268,8 @@ Status-list mode (revocation):
 Common:
   --anchor-file FILE     check the signing key against a signed key statement (needs cosign >= 3.1.3)
   --anchor-bundle FILE   the statement's Sigstore bundle (default: FILE.sigstore.json)
-  --version              print the version of this script
-  -h, --help             this text
+  --json                 print one JSON object on stdout and nothing else (the exit codes do not change)
+  --version, -h, --help  print the version of this script, or this text
 
 Exit codes:
   0  verified (good, in --status-list mode)
@@ -307,7 +307,271 @@ is_kid_shape() {
   [[ "$1" =~ $shape ]]
 }
 
+# --- --json ------------------------------------------------------------------
+# With --json anywhere in the arguments (found here, before they are parsed, so
+# that an argument error is reported as JSON too) the run prints ONE JSON object
+# on stdout and nothing else: the human text is sent to /dev/null on both stdout
+# and stderr, and the object is written to the real stdout (fd 3) when the run
+# ends, whatever way it ends. The exit codes are the ones of the text mode.
+# docs/security/json-output.md describes the object.
+#
+# Every string reaches the object through JSON encoding (python3 json.dumps with
+# ensure_ascii), so a control character or an escape sequence in a document can
+# never reach the terminal raw. Without python3 a smaller object is written by
+# json_emit_bash (see there).
+JSON_MODE=0; JSON_EMIT=1
+for json_arg in "$@"; do
+  if [ "$json_arg" = --json ]; then JSON_MODE=1; fi
+done
+unset json_arg
+# State that the object reports; set where the text mode prints the same thing.
+VERDICT=''          # verified, expired, failed, could_not_check, good, revoked, unknown
+USAGE_ERR=0; USAGE_CODE=usage; USAGE_MSG=''   # an argument error, before any check
+DIE_MSG=''          # the message of the die() that ended the run
+ATTESTED_OK=0       # the "Attested content" block was shown
+CLAIMS_SHOWN=0      # the envelope values of section 7 were shown
+if [ "$JSON_MODE" -eq 1 ]; then exec 3>&1 >/dev/null 2>&1; fi
+
+# An argument error: the text is the one the text mode prints, exit 2.
+arg_die() {
+  USAGE_ERR=1; USAGE_MSG="$1"
+  printf '%s\n' "$1" >&2
+  exit 2
+}
+# --help and --version print their usual text even with --json (and exit 0).
+plain_output() {
+  JSON_EMIT=0
+  if [ "$JSON_MODE" -eq 1 ]; then exec 1>&3; fi
+}
+
+JSON_PY='
+import json, sys
+kv = {}
+parts = sys.stdin.buffer.read().split(b"\0")
+for i in range(0, len(parts) - 1, 2):
+    kv[parts[i].decode("ascii", "replace")] = parts[i + 1].decode("utf-8", "replace")
+rc = int(kv["rc"])
+verdict = kv["verdict"]
+usage = kv.get("usage") == "1"
+
+# The checks, in the order they ran. A run of consecutive entries from one call
+# site with one code is one check (a warning printed over several lines).
+checks = []
+seen = None
+lines = []
+if not usage and kv.get("checks_file"):
+    try:
+        lines = open(kv["checks_file"], encoding="utf-8", errors="replace").read().split("\n")
+    except OSError:
+        lines = []
+for ln in lines:
+    f = ln.split("|")
+    if len(f) != 4 or f[3] not in ("0", "1", "2", "3"):
+        continue
+    if (f[0], f[1]) == seen:
+        continue
+    seen = (f[0], f[1])
+    checks.append({"code": f[1], "result": f[2], "exit_class": int(f[3])})
+
+def reason():
+    if usage:
+        return kv["usage_code"]
+    if rc == 0:
+        return verdict
+    # The verdicts that are decided by a particular check: a withdrawal, an expiry.
+    wanted = {"revoked": ("revoked_key", "revoked_subject"), "expired": ("expired",)}.get(verdict, ())
+    for c in reversed(checks):
+        if c["code"] in wanted and c["result"] == "fail":
+            return c["code"]
+    # A failure that is not about age is what decided "failed"; too_old and
+    # expired decide only "expired".
+    skip = ("too_old", "expired") if verdict == "failed" else ()
+    for want in ("fail", None):
+        for c in checks:
+            if c["exit_class"] == rc and c["code"] not in skip and (want is None or c["result"] == want):
+                return c["code"]
+    return None
+
+def val(name):
+    v = kv.get(name)
+    return v if v else None
+
+# What the signature covers, only when the run verified the document.
+attested = None
+if kv.get("attested") == "1" and rc == 0:
+    try:
+        doc = json.load(open(kv["claims_file"], encoding="utf-8"))
+        p = doc.get("posture") or {}
+        attested = {
+            "overallBand": doc.get("overallBand"),
+            "slug": p.get("slug"),
+            "visibility": p.get("visibility"),
+            "generatedAt": p.get("generatedAt"),
+            "lastCheckedAt": p.get("lastCheckedAt"),
+            "frameworks": [{"label": f.get("label"), "code": f.get("code"), "band": f.get("band")}
+                           for f in (p.get("frameworks") or []) if isinstance(f, dict)],
+        }
+        if kv.get("raw_posture_file"):
+            attested["posture"] = json.load(open(kv["raw_posture_file"], encoding="utf-8"))
+    except Exception:
+        attested = None
+
+# What the document says, read but not established unless the exit code is 0.
+unverified = {}
+if kv.get("claims_shown") == "1":
+    unverified["docVersion"] = val("u_docVersion")
+    unverified["iss"] = val("u_iss")
+    unverified["kid"] = val("u_kid")
+    unverified["jti"] = val("u_jti")
+    unverified["nonce"] = kv.get("u_nonce") if kv.get("u_nonce_present") == "1" else None
+for name in ("generatedAt", "expiresAt", "slug"):
+    if "u_" + name in kv:
+        unverified[name] = val("u_" + name)
+
+anchor = None
+if kv.get("anchor") == "1":
+    kids = []
+    for role, kidkey, listed_code, codes in (
+            ("attestation", "anchor_kid_att", "anchor_kid_listed",
+             ("anchor_kid_listed", "anchor_kid_absent", "anchor_role_mismatch", "anchor_retired_mismatch")),
+            ("status-list", "anchor_kid_stat", "anchor_status_kid_listed",
+             ("anchor_status_kid_listed", "anchor_status_kid_absent", "anchor_status_role_mismatch",
+              "anchor_status_retired_mismatch"))):
+        ran = [c for c in checks if c["code"] in codes]
+        if ran:
+            kids.append({"kid": val(kidkey), "role": role, "listed": any(c["code"] == listed_code for c in ran)})
+    anchor = {
+        "verified": kv.get("anchor_ready") == "1" and not any(
+            c["code"].startswith("anchor_") and c["result"] == "fail" for c in checks),
+        "release_tag": val("anchor_tag"),
+        "kids": kids,
+    }
+
+obj = {
+    "schema": "hodeishield.verifier.result.v1",
+    "verifier": {"version": kv["version"]},
+    "mode": kv["mode"],
+    "exit_code": rc,
+    "verdict": verdict,
+    "reason": reason(),
+    "checks": checks,
+    "attested": attested,
+    "unverified": {} if usage else unverified,
+    "anchor": None if usage else anchor,
+}
+if "message" in kv:
+    obj["message"] = kv["message"]
+sys.stdout.write(json.dumps(obj, ensure_ascii=True, sort_keys=False) + "\n")
+'
+
+# The same object without python3, which is then the very thing that is missing:
+# no attested content, no unverified values, no anchor. A byte outside printable
+# ASCII becomes \u00XX (so a non-ASCII message is not exact, but it is safe).
+json_str() {
+  local LC_ALL=C s="$1" out='' c='' i=0 n=${#1} bs=$'\\'
+  for (( i = 0; i < n; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      '"')  out+="$bs\"" ;;
+      \\)  out+="$bs$bs" ;;
+      [[:print:]]) out+="$c" ;;
+      *)    printf -v c '\\u%04x' "'$c"; out+="$c" ;;
+    esac
+  done
+  printf '"%s"' "$out"
+}
+json_emit_bash() {
+  local rc="$1" mode="$2" verdict="$3" site='' code='' result='' cls='' seen='' items='' reason='' any=''
+  if [ "$USAGE_ERR" -eq 1 ]; then
+    reason="$USAGE_CODE"
+  elif [ "$rc" -eq 0 ]; then
+    reason="$verdict"
+  elif [ -n "${CHECKS_FILE:-}" ] && [ -r "$CHECKS_FILE" ]; then
+    while IFS='|' read -r site code result cls; do
+      [ -n "$cls" ] || continue
+      if [ "$site|$code" != "$seen" ]; then
+        items+="${items:+,}{\"code\":$(json_str "$code"),\"result\":$(json_str "$result"),\"exit_class\":$cls}"
+      fi
+      seen="$site|$code"
+      if [ "$cls" = "$rc" ]; then
+        if [ "$result" = fail ] && [ -z "$reason" ]; then reason="$code"; fi
+        if [ -z "$any" ]; then any="$code"; fi
+      fi
+    done < "$CHECKS_FILE"
+    if [ -z "$reason" ]; then reason="$any"; fi
+  fi
+  printf '{"schema":"hodeishield.verifier.result.v1","verifier":{"version":%s},"mode":%s,"exit_code":%s,"verdict":%s,' \
+    "$(json_str "$VERIFIER_VERSION")" "$(json_str "$mode")" "$rc" "$(json_str "$verdict")"
+  if [ -n "$reason" ]; then printf '"reason":%s,' "$(json_str "$reason")"; else printf '"reason":null,'; fi
+  printf '"checks":[%s],"attested":null,"unverified":{},"anchor":null' "$items"
+  if [ "$USAGE_ERR" -eq 1 ]; then printf ',"message":%s' "$(json_str "$USAGE_MSG")"
+  elif [ -n "$DIE_MSG" ]; then printf ',"message":%s' "$(json_str "$DIE_MSG")"; fi
+  printf '}\n'
+}
+
+# json_emit RC — write the object for a run that ends with exit status RC.
+json_emit() {
+  local rc="$1" mode=attestation verdict="$VERDICT"
+  if [ "$STATUS_LIST_MODE" -eq 1 ]; then mode=status-list; fi
+  if [ -z "$verdict" ]; then
+    case "$rc" in
+      0) if [ "$mode" = attestation ]; then verdict=verified; else verdict=good; fi ;;
+      1) verdict=failed ;;
+      3) verdict=unknown ;;
+      *) verdict=could_not_check ;;
+    esac
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    json_emit_bash "$rc" "$mode" "$verdict"
+    return 0
+  fi
+  {
+    printf 'version\0%s\0mode\0%s\0rc\0%s\0verdict\0%s\0' "$VERIFIER_VERSION" "$mode" "$rc" "$verdict"
+    printf 'checks_file\0%s\0' "${CHECKS_FILE:-}"
+    if [ "$USAGE_ERR" -eq 1 ]; then printf 'usage\0%s\0usage_code\0%s\0message\0%s\0' 1 "$USAGE_CODE" "$USAGE_MSG"
+    elif [ -n "$DIE_MSG" ]; then printf 'message\0%s\0' "$DIE_MSG"; fi
+    if [ "$CLAIMS_SHOWN" -eq 1 ]; then
+      printf 'claims_shown\0%s\0u_docVersion\0%s\0u_iss\0%s\0u_kid\0%s\0u_jti\0%s\0' 1 \
+        "${CLAIMS_DOCVERSION:-}" "${CLAIMS_ISS:-}" "${CLAIMS_KID:-}" "${CLAIMS_JTI:-}"
+      printf 'u_nonce_present\0%s\0u_nonce\0%s\0' "${CLAIMS_NONCE_PRESENT:-0}" "${CLAIMS_NONCE:-}"
+    fi
+    if [ -n "${GENERATED+x}" ]; then printf 'u_generatedAt\0%s\0' "$GENERATED"; fi
+    if [ -n "${EXPIRES+x}" ]; then printf 'u_expiresAt\0%s\0' "$EXPIRES"; fi
+    if [ -n "${SLUG+x}" ]; then printf 'u_slug\0%s\0' "$SLUG"; fi
+    if [ "$ATTESTED_OK" -eq 1 ]; then
+      printf 'attested\0%s\0claims_file\0%s\0' 1 "$CLAIMS_FILE"
+      if [ "$SHOW_RAW" -eq 1 ]; then printf 'raw_posture_file\0%s\0' "$POSTURE_FILE"; fi
+    fi
+    if [ -n "$ANCHOR_FILE" ]; then
+      printf 'anchor\0%s\0anchor_ready\0%s\0anchor_kid_att\0%s\0anchor_kid_stat\0%s\0' 1 "$ANCHOR_READY" \
+        "${DERIVED_KID:-}" "${STATUS_DERIVED_KID:-}"
+      if [ "${anchor_tag_ok:-0}" -eq 1 ]; then printf 'anchor_tag\0%s\0' "$anchor_tag"; fi
+    fi
+  } | python3 -c "$JSON_PY"
+}
+
+# The work directory and what happens when the run ends, however it ends.
+WORKDIR=''
+cleanup() { if [ -n "$WORKDIR" ]; then rm -rf -- "$WORKDIR"; fi; return 0; }
+on_exit() {
+  local rc=$?
+  set +e
+  if [ "$JSON_MODE" -eq 1 ] && [ "$JSON_EMIT" -eq 1 ]; then json_emit "$rc" >&3 2>/dev/null; fi
+  cleanup
+  exit "$rc"
+}
+trap on_exit EXIT
+
 while [ $# -gt 0 ]; do
+  # A missing or empty value is an argument error with exit 2 in --json mode (the
+  # text mode keeps what the shell does for ${2:?}).
+  if [ "$JSON_MODE" -eq 1 ]; then
+    case "$1" in
+      --jws|--jwks|--attestation|--claims|--posture|--pub-b64url|--expect-slug|--max-age-seconds|--max-age-days|--now|\
+      --anchor-file|--anchor-bundle|--status|--status-keys|--check-kid|--check-subject|--check-generated-at|--min-seq|--expect-issuer)
+        [ -n "${2:-}" ] || arg_die "error: $1 needs a value" ;;
+    esac
+  fi
   case "$1" in
     --jws)          JWS_FILE="${2:?}"; shift 2 ;;
     --jwks)         JWKS_FILE="${2:?}"; shift 2 ;;
@@ -320,7 +584,7 @@ while [ $# -gt 0 ]; do
     # meaningful assertion ("this document must carry NO challenge"), and an
     # empty string must not silently mean "do not check".
     --expect-nonce)
-      [ $# -ge 2 ] || { printf 'error: --expect-nonce needs a value (use '"''"' for "no challenge")\n' >&2; exit 2; }
+      [ $# -ge 2 ] || arg_die "error: --expect-nonce needs a value (use '' for \"no challenge\")"
       EXPECT_NONCE_SET=1; EXPECT_NONCE="$2"; shift 2 ;;
     --max-age-seconds) MAX_AGE_SECONDS="${2:?}"; shift 2 ;;
     --max-age-days) MAX_AGE_SECONDS=$(( ${2:?} * 86400 )); shift 2 ;;
@@ -331,9 +595,9 @@ while [ $# -gt 0 ]; do
     # A Q g w (the last character carries only 2 bits). Anything else can never
     # equal a derived kid, so it is a usage error, not a check that always fails.
     --expect-kid)
-      [ $# -ge 2 ] || { printf 'error: --expect-kid needs a value\n' >&2; exit 2; }
+      [ $# -ge 2 ] || arg_die 'error: --expect-kid needs a value'
       is_kid_shape "$2" \
-        || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$(esc "$2")" >&2; exit 2; }
+        || arg_die "error: --expect-kid $(esc "$2") is not a kid (22 base64url characters)"
       EXPECT_KIDS+=("$2"); shift 2 ;;
     --anchor-file)          ANCHOR_FILE="${2:?}"; shift 2 ;;
     --anchor-bundle)        ANCHOR_BUNDLE="${2:?}"; shift 2 ;;
@@ -344,11 +608,12 @@ while [ $# -gt 0 ]; do
     --check-subject)        CHECK_SUBJECT="${2:?}"; shift 2 ;;
     --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; shift 2 ;;
     --min-seq)              MIN_SEQ="${2:?}"; shift 2
-      [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || { printf 'error: --min-seq must be a non-negative integer\n' >&2; exit 2; } ;;
+      [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || arg_die 'error: --min-seq must be a non-negative integer' ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
-    --version)      printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
-    -h|--help)      usage; exit 0 ;;
-    *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+    --json)         shift ;;
+    --version)      plain_output; printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
+    -h|--help)      plain_output; usage; exit 0 ;;
+    *) arg_die "unknown argument: $1" ;;
   esac
 done
 
@@ -400,6 +665,7 @@ warn_unknown() { record "$1" warn 3; shift; printf '  %sWARN%s  %s\n' "$YELLOW" 
 WITHHOLD_ON_DIE=0
 die()  {
   record "$1" fail 2; shift
+  VERDICT=could_not_check; DIE_MSG="$*"
   printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2
   [ "$WITHHOLD_ON_DIE" -eq 0 ] || printf '%s\n' "$CONTENT_WITHHELD" >&2
   exit 2
@@ -429,9 +695,6 @@ FAILURES=0
 # expired attestation is still not one to rely on.
 STALE_FAILURES=0; STALE_EXPIRED=0; SIGNATURE_VERIFIED=0
 stale() { bad "$@"; STALE_FAILURES=$((STALE_FAILURES+1)); }
-WORKDIR=''
-cleanup() { if [ -n "$WORKDIR" ]; then rm -rf -- "$WORKDIR"; fi; return 0; }
-trap cleanup EXIT
 # Created before the first check can run, so that every check lands in CHECKS_FILE.
 WORKDIR="$(mktemp -d)"; chmod 700 "$WORKDIR"
 CHECKS_FILE="$WORKDIR/checks"; : > "$CHECKS_FILE"
@@ -1764,6 +2027,7 @@ if [ -n "$CLAIMS_FILE" ]; then
   else
     printf '        nonce:       null  (no challenge — see --expect-nonce)\n'
   fi
+  CLAIMS_SHOWN=1
 
   if [ "$CLAIMS_DOCVERSION" = 'attest.attestation.v1' ]; then
     ok doc_version_valid "docVersion (E1) is attest.attestation.v1 — and it is inside the signature, so it cannot be rewritten on the wire"
@@ -2326,6 +2590,7 @@ fi # STATUS_LIST_MODE — section 9
 if [ -n "$JWS_FILE" ]; then
   if [ "$FAILURES" -eq 0 ] && { [ "$STATUS_LIST_MODE" -eq 0 ] || [ "${REVOCATION_STATUS:-}" = good ]; }; then
     if [ -n "$CLAIMS_FILE" ]; then
+      ATTESTED_OK=1
       printf '\n%sAttested content%s (covered by the signature, and the document verified)\n' "$BOLD" "$RESET"
       # A display failure must never change the verdict.
       python3 -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
@@ -2353,6 +2618,7 @@ stale_only() {
   [ "$SIGNATURE_VERIFIED" -eq 1 ] && [ "$FAILURES" -gt 0 ] && [ "$FAILURES" -eq "$STALE_FAILURES" ]
 }
 stale_verdict() {
+  VERDICT=expired
   if [ "$STALE_EXPIRED" -eq 1 ]; then
     printf '%s%sEXPIRED%s — the signature is valid, but this attestation expired on %s.\n' \
       "$RED" "$BOLD" "$RESET" "$(esc "${EXPIRES:-}")" >&2
@@ -2385,12 +2651,14 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
     stale_verdict
   fi
   if [ -n "$JWS_FILE" ] && [ "$FAILURES" -ne 0 ] && ! stale_only; then
+    VERDICT=failed
     printf '%s%sVERIFICATION FAILED%s — %d posture check(s) did not hold. Do not rely on this document.\n\n' \
       "$RED" "$BOLD" "$RESET" "$FAILURES" >&2
     exit 1
   fi
   case "$REVOCATION_STATUS" in
     good)
+      VERDICT=good
       printf '%s%sGOOD%s — not revoked, per a verified status list.\n\n' "$GREEN" "$BOLD" "$RESET"
       printf '%sThat is all it proves.%s It does not prove the claims inside are true, that the key\n' "$BOLD" "$RESET"
       printf 'belongs to who you think, or that nothing else about the document is wrong. Read\n'
@@ -2398,10 +2666,12 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
       exit 0
       ;;
     revoked)
+      VERDICT=revoked
       printf '%s%sREVOKED%s — reason "%s". Do not rely on this document.\n\n' "$RED" "$BOLD" "$RESET" "$(esc "$REVOCATION_REASON")" >&2
       exit 1
       ;;
     *)
+      VERDICT=unknown
       printf '%s%sUNKNOWN%s (%s) — neither good nor revoked. A status list that was obtained but does\n' \
         "$YELLOW" "$BOLD" "$RESET" "${REVOCATION_UNKNOWN_BECAUSE:-unverified}" >&2
       printf 'not verify, or that cannot settle this subject, has NOT told you the subject is fine; treat\n' >&2
@@ -2415,6 +2685,7 @@ fi
 
 if [ "$FAILURES" -eq 0 ]; then
   record verified pass 0
+  VERDICT=verified
   printf '%s%sVERIFIED%s — this document was signed by the holder of the key above and\n' "$GREEN" "$BOLD" "$RESET"
   printf 'has not been altered since.\n\n'
   printf '%sThat is all it proves.%s It does not prove the claims inside are true, that\n' "$BOLD" "$RESET"
@@ -2425,6 +2696,7 @@ fi
 if stale_only; then
   stale_verdict
 fi
+VERDICT=failed
 printf '%s%sVERIFICATION FAILED%s — %d check(s) did not hold. Do not rely on this document.\n\n' \
   "$RED" "$BOLD" "$RESET" "$FAILURES" >&2
 exit 1

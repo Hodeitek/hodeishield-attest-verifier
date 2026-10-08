@@ -4,9 +4,10 @@ Every check the verifier makes has a stable, machine-readable reason code. The
 codes are part of the public interface **from v1.4.0**: they are only ever
 added, never renamed or removed, so a program can rely on them.
 
-This release records the codes inside the script; the text output is
-unchanged and does not print them. A later option will emit them as JSON
-([#38](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/38)).
+The text output does not print the codes. With `--json` the verifier emits
+them: each entry of `checks`, and `reason`, the code that decided the exit
+code, are codes from this file (see
+[json-output.md](json-output.md)).
 
 ## How to read the table
 
@@ -26,7 +27,8 @@ unchanged and does not print them. A later option will emit them as JSON
 
 Command-line errors found while reading the arguments (an unknown option, a
 missing value, a malformed `--expect-kid` or `--min-seq`) happen before any
-check runs and have no code yet.
+check runs. They are not entries of `checks`; with `--json` their `reason` is
+`usage` (below) and `message` has the text.
 
 `tests/run.sh` fails if a code used in `scripts/attest/verify-attestation.sh` is
 missing from this file, or a code in the vectors manifest is one the script
@@ -36,6 +38,7 @@ cannot emit.
 
 | Code | Meaning | Result | Exit | Mode | Vectors |
 |---|---|---|---|---|---|
+| `usage` | An argument error, found before any check ran. Only ever the `reason` of a `--json` result, never an entry of `checks`. | fail | 2 | both |  |
 | `status_source_missing` | `--status-list` without `--status`. | fail | 2 | both |  |
 | `status_keys_source_missing` | `--status-list` without `--status-keys`. | fail | 2 | status-list |  |
 | `status_list_nothing_to_check` | `--status-list` with no document, `--check-kid` or `--check-subject`. | fail | 2 | status-list |  |
