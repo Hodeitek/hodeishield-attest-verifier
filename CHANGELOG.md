@@ -12,6 +12,15 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
+## Unreleased
+
+### Documentation
+- [An evaluation of Rust ML-DSA-65 implementations](docs/security/rust-mldsa-evaluation.md)
+  for a port of the verifier: version, stability, verification API, audits,
+  FIPS 140-3, C or pure Rust, and WebAssembly for each candidate, with a
+  recommendation and a date to look again. It does not run any candidate
+  against the test vectors; that stays open and will be done in CI.
+
 ## v1.3.0 - 2026-10-08
 
 `verify-attestation.sh` changes. sha256
