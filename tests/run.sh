@@ -794,7 +794,22 @@ json.dump({"schema": "hodeishield.keys.statement.v1", "issuer": iss, "keys": [
 PY
 # st OUT PYTHON — a statement derived from the base one; `d` is the document.
 st() { edit "$T/stmt-base.json" "$1" "$2"; }
-printf '{}\n' > "$T/stmt.json.sigstore.json"
+# The bundle the stub "verifies" carries a real (self-signed) certificate whose
+# single SAN is the workflow identity at a tag: the verifier reads the release tag
+# from it, as it does from the certificate cosign has just verified.
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -out "$T/anchor-k.pem" 2>/dev/null
+# mint_bundle OUT SAN — a bundle whose certificate has this subjectAltName ('' for none).
+mint_bundle() {
+  local ext=()
+  if [ -n "$2" ]; then ext=(-addext "subjectAltName=$2"); fi
+  openssl req -new -x509 -key "$T/anchor-k.pem" -subj '/CN=anchor-test' -days 2 ${ext[@]+"${ext[@]}"} \
+    -outform DER -out "$T/anchor-c.der" 2>/dev/null
+  printf '{"verificationMaterial":{"certificate":{"rawBytes":"%s"}}}\n' "$(openssl base64 -A -in "$T/anchor-c.der")" > "$1"
+}
+ANCHOR_WF='https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/'
+VER="$(bash "$VERIFIER" --version | awk '{print $2}')"
+ANCHOR_SIGNED="is signed by ${ANCHOR_WF}v${VER}"
+mint_bundle "$T/stmt.json.sigstore.json" "URI:${ANCHOR_WF}v${VER}"
 cp "$T/stmt-base.json" "$T/stmt.json"
 A=(--anchor-file "$T/stmt.json")                         # the bundle: stmt.json.sigstore.json, by default
 PUB="$(jq -r '.keys[0].pub' "$T/jwks.json")"
@@ -802,7 +817,7 @@ PUB="$(jq -r '.keys[0].pub' "$T/jwks.json")"
 export PATH="$STUB:$PATH_BEFORE_STUB"
 
 rm -f "$COSIGN_STUB_LOG"
-expect 0 "the key statement stmt.json is signed by the release workflow of this repository" \
+expect 0 "the key statement stmt.json ${ANCHOR_SIGNED}" \
   'cosign accepts the statement: the anchor is verified' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
 expect 0 "lists kid '$ISSUER_KID' as an attestation key" 'the attestation key is listed (anchor_kid_listed)' -- \
@@ -837,14 +852,14 @@ COSIGN_CERTIFICATE_IDENTITY='x' COSIGN_CERTIFICATE_OIDC_ISSUER='https://evil.tes
 argv_has "$ANCHOR_RE" 'the same fixed pattern with identity variables set in the environment'
 # The statement passed in is not the path cosign saw, and a path is never shown.
 mkdir -p "$T/deep/dir"; cp "$T/stmt.json" "$T/deep/dir/stmt.json"; cp "$T/stmt.json.sigstore.json" "$T/deep/dir/stmt.json.sigstore.json"
-expect 0 'is signed by the release workflow' 'a statement given with a directory is accepted' -- \
+expect 0 "$ANCHOR_SIGNED" 'a statement given with a directory is accepted' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/deep/dir/stmt.json"
 lacks 'deep/dir' 'the directory of the statement is not printed'
 lacks "$T" 'no temporary or absolute path is printed on a verified run'
 
 # --- the cosign version ---------------------------------------------------------
 for v in v3.1.3 v3.1.4 v3.10.0 v4.0.0 v3.2.0-rc1; do
-  COSIGN_STUB_VERSION="$v" expect 0 'is signed by the release workflow' "cosign $v is new enough (compared numerically)" -- \
+  COSIGN_STUB_VERSION="$v" expect 0 "$ANCHOR_SIGNED" "cosign $v is new enough (compared numerically)" -- \
     --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
 done
 for v in v2.4.0 v3.1.2 v3.0.9 v2.99.99 v3.1.3-rc1 '' devel v3.1 v3.x.1 v03.1.3x; do
@@ -860,6 +875,63 @@ PATH="$NOCOSIGN" expect 0 'VERIFIED — this document was signed' 'cosign is opt
   --attestation "$T/att.json" "${COMMON[@]}"
 PATH="$NOCOSIGN" expect 0 'GOOD — not revoked' 'cosign is optional: --status-list without --anchor-file does not need it' -- \
   "${SL[@]}" --status "$T/list-empty.json"
+
+# --- anti-rollback: the release tag of the verified certificate ----------------------
+# The tag is read from the certificate of the bundle cosign accepted, strictly, and
+# compared with the version of this script numerically. Older: exit 2, before the
+# statement is read. Equal or newer: on to the content checks.
+IFS=. read -r V_MAJ V_MIN V_PAT <<< "$VER"
+tagcase() {   # NAME SAN WANT_EXIT PATTERN
+  mint_bundle "$T/tag-bundle.json" "$2"
+  expect "$3" "$4" "release tag, $1" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/tag-bundle.json"
+}
+tagcase 'equal to this version' "URI:${ANCHOR_WF}v${VER}" 0 "$ANCHOR_SIGNED"
+tagcase 'a much older tag is refused' "URI:${ANCHOR_WF}v0.0.1" 2 "anchor could not be checked: statement from v0.0.1, older than this verifier v${VER}"
+lacks 'VERIFIED' 'no verdict on the attestation when the statement is older'
+if [ "$V_MIN" -gt 0 ]; then
+  tagcase 'an older minor with a large patch is refused' "URI:${ANCHOR_WF}v${V_MAJ}.$((V_MIN - 1)).999" 2 "statement from v${V_MAJ}.$((V_MIN - 1)).999, older than this verifier"
+fi
+if [ "$V_PAT" -gt 0 ]; then
+  tagcase 'an older patch is refused' "URI:${ANCHOR_WF}v${V_MAJ}.${V_MIN}.$((V_PAT - 1))" 2 "older than this verifier"
+fi
+tagcase 'a newer patch is accepted' "URI:${ANCHOR_WF}v${V_MAJ}.${V_MIN}.$((V_PAT + 1))" 0 "is signed by ${ANCHOR_WF}v${V_MAJ}.${V_MIN}.$((V_PAT + 1))"
+tagcase 'a newer major is accepted' "URI:${ANCHOR_WF}v$((V_MAJ + 1)).0.0" 0 "is signed by ${ANCHOR_WF}v$((V_MAJ + 1)).0.0"
+if [ "$V_MAJ" -eq 1 ] && [ "$V_MIN" -lt 10 ]; then
+  # 10 > 4 as numbers, and "1.10.0" sorts before "1.4.0" as text.
+  tagcase 'v1.10.0 is newer than v1.4.0: the comparison is numeric, not a string comparison' "URI:${ANCHOR_WF}v1.10.0" 0 "is signed by ${ANCHOR_WF}v1.10.0"
+fi
+CANNOT='anchor could not be checked: the statement'"'"'s release tag cannot be read'
+tagcase 'a pre-release tag' "URI:${ANCHOR_WF}v${VER}-rc1" 2 "$CANNOT"
+tagcase 'build metadata' "URI:${ANCHOR_WF}v${VER}+build" 2 "$CANNOT"
+tagcase 'a tag with two components' "URI:${ANCHOR_WF}v1.4" 2 "$CANNOT"
+tagcase 'a tag with a leading zero' "URI:${ANCHOR_WF}v01.4.0" 2 "$CANNOT"
+tagcase 'a tag without the v' "URI:${ANCHOR_WF}1.4.0" 2 "$CANNOT"
+tagcase 'a tag with a fourth component' "URI:${ANCHOR_WF}v1.4.0.1" 2 "$CANNOT"
+tagcase 'no tag at all' "URI:${ANCHOR_WF}" 2 "$CANNOT"
+tagcase 'a branch ref instead of a tag' "URI:https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/heads/main" 2 "$CANNOT"
+tagcase 'another workflow of the repository' "URI:https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/ci.yml@refs/tags/v${VER}" 2 "$CANNOT"
+tagcase 'another repository' "URI:https://github.com/evil/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/v${VER}" 2 "$CANNOT"
+tagcase 'two identities in the certificate' "URI:${ANCHOR_WF}v${VER},URI:${ANCHOR_WF}v0.0.1" 2 "$CANNOT"
+tagcase 'an identity that is not a URI' "email:someone@example.test" 2 "$CANNOT"
+tagcase 'a certificate without an identity' "" 2 "$CANNOT"
+printf '{}\n' > "$T/tag-bundle.json"
+expect 2 "$CANNOT" 'a bundle without a certificate' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/tag-bundle.json"
+printf 'not a bundle\n' > "$T/tag-bundle.json"
+expect 2 "$CANNOT" 'a bundle that is not JSON' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/tag-bundle.json"
+# The tag is checked before the content: an old statement that is also malformed is "older".
+st "$T/stmt-old-bad.json" 'd["schema"] = "x"'
+mint_bundle "$T/stmt-old-bad.json.sigstore.json" "URI:${ANCHOR_WF}v0.0.1"
+expect 2 'statement from v0.0.1, older than this verifier' 'the tag is checked before the statement is parsed' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-old-bad.json"
+lacks 'malformed' 'an old statement is not read, so its content is not reported'
+# A status-list run is refused the same way.
+expect 2 'statement from v0.0.1, older than this verifier' 'the tag check applies in --status-list mode too' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --anchor-file "$T/stmt-old-bad.json"
+# The old-statement bundle is not reused below.
+rm -f "$T/stmt-old-bad.json.sigstore.json"
 
 # --- cosign says no: always exit 2, with the cause in the text ---------------------
 fail_case() {   # NAME EXPECTED_CAUSE STDERR
@@ -914,7 +986,7 @@ expect 2 'anchor could not be checked: the statement nothing.json cannot be read
   --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/nothing.json"
 cp "$T/stmt-base.json" "$T/other-name.json"; cp "$T/stmt.json.sigstore.json" "$T/b.bundle"
 rm -f "$COSIGN_STUB_LOG"
-expect 0 'is signed by the release workflow' '--anchor-bundle names a bundle that is not next to the statement' -- \
+expect 0 "$ANCHOR_SIGNED" '--anchor-bundle names a bundle that is not next to the statement' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/other-name.json" --anchor-bundle "$T/b.bundle"
 argv_has 'b/b.bundle' 'the bundle given with --anchor-bundle, by name only'
 expect 2 '--anchor-bundle is the bundle of the statement given with --anchor-file' '--anchor-bundle without --anchor-file is a usage error (2)' -- \
@@ -1065,6 +1137,51 @@ expect 0 'GOOD — not revoked' 'a status key retired in both places, with a lis
 
 export PATH="$PATH_BEFORE_STUB"
 unset COSIGN_STUB_LOG
+
+# --- version consistency (tests/version-consistency.sh) --------------------------
+# VERIFIER_VERSION is what --anchor-file compares the statement's release tag with,
+# so it must be the version the script is released as.
+echo '# version consistency'
+VC="$ROOT/tests/version-consistency.sh"
+vc_case() {   # NAME WANT_EXIT VERSION CHANGELOG_BODY [TAG]
+  printf '#!/usr/bin/env bash\nVERIFIER_VERSION="%s"\n' "$3" > "$T/vc-script.sh"
+  printf '# Changelog\n\n## Compatibility\n\ntext\n\n%b' "$4" > "$T/vc-changelog.md"
+  local args=(--script "$T/vc-script.sh" --changelog "$T/vc-changelog.md")
+  if [ -n "${5:-}" ]; then args+=(--tag "$5"); fi
+  local out="$T/out.$((PASSED + FAILED))" got
+  LAST_OUT="$out"
+  bash "$VC" "${args[@]}" > "$out" 2>&1; got=$?
+  if [ "$got" -eq "$2" ]; then printf 'ok - version: %s (exit %s)\n' "$1" "$got"; PASSED=$((PASSED + 1))
+  else printf 'not ok - version: %s (exit %s, expected %s)\n' "$1" "$got" "$2"; sed 's/^/    # /' "$out"; FAILED=$((FAILED + 1)); fi
+}
+U='## Unreleased\n\n### Added\n- x\n\n'
+D13='## v1.3.0 - 2026-10-08\n\ntext\n\n## v1.2.1 - 2026-10-06\n\ntext\n'
+vc_case 'Unreleased above v1.3.0, version 1.4.0 (the state on dev)' 0 1.4.0 "$U$D13"
+vc_case 'Unreleased, version equal to the newest release' 1 1.3.0 "$U$D13"
+vc_case 'Unreleased, version older than the newest release' 1 1.2.0 "$U$D13"
+vc_case 'Unreleased, version 1.10.0 above v1.9.0 (numeric)' 0 1.10.0 '## Unreleased\n\n## v1.9.0 - 2026-01-01\n'
+vc_case 'a dated top section, version equal' 0 1.3.0 "$D13"
+vc_case 'a dated top section, version different' 1 1.4.0 "$D13"
+vc_case 'a version that is not N.N.N' 1 1.4 "$U$D13"
+vc_case 'a version with a leading zero' 1 01.4.0 "$U$D13"
+vc_case 'a pre-release version' 1 1.4.0-rc1 "$U$D13"
+vc_case 'a release: tag equals the version, dated heading present' 0 1.3.0 "$D13" v1.3.0
+vc_case 'a release: the tag differs from the version' 1 1.4.0 "$U$D13" v1.5.0
+vc_case 'a release: the heading is not dated yet (Unreleased)' 1 1.4.0 "$U$D13" v1.4.0
+vc_case 'a release: the version was not bumped' 1 1.3.0 "$D13" v1.4.0
+vc_case 'a release: the tag is not N.N.N' 1 1.4.0 "$U$D13" v1.4.0-rc1
+vc_case 'no dated heading at all' 1 1.4.0 "$U"
+printf '#!/usr/bin/env bash\n' > "$T/vc-script.sh"
+printf '# Changelog\n\n%b' "$U$D13" > "$T/vc-changelog.md"
+bash "$VC" --script "$T/vc-script.sh" --changelog "$T/vc-changelog.md" > "$T/vc.out" 2>&1; got=$?
+if [ "$got" -ne 0 ]; then printf 'ok - version: a script without VERIFIER_VERSION fails (exit %s)\n' "$got"; PASSED=$((PASSED + 1))
+else printf 'not ok - version: a script without VERIFIER_VERSION passed\n'; FAILED=$((FAILED + 1)); fi
+bash "$VC" > "$T/vc.out" 2>&1; got=$?
+if [ "$got" -eq 0 ]; then printf 'ok - version: this tree is consistent (%s)\n' "$(cat "$T/vc.out")"; PASSED=$((PASSED + 1))
+else printf 'not ok - version: this tree is not consistent\n'; sed 's/^/    # /' "$T/vc.out"; FAILED=$((FAILED + 1)); fi
+expect 0 "verify-attestation.sh $VER" '--version prints one line with the version and exits 0' -- --version
+if [ "$(wc -l < "$LAST_OUT" | tr -d ' ')" -eq 1 ]; then printf 'ok - --version is one line\n'; PASSED=$((PASSED + 1))
+else printf 'not ok - --version is not one line\n'; FAILED=$((FAILED + 1)); fi
 
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument

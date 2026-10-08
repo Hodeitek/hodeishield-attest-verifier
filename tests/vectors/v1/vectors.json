@@ -2662,8 +2662,8 @@
       }
     },
     {
-      "id": "anchor-release-asset-is-not-a-statement",
-      "description": "The real SHA256SUMS of the v1.3.0 release, with its real bundle, is given as the anchor. cosign accepts the signing identity (the release workflow of this repository at a tag), so the fixed identity pattern is shown to accept a real release identity; the file is not a key statement, so the strict parse fails: the anchor could not be checked.",
+      "id": "anchor-statement-older-than-verifier",
+      "description": "The real SHA256SUMS of the v1.3.0 release, with its real bundle, is given as the anchor. cosign accepts the signing identity (the release workflow of this repository at a tag), so the identity pattern fixed in the script is shown to accept a real release identity. The release tag read from the verified certificate, v1.3.0, is older than this verifier, so the anchor could not be checked: an old, genuinely signed statement is not accepted (anti-rollback). This happens before the content is read.",
       "requires": [
         "cosign"
       ],
@@ -2685,8 +2685,8 @@
       ],
       "expect": {
         "exit": 2,
-        "code": "anchor_malformed",
-        "match": "anchor could not be checked: the statement SHA256SUMS is not strict JSON",
+        "code": "anchor_statement_older",
+        "match": "anchor could not be checked: statement from v1.3.0, older than this verifier",
         "absent": [
           "VERIFIED"
         ]

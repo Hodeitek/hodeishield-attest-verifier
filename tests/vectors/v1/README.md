@@ -64,7 +64,7 @@ the reason `expect.code` names. The `code` values are:
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
   `redaction_violation`, `revoked_key`, `revoked_subject`, `retired_key`
 - `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
-  `jwks_duplicate_kid`, `jwks_keys_not_array`, `anchor_malformed`, `anchor_unverified`
+  `jwks_duplicate_kid`, `jwks_keys_not_array`, `anchor_statement_older`, `anchor_unverified`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
   `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
   `unsupported_alg`, `retired_key`, `retired_at_malformed`, `duplicate_kid`,
@@ -89,8 +89,10 @@ bundles, so they need cosign 3.1.3 or later and network access (`"requires":
   `SHA256SUMS` asset of this repository's v1.3.0 release and its bundle, as
   published. cosign accepts the signing identity (the release workflow of this
   repository at tag v1.3.0), which shows that the identity pattern fixed in the
-  script accepts a real release identity. The file is not a key statement, so the
-  strict parse fails (`anchor_malformed`).
+  script accepts a real release identity. The tag read from the verified
+  certificate is older than the verifier, so the anchor is refused before the
+  content is read (`anchor_statement_older`, the anti-rollback check). The file
+  is not a key statement either, which the content check would also refuse.
 - `anchor/release-v1.3.0/SHA256SUMS.tampered`: the same file with `.sh` changed to
   `.zz` in the file name, given with the same bundle (`anchor_unverified`: the
   signature no longer covers the file).
@@ -206,8 +208,8 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   line byte for byte.
 - 2026-10-08: added 3 cases and their files (nothing existing changed) for
   `--anchor-file`, marked with the new manifest field `requires` (`["cosign"]`):
-  a real release asset that is not a key statement (`anchor_malformed`), a
-  tampered copy of it (`anchor_unverified`), and a genuine bundle of another
-  identity (`anchor_unverified`). New codes: `anchor_malformed`,
-  `anchor_unverified`. The manifest and this README changed; every other file
+  a real release asset from a release older than the verifier
+  (`anchor_statement_older`), a tampered copy of it (`anchor_unverified`), and a genuine bundle of another
+  identity (`anchor_unverified`). New codes:
+  `anchor_statement_older`, `anchor_unverified`. The manifest and this README changed; every other file
   keeps its `SHA256SUMS` line byte for byte.

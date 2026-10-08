@@ -133,6 +133,20 @@ script from v1.4.0. It behaves as follows:
   script reads what cosign printed; when it matches nothing the message is
   "cosign could not verify the statement"), and shows cosign's own diagnostics
   with every value escaped and every path cut to a file name.
+- **Anti-rollback.** After cosign accepts the statement, the script reads the
+  release tag from the verified certificate (its single identity, which must be
+  this repository's release workflow at `vN.N.N`, with no pre-release, no build
+  metadata and no leading zeros) and compares it, number by number, with
+  `VERIFIER_VERSION`, the version the script is released as (`--version`). A tag
+  that cannot be read is exit 2 (`anchor_tag_unreadable`, "the statement's
+  release tag cannot be read"); a tag older than the verifier is exit 2
+  (`anchor_statement_older`, "statement from vA, older than this verifier vB");
+  an equal or newer tag goes on. This is done before the statement's content is
+  read. Without it, any older statement that was genuinely signed would be
+  accepted, including one from before a rotation or one that still lists a key
+  that was later retired. `tests/version-consistency.sh` keeps
+  `VERIFIER_VERSION` in step with the changelog in CI, and equal to the tag on a
+  release.
 - The statement is read strictly: valid UTF-8 JSON, no duplicate member, the
   schema `hodeishield.keys.statement.v1`, only the documented members,
   `retired_at` in the exact `YYYY-MM-DDTHH:MM:SSZ` form and present for retired
@@ -157,10 +171,15 @@ script from v1.4.0. It behaves as follows:
 is nothing to check them against; a reader of an earlier release keeps
 [keys.md](keys.md) and `--expect-kid`.
 
+### What the anti-rollback check does not cover
+
+A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why only the latest release is supported ([SECURITY.md](../../SECURITY.md)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
+
 ### The reason codes
 
 The codes are in [reason-codes.md](reason-codes.md#the-anchor---anchor-file).
-`anchor_cosign_unavailable`, `anchor_unverified` and `anchor_malformed` are exit
+`anchor_cosign_unavailable`, `anchor_unverified`, `anchor_tag_unreadable`,
+`anchor_statement_older` and `anchor_malformed` are exit
 2. `anchor_kid_absent`, `anchor_role_mismatch`, `anchor_retired_mismatch` and
 `anchor_issuer_mismatch` are exit 1; the retirement itself is the existing
 `retired_key`. The three `anchor_status_*` failures are exit 3.

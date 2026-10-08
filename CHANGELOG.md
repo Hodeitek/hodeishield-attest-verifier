@@ -31,6 +31,10 @@ before it takes effect. Only the latest release is supported, as
   only; it may contact the Sigstore TUF repository. A statement that does not
   verify is exit 2, by design; a key it does not list is exit 1 (3 for the
   status-list key). See [Anchor the key](README.md#anchor-the-key).
+- `--anchor-file` refuses a key statement from a release older than the
+  verifier (exit 2): the release tag is read from the verified certificate and
+  compared with the new `VERIFIER_VERSION`, shown by `--version`. A CI check
+  keeps that version in step with this changelog and with the release tag.
 - Test vectors with real Sigstore bundles for `--anchor-file`
   (`tests/vectors/v1/anchor/`), marked `requires: ["cosign"]` in the manifest;
   `tests/vectors.sh` reports them as skipped where cosign is missing. A check of

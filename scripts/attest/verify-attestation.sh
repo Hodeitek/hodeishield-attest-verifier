@@ -186,6 +186,11 @@
 # =============================================================================
 set -euo pipefail
 
+# The version this script is released as. --anchor-file refuses a key statement
+# from an older release than this (anti-rollback); tests/version-consistency.sh
+# keeps it in step with CHANGELOG.md and, on a release, with the tag.
+VERIFIER_VERSION="1.4.0"
+
 JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
 EXPECT_SLUG=''; EXPECT_NONCE_SET=0; EXPECT_NONCE=''
@@ -240,8 +245,7 @@ Usage:
 
 Attestation mode (the default):
   --attestation FILE     the document as the endpoint serves it
-  --jws FILE             a compact JWS, with --claims FILE or attached
-  --claims FILE          the claims object that the JWS signs
+  --jws FILE, --claims FILE  a compact JWS, and the claims object that it signs (or attached)
   --posture FILE         a full claims object (a bare posture is refused)
   --jwks FILE            the attestation key set
   --pub-b64url KEY       the raw public key, instead of --jwks
@@ -264,6 +268,7 @@ Status-list mode (revocation):
 Common:
   --anchor-file FILE     check the signing key against a signed key statement (needs cosign >= 3.1.3)
   --anchor-bundle FILE   the statement's Sigstore bundle (default: FILE.sigstore.json)
+  --version              print the version of this script
   -h, --help             this text
 
 Exit codes:
@@ -341,6 +346,7 @@ while [ $# -gt 0 ]; do
     --min-seq)              MIN_SEQ="${2:?}"; shift 2
       [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || { printf 'error: --min-seq must be a non-negative integer\n' >&2; exit 2; } ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
+    --version)      printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -1093,8 +1099,8 @@ anchor_diagnostics() {
   done < "$1"
 }
 
-# The identity of the certificate in the bundle cosign has just accepted, for the
-# PASS line. Best effort: nothing is decided from it.
+# The leaf certificate (base64 DER) of the bundle cosign has just accepted. Its
+# SAN is the verified signing identity, whose tag is compared with this version.
 ANCHOR_IDENTITY_PY='
 import json, sys
 b = json.load(open(sys.argv[1], "rb"))
@@ -1163,6 +1169,39 @@ if [ -n "$ANCHOR_FILE" ]; then
        its bundle from the release you trust, or drop --anchor-file.
 $(anchor_diagnostics "$WORKDIR/anchor/cosign.out")"
   fi
+  # ANTI-ROLLBACK. The release tag comes from the certificate cosign has just
+  # verified (its single SAN, the workflow identity), read from the same private
+  # copy of the bundle. Any older, genuinely signed statement would otherwise be
+  # accepted, so a statement from a release older than this script is refused,
+  # BEFORE its content is read. An unreadable or unusual tag is refused too.
+  anchor_id=''; anchor_tag=''
+  anchor_san="$( { python3 -c "$ANCHOR_IDENTITY_PY" "$WORKDIR/anchor/b/$anchor_fb" | openssl base64 -d -A \
+      | openssl x509 -inform DER -noout -ext subjectAltName; } 2>/dev/null || true)"
+  mapfile -t anchor_san_lines <<< "$anchor_san"
+  anchor_prefix='https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/'
+  anchor_tag_re='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+  anchor_tag_ok=0
+  if [ "${#anchor_san_lines[@]}" -eq 2 ] && [[ "${anchor_san_lines[1]}" =~ ^[[:space:]]*URI:([^[:space:],]+)$ ]]; then
+    anchor_id="${BASH_REMATCH[1]}"
+    anchor_tag="${anchor_id#"$anchor_prefix"}"
+    if [ "$anchor_tag" != "$anchor_id" ] && [[ "$anchor_tag" =~ $anchor_tag_re ]]; then anchor_tag_ok=1; fi
+  fi
+  if [ "$anchor_tag_ok" -ne 1 ]; then
+    die anchor_tag_unreadable "anchor could not be checked: the statement's release tag cannot be read.
+       The signing identity of the bundle is not this repository's release workflow at a tag vN.N.N (no pre-release, no
+       build metadata, no leading zeros). This is not evidence against the attestation."
+  fi
+  IFS=. read -r -a anchor_tv <<< "${anchor_tag#v}"
+  IFS=. read -r -a anchor_vv <<< "$VERIFIER_VERSION"
+  for i in 0 1 2; do
+    if [ $(( 10#${anchor_tv[i]} )) -lt $(( 10#${anchor_vv[i]} )) ]; then
+      die anchor_statement_older "anchor could not be checked: statement from ${anchor_tag}, older than this verifier v${VERIFIER_VERSION}.
+       A statement from an older release may not list the current key, and accepting it would let an old, genuinely
+       signed statement stand in for the current one. Download the statement from the latest release.
+       This is not evidence against the attestation."
+    fi
+    if [ $(( 10#${anchor_tv[i]} )) -gt $(( 10#${anchor_vv[i]} )) ]; then break; fi
+  done
   # The statement, strictly: UTF-8, no BOM, one value, no duplicate member; then
   # the schema, the documented members only, the grammar of retired_at.
   anchor_dups="$(python3 -c "$DUPKEY_PY" "$ANCHOR_STMT" 2>/dev/null)" \
@@ -1175,13 +1214,7 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign.out")"
   fi
   ANCHOR_ISSUER="${anchor_st#*$'\n'}"
   ANCHOR_READY=1
-  anchor_id="$( { python3 -c "$ANCHOR_IDENTITY_PY" "$WORKDIR/anchor/b/$anchor_fb" | openssl base64 -d -A \
-      | openssl x509 -inform DER -noout -ext subjectAltName | sed -n 's/^.*URI://p' | head -1; } 2>/dev/null || true)"
-  if [ -n "$anchor_id" ]; then
-    ok anchor_verified "the key statement $(esc "$anchor_sn") is signed by $(esc "$anchor_id") (issuer ${ANCHOR_OIDC_ISSUER})"
-  else
-    ok anchor_verified "the key statement $(esc "$anchor_sn") is signed by the release workflow of this repository (issuer ${ANCHOR_OIDC_ISSUER})"
-  fi
+  ok anchor_verified "the key statement $(esc "$anchor_sn") is signed by $(esc "$anchor_id") (issuer ${ANCHOR_OIDC_ISSUER})"
 fi
 
 # --- Document resolution -----------------------------------------------------

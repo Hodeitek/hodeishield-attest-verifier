@@ -406,6 +406,14 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   a statement that does not verify says nothing about the attestation, just as a
   wrong key document does not. The run never ends in `VERIFIED` then, and the
   message says which cause it found.
+- A statement from a release older than the verifier is refused (exit 2): the
+  release tag is read from the verified certificate and compared with the
+  script's own version (`--version`), so an old, genuinely signed statement
+  cannot stand in for the current one. A tag that cannot be read is exit 2 too.
+  The check has a limit: an OLD verifier can still be served a statement as old
+  as itself. That is why only the latest release is supported, and why
+  `--status-list`, which revokes a compromised key unconditionally, remains the
+  path for a key compromise.
 - Exit 1, with a `FAIL` line, when the statement verifies and does not list the
   key that signed, lists it under another role, retires it differently from the
   key set's `hs_retired_at`, or names another issuer than the document's `iss`.
