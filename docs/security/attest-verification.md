@@ -1306,32 +1306,51 @@ This section matters more than the commands.
 ## 7. Key rotation, revocation and what to do with an old document
 
 The attestation key rotates on a **12-month** cadence, and immediately on
-suspected compromise.
+suspected compromise. The current keys are listed in [`keys.md`](keys.md).
 
-**Planned rotation** is designed to publish both keys during a **90-day
-overlap**: the key document lists two entries, new attestations carry the new
-`kid`, and documents you already hold keep verifying until the old key is
-retired.
+**Planned rotation** publishes both keys during a **90-day overlap**: the key
+document lists two entries, new attestations carry the new `kid`, and documents
+you already hold keep verifying while the old key is still within its validity.
 
-Multi-key publication is **implemented and live** (`app/src/lib/attest/published-keys.ts`):
-the key document lists the ACTIVE signing key first, then every still-published
-retired key, deduplicated by `kid`. Two consequences for you:
+**A retired key stays published.** It is not removed from the set when it is
+retired; it is marked as retired, so documents signed before its retirement can
+still be checked. A document signed by a retired key is acceptable only if its
+`generatedAt` is before the retirement time. As policy, the key set marks a
+retired key with the member `hs_retired_at`, an RFC 3339 UTC time with seconds
+(`YYYY-MM-DDTHH:MM:SSZ`). Verifier v1.3.0 and later reject a document whose
+`generatedAt` is at or after it (exit 1, `retired_key`; the instants are
+compared exactly, milliseconds included), and a status list issued at or after
+the retirement of its own key is unknown (exit 3). Earlier versions ignore the
+member, so with them check that a document signed by a retired key has a
+`generatedAt` before the retirement time listed in [`keys.md`](keys.md). The
+one-hour validity ceiling means an attestation from a retired key cannot pass at
+the current time: a backdated one has already expired, and a current one is dated
+after the retirement. A status list can be valid for up to 24 hours plus a 300
+second allowance, so one signed by a retired status key and issued just before
+the retirement can still be accepted for that long; a compromise goes through
+revocation, not retirement. With `--now` set to a past instant, a backdated document
+is judged as of that instant.
+
+The key document lists the ACTIVE signing key first, then every retired key,
+deduplicated by `kid`. Two consequences for you:
 
 - **Do not take `keys[0]` and stop.** Active-first is a contract, so `keys[0]`
   is what we are signing with right now — but a document you already hold may
   legitimately name a later entry. Resolve by `kid` across the whole set.
 - **Do not cache a key set indefinitely, and do re-fetch on an unknown `kid`.**
-  A retired key leaves the set at the end of its overlap, by design.
+  A new key appears in the set at the start of an overlap.
 
-**Compromise rotation is deliberately abrupt.** The old key is withdrawn
+**Compromise is not handled by retirement.** A compromised key is revoked
+through the status list: its `kid` is listed in `keys[]`, and every document it
+ever signed stops verifying at once (§7.1). Retirement would not do that, since
+a retired key's earlier documents stay acceptable. The old key is withdrawn
 immediately with no overlap, because during an overlap an attacker holding the
-leaked seed can forge attestations that verify. Every document ever signed with
-that key stops verifying at once. That is the intended behaviour.
+leaked seed can forge attestations that verify. That is the intended behaviour.
 
 If a HodeiShield attestation that previously verified suddenly does not:
 
 1. Re-fetch `/api/public/attest/keys`. The `kid` in your
-   document may simply have aged out of the overlap window.
+   document may simply be signed by a key that is now retired.
 2. **Fetch `/api/public/attest/status` and run the §7.1 procedure below**
    against the `kid` (and, if you know it, the trust-center slug). This is the
    fastest way to learn *why* — `revoked` with a reason (exit 1), versus

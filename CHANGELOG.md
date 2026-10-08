@@ -26,6 +26,25 @@ release.
   (the exit code was not affected). This affected every release from v1.0.0 to
   v1.2.1.
 
+### Added
+- Retired-key enforcement. A key in a key set may carry `hs_retired_at`, an RFC
+  3339 UTC time with seconds (exactly `YYYY-MM-DDTHH:MM:SSZ`). For the
+  attestation key set, a document whose signed `generatedAt` is at or after it
+  fails as `retired_key` (exit 1, `VERIFICATION FAILED`, not `EXPIRED`), an
+  earlier one passes with a line saying the key is retired, and a malformed
+  value makes the key set invalid (exit 2). For the status-list key set, a list
+  issued at or after the retirement of its key is unknown (exit 3), and so is a
+  malformed value. The instants are compared exactly, to the millisecond. A
+  retired key that is not the selected one has no effect, and `--pub-b64url`,
+  which has no JWK, is not affected. Earlier versions ignore the member.
+- Nine test vectors for it (`retired-key-*`, `retired-other-key-*` and
+  `status-retired-key-*`) appended to `tests/vectors/v1/`, with the new codes
+  `retired_key`, `jwks_retired_at_malformed`, `status_unknown_retired_key` and
+  `status_unknown_retired_at_malformed`; no existing vector changed.
+- `docs/security/keys.md`: the versioned list of the current signing keys (the
+  attestation key and the status-list key), how to check them yourself, and the
+  rotation policy. The README "Pinning the key" section points to it.
+
 ### Fixed
 - A verified document with a non-ASCII framework label no longer ends in an
   error when Python's stdout is not UTF-8 (`PYTHONIOENCODING=ascii`); a display
@@ -37,6 +56,22 @@ release.
   a list that was obtained but does not verify, or cannot settle the subject.
 
 ### Changed
+- A key set that is not an array of objects under `keys`, or that has two keys
+  with the same `kid`, is invalid: exit 2 for `--jwks`, unknown (exit 3) for
+  `--status-keys`. Before, the first entry won, so a retirement marker could be
+  dodged by ordering, and a status key set with `keys` as an object or with a
+  non-object entry was read inconsistently (or made `jq` exit 5).
+- `--pub-b64url` together with `--jwks` is a usage error (exit 2). Before, the
+  key set was silently ignored and the run could exit 0 on a path that did not
+  exist.
+- The unknown-kid message no longer says a retired key leaves the published key
+  set at the end of its overlap; by policy, a retired key stays published and is
+  marked with `hs_retired_at`.
+- Verification document §7: a retired key stays in the published key set, marked
+  as retired, instead of leaving it at the end of its overlap. A document signed
+  by a retired key is acceptable only if its `generatedAt` is before the
+  retirement time, and a compromise is handled by status-list revocation, not by
+  retirement. §6 item 2 points to `docs/security/keys.md`.
 - **Output change.** The overall band, the frameworks and the other claims about
   the organisation are no longer printed before the checks have finished. They
   appear in an "Attested content" block just before the verdict, and only when

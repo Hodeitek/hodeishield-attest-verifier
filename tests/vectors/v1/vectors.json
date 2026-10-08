@@ -2321,6 +2321,345 @@
         "code": "status_unknown_unsupported_alg",
         "match": "alg is 'EdDSA', expected 'ML-DSA-65'"
       }
+    },
+    {
+      "id": "retired-key-before",
+      "description": "The key is retired at 2026-07-31T18:53:58Z; the document was generated one millisecond earlier (18:53:57.999Z): it verifies and says the key is retired.",
+      "args": [
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "jwks/retired.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "but this document was generated at 2026-07-31T18:53:57.999Z, before the retirement"
+      },
+      "canonical_sha256": "f595fbf3185302ae6310109650f8817c5a15a9838b5c73889531806ddc557a07"
+    },
+    {
+      "id": "retired-key-at",
+      "description": "The same retired key; the document was generated exactly at the retirement (18:53:58.000Z): a failed check, not an expiry.",
+      "args": [
+        "--attestation",
+        "attestations/retired-at.json",
+        "--jwks",
+        "jwks/retired.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "retired_key",
+        "match": "retired_key — this document was generated at 2026-07-31T18:53:58.000Z, at or after the retirement of key U4ak4BB34tmbAwevvbToHw at 2026-07-31T18:53:58Z",
+        "absent": [
+          "EXPIRED"
+        ]
+      }
+    },
+    {
+      "id": "retired-key-pinned",
+      "description": "--expect-kid pinned to the retired kid does not rescue a document generated at the retirement.",
+      "args": [
+        "--attestation",
+        "attestations/retired-at.json",
+        "--expect-kid",
+        "U4ak4BB34tmbAwevvbToHw",
+        "--jwks",
+        "jwks/retired.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "retired_key",
+        "match": "retired_key — this document was generated at",
+        "absent": [
+          "EXPIRED"
+        ]
+      }
+    },
+    {
+      "id": "retired-key-malformed",
+      "description": "hs_retired_at carries a fraction: the key set is invalid, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/retired-at.json",
+        "--jwks",
+        "jwks/retired-malformed.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "jwks_retired_at_malformed",
+        "match": "hs_retired_at of the key 'U4ak4BB34tmbAwevvbToHw' is"
+      }
+    },
+    {
+      "id": "retired-other-key-ignored",
+      "description": "Another key in the set is retired long before the document; the selected key is not, so nothing changes.",
+      "args": [
+        "--attestation",
+        "attestations/retired-at.json",
+        "--jwks",
+        "jwks/retired-other-key.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed",
+        "absent": [
+          "retired"
+        ]
+      }
+    },
+    {
+      "id": "retired-other-key-malformed-ignored",
+      "description": "Another key in the set carries a malformed hs_retired_at; only the selected key's member is read.",
+      "args": [
+        "--attestation",
+        "attestations/retired-at.json",
+        "--jwks",
+        "jwks/retired-other-key-malformed.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed",
+        "absent": [
+          "retired"
+        ]
+      }
+    },
+    {
+      "id": "status-retired-key-before",
+      "description": "The status key is retired at 2026-07-31T18:53:58Z; the list was issued one millisecond earlier: it is trusted.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-retired.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-before.json"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "good",
+        "match": "but this list was issued at 2026-07-31T18:53:57.999Z, before the retirement"
+      }
+    },
+    {
+      "id": "status-retired-key-at",
+      "description": "The list was issued exactly at the retirement of its key: not trusted, unknown.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-retired.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-at.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_retired_key",
+        "match": "retired_key — this status list was issued at 2026-07-31T18:53:58.000Z, at or after the retirement of key"
+      }
+    },
+    {
+      "id": "status-retired-key-malformed",
+      "description": "hs_retired_at of the status key is not RFC 3339 UTC: the status key set is defective, unknown (3), as for any other defect in it.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-retired-malformed.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-before.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_retired_at_malformed",
+        "match": "malformed_document — hs_retired_at of the --status-keys entry"
+      }
+    },
+    {
+      "id": "jwks-duplicate-kid",
+      "description": "Two keys carry the same kid, the second marked retired: the key set is invalid, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "jwks/duplicate-kid.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "jwks_duplicate_kid",
+        "match": "two of its keys carry the same kid"
+      }
+    },
+    {
+      "id": "jwks-keys-not-array",
+      "description": "`keys` is an object, not an array: the key set is invalid, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "jwks/keys-not-array.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "jwks_keys_not_array",
+        "match": "keys` is not an array of objects"
+      }
+    },
+    {
+      "id": "status-keys-duplicate-kid",
+      "description": "The status key set has two keys with the same kid: unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-duplicate-kid.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-before.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_duplicate_kid",
+        "match": "duplicate_key — status-keys.json has two keys with the same kid"
+      }
+    },
+    {
+      "id": "status-keys-not-array",
+      "description": "`keys` of the status key set is an object, whose member carries a retirement marker: unknown (3), not a list trusted without reading the marker.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-keys-object.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-at.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_keys_not_array",
+        "match": "malformed_document — status-keys.json: `keys` is not an array of objects"
+      }
+    },
+    {
+      "id": "status-keys-entry-not-object",
+      "description": "An entry of the status key set's `keys` is a string: unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-keys-str-entry.json",
+        "--attestation",
+        "attestations/retired-before.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1785524038",
+        "--status",
+        "status-lists/retired-before.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_keys_not_array",
+        "match": "malformed_document — status-keys.json: `keys` is not an array of objects"
+      }
     }
   ]
 }

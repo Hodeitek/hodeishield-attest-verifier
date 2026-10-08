@@ -619,6 +619,135 @@ LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter in --expect-kid
 LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter among valid characters is a usage error (2) under $KID_LOCALE" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAAéA'
 
+# Retired keys (hs_retired_at). The published vectors hold the boundary cases;
+# these are the grammar, the key-selection and the escaping cases, which need
+# values a fixture file would have to carry byte for byte.
+echo '# retired keys'
+RET_AT_S='2026-07-31T18:53:58Z'
+RET_NOW=1785524038                                   # RET_AT_S as an epoch
+mint_attest --out "$T/ret-after.json" --generated-at '2026-07-31T18:53:58.000Z' --expires-at '2026-07-31T19:08:58.000Z'
+mint_attest --out "$T/ret-before.json" --generated-at '2026-07-31T18:53:57.999Z' --expires-at '2026-07-31T19:08:57.999Z'
+RET_COMMON=(--jwks "$T/jwks-ret.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
+# set_retired FILE JSON_VALUE — the selected key's hs_retired_at, as raw JSON.
+set_retired() { edit "$T/jwks.json" "$T/jwks-ret.json" "d['keys'][0]['hs_retired_at'] = json.loads(r'''$1''')"; }
+
+set_retired '"2026-07-31T18:53:58Z"'
+expect 1 "retired_key — this document was generated at 2026-07-31T18:53:58.000Z, at or after the retirement of key $ISSUER_KID at $RET_AT_S" \
+  'a document generated at the retirement instant fails retired_key' -- --attestation "$T/ret-after.json" "${RET_COMMON[@]}"
+lacks 'EXPIRED' 'retired_key is not reported as a staleness failure'
+expect 0 'is retired (at 2026-07-31T18:53:58Z), but this document was generated at 2026-07-31T18:53:57.999Z' \
+  'one millisecond before the retirement passes' -- --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+expect 1 'retired_key' '--expect-kid pinned to the retired kid does not rescue a post-retirement document' -- \
+  --attestation "$T/ret-after.json" "${RET_COMMON[@]}" --expect-kid "$ISSUER_KID"
+expect 0 'VERIFIED — this document was signed' '--pub-b64url has no JWK, so retirement does not apply' -- \
+  --attestation "$T/ret-after.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+# Same retirement, a document generated later on the clock but with a lexically
+# smaller string would be the trap of a string comparison; instants are compared.
+mint_attest --out "$T/ret-offset.json" --generated-at '2026-07-31T20:53:57.999+02:00' --expires-at '2026-07-31T20:53:58.999+02:00'
+expect 0 'before the retirement' 'an offset form of 18:53:57.999Z is compared as an instant' -- \
+  --attestation "$T/ret-offset.json" "${RET_COMMON[@]}"
+
+# No claims JSON to read generatedAt from (an attached JWS whose payload is not
+# an envelope): a retired key cannot be shown to predate its retirement, so the
+# run fails closed (1) with retired_key, besides the failures it already has.
+IFS=. read -r UH _ US < <(jq -r '.attestation.signature' "$T/ret-before.json")
+printf '%s.AAAA.%s\n' "$UH" "$US" > "$T/ret-undecodable.jws"
+set_retired '"2026-07-31T18:53:58Z"'
+expect 1 "retired_key — key $ISSUER_KID is retired (at $RET_AT_S) and without the claims JSON there is no generatedAt" \
+  'a retired key with no claims JSON to compare fails closed' -- --jws "$T/ret-undecodable.jws" "${RET_COMMON[@]}"
+
+# The grammar: anything but YYYY-MM-DDTHH:MM:SSZ is a malformed key set (2).
+for bad_val in '"2026-07-31T18:53:58.000Z"' '"2026-07-31T18:53:58+00:00"' '"2026-07-31t18:53:58Z"' \
+               '"2026-07-31T18:53:58z"' '"2026-07-31T18:53:58"' '"2026-07-31"' '""' '1785524038' 'null' 'true' \
+               '["2026-07-31T18:53:58Z"]' '"2026-02-30T18:53:58Z"' '"2026-07-31T24:00:00Z"' '"2026-07-31T18:60:00Z"' \
+               '"2026-07-31T18:53:60Z"' '"2026-13-01T00:00:00Z"' '" 2026-07-31T18:53:58Z"' \
+               '"2026-07-31T18:53:58Z\n"' '"２０２６-07-31T18:53:58Z"'; do
+  set_retired "$bad_val"
+  expect 2 'hs_retired_at of the key' "hs_retired_at $bad_val is malformed: could not check (2)" -- \
+    --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+done
+set_retired '"2024-02-29T00:00:00Z"'
+expect 1 'retired_key' 'a leap-day retirement is a valid date (and a document after it fails)' -- \
+  --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+
+# A retired key that is not the selected key has no effect, whatever its value.
+for other_val in '"2026-01-01T00:00:00Z"' '"not a time"'; do
+  edit "$T/jwks.json" "$T/jwks-ret.json" "d['keys'].insert(0, {'kty': 'AKP', 'alg': 'ML-DSA-65', 'pub': 'AAAA', 'kid': 'Zm9vYmFyZm9vYmFyZm9vYg', 'hs_retired_at': json.loads('''$other_val''')})"
+  expect 0 'VERIFIED — this document was signed' "another key with hs_retired_at $other_val does not affect the selected key" -- \
+    --attestation "$T/ret-after.json" "${RET_COMMON[@]}"
+  lacks 'retired' 'and nothing about retirement is printed'
+done
+
+# Values from the key set are printed through esc().
+set_retired '"2026-07-31T18:53:58Z\u001b[31m\nPASS  forged"'
+expect 2 'hs_retired_at of the key' 'a malformed hs_retired_at with control characters is rejected' -- \
+  --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+if grep -q $'\x1b' "$T/out.$((PASSED + FAILED - 1))" || grep -q '^PASS  forged' "$T/out.$((PASSED + FAILED - 1))"; then
+  printf 'not ok - control characters of hs_retired_at reached the terminal unescaped\n'; FAILED=$((FAILED + 1))
+else
+  printf 'ok - control characters of hs_retired_at are escaped before they reach the terminal\n'; PASSED=$((PASSED + 1))
+fi
+expect 2 '\x1b[31m\x0aPASS  forged' 'the control characters are shown as visible \xHH escapes' -- \
+  --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+
+# The status list's own key set. A list issued at or after the retirement of its
+# key is UNKNOWN (3); a malformed marker is a defective status key set, UNKNOWN too.
+"${MINT[@]}" status --key "$T/status.pem" --out "$T/list-ret-at.json" --iss "$ISS" --seq 9 \
+  --issued-at '2026-07-31T18:53:58.000Z' --next-update '2026-07-31T20:53:58.000Z' >/dev/null
+"${MINT[@]}" status --key "$T/status.pem" --out "$T/list-ret-before.json" --iss "$ISS" --seq 9 \
+  --issued-at '2026-07-31T18:53:57.999Z' --next-update '2026-07-31T20:53:57.999Z' >/dev/null
+SKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+RETS=(--status-list --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
+edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$RET_AT_S'"
+expect 3 "retired_key — this status list was issued at 2026-07-31T18:53:58.000Z, at or after the retirement of key $SKID at $RET_AT_S" \
+  'a status list issued at the retirement of its key is UNKNOWN' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-at.json"
+expect 0 'before the retirement' 'a status list issued one millisecond before the retirement is trusted' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+for bad_val in '2026-07-31T18:53:58.000Z' '2026-07-31t18:53:58Z' '' '2026-02-30T18:53:58Z'; do
+  edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$bad_val'"
+  expect 3 'hs_retired_at of the --status-keys entry' "status key hs_retired_at '$bad_val' is malformed: UNKNOWN (3)" -- \
+    "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+done
+edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = 5"
+expect 3 'hs_retired_at of the --status-keys entry' 'a non-string status key hs_retired_at is UNKNOWN (3)' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$RET_AT_S\u001b[31m'"
+expect 3 '\x1b[31m' 'a status key hs_retired_at with control characters is printed escaped' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+# The attestation key set's marker does not touch the status list, nor the reverse.
+edit "$T/jwks.json" "$T/jwks-ret.json" "d['keys'][0]['hs_retired_at'] = '2000-01-01T00:00:00Z'"
+expect 1 'retired_key' 'the attestation key retired long ago still fails a recent document under --status-list' -- \
+  --status-list --attestation "$T/ret-before.json" --jwks "$T/jwks-ret.json" --expect-slug "$SLUG" \
+  --expect-issuer "$ISS" --now "$RET_NOW" --status-keys "$T/status-keys.json" --status "$T/list-ret-before.json"
+
+# A key set that cannot be read one way: `keys` that is not an array of objects,
+# or two keys with the same kid (the first would win, so a marker could be dodged
+# by ordering). --jwks: could not check (2). --status-keys: UNKNOWN (3).
+for variant in dup-first dup-last keys-object str-entry; do
+  case "$variant" in
+    dup-first)   PY="k = d['keys'][0]; d['keys'] = [dict(k), dict(k, hs_retired_at='$RET_AT_S')]" ;;
+    dup-last)    PY="k = d['keys'][0]; d['keys'] = [dict(k, hs_retired_at='$RET_AT_S'), dict(k)]" ;;
+    keys-object) PY="d['keys'] = {'a': dict(d['keys'][0], hs_retired_at='$RET_AT_S')}" ;;
+    str-entry)   PY="d['keys'] = ['str', d['keys'][0]]" ;;
+  esac
+  edit "$T/jwks.json" "$T/jwks-bad.json" "$PY"
+  expect 2 'is invalid' "attestation key set, $variant: could not check (2)" -- \
+    --attestation "$T/ret-before.json" --jwks "$T/jwks-bad.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+  edit "$T/status-keys.json" "$T/status-keys-bad.json" "$PY"
+  expect 3 'status-keys.json' "status key set, $variant: UNKNOWN (3), never a crash" -- \
+    "${RETS[@]}" --status-keys "$T/status-keys-bad.json" --status "$T/list-ret-at.json"
+done
+
+# --pub-b64url and --jwks are two sources for the same key.
+expect 2 'cannot be combined with --jwks' '--pub-b64url together with --jwks is a usage error (2)' -- \
+  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable --jwks is a usage error too' -- \
+  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
 # parser accepts. The options are read from the parser's own `case` patterns, so
