@@ -372,9 +372,10 @@ The verifier checks two document formats, and no other version of either:
 
 ## Verifying a release
 
-Download these four files from the GitHub release you are using:
-`verify-attestation.sh`, `SHA256SUMS`, `SHA256SUMS.sigstore.json` and
-`verify-attestation.sh.sigstore.json`. Then:
+Download these six files from the GitHub release you are using:
+`verify-attestation.sh`, `keys-statement.json`, `SHA256SUMS`,
+`SHA256SUMS.sigstore.json`, `verify-attestation.sh.sigstore.json` and
+`keys-statement.json.sigstore.json`. Then:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -388,9 +389,16 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
+
+cosign verify-blob --bundle keys-statement.json.sigstore.json \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  keys-statement.json
 ```
 
-Replace `<TAG>` with the release tag. What changed in each release is in
+Replace `<TAG>` with the release tag. `keys-statement.json` is the signed list of
+the issuer's signing keys; see the
+[key anchor decision](docs/security/key-anchor.md). What changed in each release is in
 [CHANGELOG.md](CHANGELOG.md). This proves that the file was built from
 that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is

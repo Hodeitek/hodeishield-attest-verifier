@@ -1200,8 +1200,13 @@ This section matters more than the commands.
    document containing a wrong claim is a signed wrong claim.
 2. **That the key belongs to Hodeitek.** You fetched it over HTTPS from
    `app.hodeishield.com`, so you are trusting the Web PKI and DNS for that one
-   binding. There is no out-of-band root of trust for the attestation key —
-   no CA, no transparency log, no DNSSEC-anchored record. **Pin the key
+   binding. Up to v1.3.0 there is no other channel for the attestation key.
+   From v1.4.0 a release carries a key statement signed with Sigstore, which
+   names the keys by `kid` and can be checked with `--anchor-file` (see
+   [the key anchor decision](key-anchor.md)). That is a second channel tied to
+   this repository's release workflow, not a root of trust of the issuer: there
+   is still no CA, no transparency log of the key set and no DNSSEC-anchored
+   record. **Pin the key
    fingerprint on first use** and treat an unannounced change as an incident
    (§7). The fingerprint is the key's `kid`, derived from the public key bytes
    (§4.2); the verifier recomputes it and prints it, and a JWKS whose `kid`
