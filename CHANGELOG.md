@@ -82,6 +82,13 @@ before it takes effect. Only the latest release is supported, as
   `--min-seq` given without `--status-list` were silently ignored and the run
   could end `VERIFIED`; each is now a usage error, exit 2 ("--status requires
   --status-list"). This also affected earlier releases.
+- Every `python3` the verifier runs (the canonical encoders, the document,
+  key-set and statement readers, the `--json` writer) ran without `-I`, so the
+  directory the verifier was run from came first on Python's module path: a
+  `json.py` placed there ran inside every check and could decide the verdict.
+  Each call is now `python3 -I` (isolated: no current or script directory on the
+  path, no `PYTHON*` environment variables, no user site-packages), and so are
+  the test runners'. This also affected earlier releases.
 
 ### Fixed
 - An option given without its value exited 1, as if a check had failed. It is now

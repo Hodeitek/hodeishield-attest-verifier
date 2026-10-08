@@ -54,7 +54,7 @@ have_requirement() {
       local v=''
       command -v cosign >/dev/null 2>&1 || return 1
       v="$(cosign version 2>/dev/null | awk '$1 == "GitVersion:" { print $2; exit }' || true)"
-      python3 -c '
+      python3 -I -c '
 import re, sys
 m = re.fullmatch(r"v?([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})(-.*)?", sys.argv[1])
 n = tuple(int(x) for x in m.groups()[:3]) if m else (0, 0, 0)
@@ -123,7 +123,7 @@ if [ "$JSON_MODE" -eq 1 ]; then
 fi
 
 echo '# vectors v1: SHA256SUMS'
-if ! python3 - "$VDIR" <<'PY'
+if ! python3 -I - "$VDIR" <<'PY'
 import hashlib, os, sys
 root = sys.argv[1]
 listed = {}
@@ -154,7 +154,7 @@ fi
 # One record per case, NUL-separated fields:
 #   id, exit, code, match, canonical, status_canonical, n_absent, n_args, n_req,
 #   absent..., args..., requires...
-if ! python3 - "$VDIR/vectors.json" > "$T/cases.bin" <<'PY'
+if ! python3 -I - "$VDIR/vectors.json" > "$T/cases.bin" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1], encoding="utf-8"))
 out = sys.stdout.buffer

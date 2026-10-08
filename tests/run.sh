@@ -31,7 +31,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERIFIER="${VERIFIER:-$ROOT/scripts/attest/verify-attestation.sh}"
-MINT=(python3 "$ROOT/tests/lib/mint.py")
+MINT=(python3 -I "$ROOT/tests/lib/mint.py")
 
 T="$(mktemp -d)"; chmod 700 "$T"
 trap 'rm -rf -- "$T"' EXIT
@@ -82,7 +82,7 @@ lacks() {
 
 # edit IN OUT PYTHON — rewrite a JSON document; `d` is the parsed document.
 edit() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 -I - "$1" "$2" "$3" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 exec(sys.argv[3])
@@ -93,7 +93,7 @@ PY
 # edit_text IN OUT PYTHON — rewrite the raw TEXT of a file; `t` is its content.
 # For what a JSON round-trip cannot express, such as duplicate members.
 edit_text() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 -I - "$1" "$2" "$3" <<'PY'
 import sys
 t = open(sys.argv[1]).read()
 exec(sys.argv[3])
@@ -402,6 +402,28 @@ PATH="$T/shim-no-mldsa:$PATH" expect 2 'does not offer ML-DSA-65, so it is not M
   'an OpenSSL >= 3.5 without ML-DSA-65 is "not ML-DSA capable" (2)' -- \
   --attestation "$T/att.json" "${COMMON[@]}"
 lacks 'PASS  OpenSSL' 'an OpenSSL without ML-DSA-65 is never reported as capable'
+
+# The working directory is not code. Without -I, python3 puts the current
+# directory first on sys.path, so a json.py where the verifier is run would run
+# inside every check. Planted modules that end Python with exit 0 on import must
+# change nothing: the tampered-field vector is still signature_invalid (1).
+PLANT="$T/planted"; mkdir -p "$PLANT"
+for mod in json struct base64 binascii re datetime; do printf 'import os\nos._exit(0)\n' > "$PLANT/$mod.py"; done
+VEC="$ROOT/tests/vectors/v1"
+PLANT_ARGS=(--attestation "$VEC/attestations/tampered-field.json" --jwks "$VEC/keys/test-only-issuer-jwks.json"
+            --expect-slug fixture-org --expect-issuer https://issuer.test --now 1767225900)
+( cd "$PLANT" && NO_COLOR=1 bash "$VERIFIER" "${PLANT_ARGS[@]}" ) > "$T/planted.out" 2>&1; got=$?
+if [ "$got" -eq 1 ] && grep -qF 'SIGNATURE DOES NOT VERIFY' "$T/planted.out" && ! grep -qF 'VERIFIED —' "$T/planted.out"; then
+  printf 'ok - a json.py in the working directory is not imported: tampered-field is still signature_invalid (1)\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - a json.py in the working directory changed the verdict (exit %s)\n' "$got"; sed 's/^/    # /' "$T/planted.out"; FAILED=$((FAILED + 1))
+fi
+( cd "$PLANT" && NO_COLOR=1 bash "$VERIFIER" "${PLANT_ARGS[@]}" --json ) > "$T/planted.json" 2>/dev/null; got=$?
+if [ "$got" -eq 1 ] && [ "$(python3 -I -c 'import json,sys; o = json.load(open(sys.argv[1])); print(o["reason"], o["exit_code"])' "$T/planted.json" 2>/dev/null)" = 'signature_invalid 1' ]; then
+  printf 'ok - with --json too: a planted json.py is not imported (signature_invalid, 1)\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - with --json, a planted json.py changed the result (exit %s)\n' "$got"; head -c 1500 "$T/planted.json" | sed 's/^/    # /'; FAILED=$((FAILED + 1))
+fi
 
 echo '# revocation (--status-list)'
 
@@ -818,7 +840,7 @@ ANCHOR_ISSUER_URL='https://token.actions.githubusercontent.com'
 # The statement: the issuer, the attestation key and the status-list key of the
 # fixtures, minted from their kids as the key sets above are.
 ASKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
-python3 - "$T/stmt-base.json" "$ISSUER_KID" "$ASKID" "$ISS" <<'PY'
+python3 -I - "$T/stmt-base.json" "$ISSUER_KID" "$ASKID" "$ISS" <<'PY'
 import json, sys
 out, akid, skid, iss = sys.argv[1:5]
 json.dump({"schema": "hodeishield.keys.statement.v1", "issuer": iss, "keys": [
@@ -1485,7 +1507,7 @@ jexpect 0 'a warning printed over two lines is one entry' \
 # A check recorded in a subshell is not lost. A copy of the script gets two probes
 # after its first check: one in ( ), one in $( ) with the same code twice.
 PROBE="$T/probe-verifier.sh"
-"$PYBIN" - "$VERIFIER" "$PROBE" <<'PY'
+"$PYBIN" -I - "$VERIFIER" "$PROBE" <<'PY'
 import sys
 t = open(sys.argv[1]).read()
 anchor = 'ok openssl_mldsa65_available "OpenSSL ${OSSL_V} offers ML-DSA-65"\n'
@@ -1684,7 +1706,7 @@ RC_SCRIPT="$T/rc.script"; RC_DOCS="$T/rc.docs"; RC_MANIFEST="$T/rc.manifest"
 } | sort -u > "$RC_SCRIPT"
 # A table row starts with the code between two backticks (any character below).
 sed -nE 's/^\| [^A-Za-z0-9 ]([a-z][a-z0-9_]*)[^A-Za-z0-9 ] \|.*/\1/p' "$RC_DOC" | sort -u > "$RC_DOCS"
-python3 -c 'import json,sys
+python3 -I -c 'import json,sys
 for c in json.load(open(sys.argv[1]))["cases"]: print(c["expect"]["code"])' \
   "$ROOT/tests/vectors/v1/vectors.json" | sort -u > "$RC_MANIFEST"
 rc_missing="$(comm -23 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"

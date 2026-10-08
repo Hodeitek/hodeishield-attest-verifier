@@ -36,7 +36,7 @@ trap 'rm -rf -- "$T"' EXIT
 MUTANT="$T/verify-attestation-mutant.sh"
 
 echo '# mutants: build the signature-disabled mutant'
-if ! python3 - "$VERIFIER" "$MUTANT" <<'PY'
+if ! python3 -I - "$VERIFIER" "$MUTANT" <<'PY'
 import sys
 src, dst = sys.argv[1:3]
 text = open(src, encoding="utf-8").read()
@@ -68,7 +68,7 @@ fi
 
 # One record per signature_only case, NUL-separated:
 #   id, exit, match, n_args, args...
-if ! python3 - "$VDIR/vectors.json" > "$T/cases.bin" <<'PY'
+if ! python3 -I - "$VDIR/vectors.json" > "$T/cases.bin" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1], encoding="utf-8"))
 out = sys.stdout.buffer
