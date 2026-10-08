@@ -1486,7 +1486,8 @@ Given both `--attestation` (or `--jws`/`--claims`) and `--status-list`, the
 script runs the full §4 posture check first and then applies the status list to
 the resulting `kid`, slug and `generatedAt` — you do not supply
 `--check-kid`/`--check-subject` yourself in this mode; they are read from the
-verified document. If the posture check fails, the run ends as a failure
+verified document. A `--check-kid` given anyway is looked up as well: it never
+replaces the document's own kid, which is always looked up. If the posture check fails, the run ends as a failure
 (exit 1) whatever the list says: an inauthentic document is not rescued by not
 being listed. Note `--jwks` and `--status-keys` are **different key sets** and the
 script never resolves one against the other; passing the attestation JWKS as
@@ -1495,8 +1496,11 @@ script never resolves one against the other; passing the attestation JWKS as
 **What "revoked" means exactly.** The two rules of §7 are applied in this order,
 and the first that fires decides:
 
-- **Key rule.** `kid` (the header kid of the document, or `--check-kid`) is
-  listed in `keys[]` → revoked, with no timestamp compared.
+- **Key rule.** A `kid` checked is listed in `keys[]` → revoked, with no
+  timestamp compared. With a document, the kids checked are the one recomputed
+  from the key bytes that verified it and its header kid, always, and any
+  `--check-kid` besides; without one, the `--check-kid` given. `--check-kid`
+  must have the shape of a kid, or the run is a usage error (exit 2).
 - **Subject rule.** The slug (from the document, or `--check-subject`) is listed
   in `subjects[]` — matched by the hash `SHA-256("hodei-shield.attest.subject.v1"
   || slug)`, base64url — and the document's `generatedAt` is **strictly earlier**

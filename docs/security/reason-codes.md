@@ -26,8 +26,9 @@ code, are codes from this file (see
   the list of checks has every one that ran.
 
 Command-line errors found while reading the arguments (an unknown option, a
-missing value, a malformed `--expect-kid` or `--min-seq`) happen before any
-check runs. They are not entries of `checks`; with `--json` their `reason` is
+missing value, a malformed `--expect-kid`, `--check-kid` or `--min-seq`, an
+option of the status-list mode without `--status-list`) happen before any check
+runs. They are not entries of `checks`; with `--json` their `reason` is
 `usage` (below) and `message` has the text.
 
 `tests/run.sh` fails if a code used in `scripts/attest/verify-attestation.sh` is

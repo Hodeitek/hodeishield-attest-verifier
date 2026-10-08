@@ -455,6 +455,34 @@ expect 1 'REVOKED — via subject' 'an attached JWS alone does not dodge a subje
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --jws "$T/attached.jws" "${COMMON[@]}"
 
+# --check-kid adds a kid to Rule K; it never replaces the document's own kid.
+mint_status --out "$T/list-other-key.json" --seq 8 --revoke-kid="$OTHER_KID"
+expect 1 'REVOKED — via key' 'a document whose signing key is revoked is REVOKED even with --check-kid naming an unrevoked kid' -- \
+  "${SL[@]}" --status "$T/list-key.json" --check-kid "$OTHER_KID"
+lacks 'GOOD' 'a revoked signing key is never GOOD under another --check-kid'
+expect 1 'REVOKED — via key' 'a --check-kid that is revoked is REVOKED beside a document whose key is not' -- \
+  "${SL[@]}" --status "$T/list-other-key.json" --check-kid "$OTHER_KID"
+expect 0 "GOOD — kids $ISSUER_KID, $OTHER_KID are not revoked" 'the document kid and a --check-kid are both reported as checked' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --check-kid "$OTHER_KID"
+expect 0 "GOOD — kid $ISSUER_KID is not revoked" 'without --check-kid, the document kid alone (unchanged output)' -- \
+  "${SL[@]}" --status "$T/list-other-key.json"
+expect 1 'REVOKED — via key' 'a standalone --check-kid query still finds a revoked kid' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-key.json" --check-kid "$ISSUER_KID" --now "$NOW"
+expect 0 "GOOD — kid $ISSUER_KID is not revoked" 'a standalone --check-kid query still reports an unrevoked kid' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-other-key.json" --check-kid "$ISSUER_KID" --now "$NOW"
+
+# The options of the status-list mode without --status-list were read by nothing,
+# and the run ended VERIFIED. Each is a usage error now.
+for sopt in "--status $T/list-key.json" "--status-keys $T/status-keys.json" "--check-kid $ISSUER_KID" \
+            "--check-subject $SLUG" "--check-generated-at $GEN" "--min-seq 9"; do
+  read -r -a sargs <<< "$sopt"
+  expect 2 "error: ${sargs[0]} requires --status-list" "${sargs[0]} without --status-list is a usage error (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${sargs[@]}"
+  lacks 'VERIFIED' "${sargs[0]} without --status-list never ends VERIFIED"
+done
+expect 0 'GOOD — not revoked' 'the same options with --status-list given after them are accepted' -- \
+  --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}" --status-list
+
 edit "$T/list-empty.json" "$T/list-truthy.json" 'd["statusList"]["truncated"] = "yes"'
 expect 3 'truncated must be a boolean' 'a list whose truncated flag is not a boolean is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-truthy.json"
@@ -1337,6 +1365,9 @@ jexpect 2 'an option with an empty value is a usage error' 'o["reason"] == "usag
   --attestation "$T/att.json" --jwks ''
 jexpect 2 '--min-seq that is not a number is a usage error' 'o["reason"] == "usage"' -- \
   --attestation "$T/att.json" --min-seq x
+jexpect 2 'a status-list option without --status-list is a usage error' \
+  'o["reason"] == "usage" and o["message"] == "error: --status requires --status-list" and o["checks"] == []' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-key.json"
 # --json first or last makes no difference, and a check failure keeps its own code.
 out="$T/json-first.out"
 NO_COLOR=1 bash "$VERIFIER" --json --attestation "$T/att.json" "${COMMON[@]}" > "$out" 2>&1
@@ -1372,8 +1403,21 @@ lacks 'needs a value' '--expect-nonce --abc is not reported as a missing value'
 expect 2 'public key is 3 bytes' '--pub-b64url with a key that starts with - is a value' -- \
   --attestation "$T/att.json" --pub-b64url -AAA --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
 lacks 'needs a value' '--pub-b64url -AAA is not reported as a missing value'
-expect 0 'GOOD' '--check-kid --abc is a kid to look up, not a missing value' -- \
+expect 0 "GOOD — kid $KID_DASH is not revoked" '--check-kid --AAAA... is a kid to look up, not a missing value' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$KID_DASH" --now "$NOW"
+lacks 'needs a value' '--check-kid --AAAA... is not reported as a missing value'
+# --check-kid is held to the shape of a kid: an option given as its value never
+# stands in for a kid (it used to replace the document's own kid in Rule K).
+expect 2 'error: --check-kid --raw is not a kid' '--check-kid --raw is a usage error (2), not a kid' -- \
+  --status-list --status "$T/list-key.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}" \
+  --check-kid --raw
+lacks 'GOOD' '--check-kid --raw never ends GOOD'
+expect 2 'error: --check-kid --abc is not a kid' '--check-kid --abc is a usage error (2)' -- \
   --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid --abc --now "$NOW"
+JSON_FIRST=1 jexpect 2 '--check-kid that is not a kid is a usage error' \
+  'o["reason"] == "usage" and o["message"] == "error: --check-kid --raw is not a kid (22 base64url characters)"' -- \
+  --status-list --status "$T/list-key.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}" \
+  --check-kid --raw
 expect 0 'VERIFIED — this document was signed' "--expect-nonce '' keeps its meaning: an empty challenge is a value" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-nonce ''
 

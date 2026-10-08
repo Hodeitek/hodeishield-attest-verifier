@@ -70,6 +70,18 @@ before it takes effect. Only the latest release is supported, as
   second time for the exact identity read from the certificate (a failure is
   `anchor_unverified`, exit 2). `--anchor-file` is new in this release; no
   earlier release is affected.
+- `--check-kid` replaced the document's own kid in the revocation check. With
+  `--status-list` and a document, `--check-kid OTHER` looked up `OTHER` and never
+  the kid of the key that signed, so a document signed by a revoked key could end
+  `GOOD`, exit 0. In this release's development line `--check-kid --raw` did the
+  same, with `--raw` as the kid. Now the document's own kid (recomputed from the
+  key bytes, and its header kid) is always looked up, and a `--check-kid` is
+  looked up as well; either one listed is `REVOKED`. `--check-kid` must have the
+  shape of a kid (a usage error, exit 2, otherwise). And `--status`,
+  `--status-keys`, `--check-kid`, `--check-subject`, `--check-generated-at` and
+  `--min-seq` given without `--status-list` were silently ignored and the run
+  could end `VERIFIED`; each is now a usage error, exit 2 ("--status requires
+  --status-list"). This also affected earlier releases.
 
 ### Fixed
 - An option given without its value exited 1, as if a check had failed. It is now

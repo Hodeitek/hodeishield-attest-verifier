@@ -139,9 +139,16 @@
 #                        self-consistent GOOD/REVOKED of the attacker's choosing
 #                        and nothing downstream can notice. Fetch it yourself and
 #                        pass the file if you must take that risk knowingly.
-#   --check-kid          the attestation `kid` to test against the list (Rule K,
-#                        unconditional — revokedAt is never compared). Defaults
-#                        to the `--jws` header kid when one is given.
+#   --check-kid          an attestation `kid` to test against the list (Rule K,
+#                        unconditional — revokedAt is never compared). It must
+#                        have the shape of a kid (a usage error otherwise). With
+#                        a document, the document's own kid (recomputed from the
+#                        key bytes, and its header kid) is ALWAYS tested too:
+#                        --check-kid adds a kid, it never replaces that one.
+#
+#   Every option of this mode (--status, --status-keys, --check-kid,
+#   --check-subject, --check-generated-at, --min-seq) without --status-list is a
+#   usage error, exit 2: it would otherwise be read by nothing.
 #   --check-subject      the trust-center slug to test (Rule B — reads the
 #                        timestamp, because this branch presumes the key is NOT
 #                        compromised). Defaults to the verified document's slug.
@@ -217,6 +224,7 @@ STATUS_SRC=''; STATUS_KEYS_SRC=''
 RETIRED_AT=''   # hs_retired_at of the selected attestation key, when it has one
 CHECK_KID=''; CHECK_SUBJECT=''; CHECK_GENERATED_AT=''
 MIN_SEQ=''; EXPECT_ISSUER=''
+STATUS_OPT=''   # the first status-list option given, for the usage error without --status-list
 
 # The issuer's hard TTL ceiling (posture.ts MAX_TTL_SECONDS). `expiresAt` further
 # from `generatedAt` than this is above anything a conforming issuer can mint, so
@@ -612,12 +620,18 @@ while [ $# -gt 0 ]; do
     --anchor-file)          ANCHOR_FILE="${2:?}"; shift 2 ;;
     --anchor-bundle)        ANCHOR_BUNDLE="${2:?}"; shift 2 ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
-    --status)               STATUS_SRC="${2:?}"; shift 2 ;;
-    --status-keys)          STATUS_KEYS_SRC="${2:?}"; shift 2 ;;
-    --check-kid)            CHECK_KID="${2:?}"; shift 2 ;;
-    --check-subject)        CHECK_SUBJECT="${2:?}"; shift 2 ;;
-    --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; shift 2 ;;
-    --min-seq)              MIN_SEQ="${2:?}"; shift 2
+    --status)               STATUS_SRC="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
+    --status-keys)          STATUS_KEYS_SRC="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
+    # A kid has one shape (see --expect-kid). Anything else, an option given as
+    # the value among them, is a usage error: it could never be found in a list,
+    # and it must not stand in for the kid of a document.
+    --check-kid)
+      is_kid_shape "$2" \
+        || arg_die "error: --check-kid $(esc "$2") is not a kid (22 base64url characters)"
+      CHECK_KID="$2"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
+    --check-subject)        CHECK_SUBJECT="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
+    --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
+    --min-seq)              MIN_SEQ="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2
       [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || arg_die 'error: --min-seq must be a non-negative integer' ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
     --json)         shift ;;
@@ -626,6 +640,11 @@ while [ $# -gt 0 ]; do
     *) arg_die "unknown argument: $1" ;;
   esac
 done
+# An option of the status-list mode without --status-list would be read by
+# nothing, and the run would end VERIFIED as if it had been checked.
+if [ -n "$STATUS_OPT" ] && [ "$STATUS_LIST_MODE" -eq 0 ]; then
+  arg_die "error: $STATUS_OPT requires --status-list"
+fi
 
 CONTENT_WITHHELD='attested content withheld: this document did not verify'
 RED=''; GREEN=''; YELLOW=''; BOLD=''; RESET=''
@@ -2569,12 +2588,19 @@ if [ "$STATUS_LIST_MODE" -eq 1 ]; then
 
 printf '\n%s[9] Revocation check%s\n' "$BOLD" "$RESET"
 
-# §6.3's "unknown_kid upgrade": when --jws was verified, its header kid is used
-# here EVEN IF the posture check above already failed on it — safe to do with an
-# unverified field because the only reachable effect is a rejection (revoked, or
-# the signature simply does not verify under the claimed key). It can never turn
-# a bad document good.
-EFFECTIVE_KID="${CHECK_KID:-${KID:-}}"
+# The kids Rule K is applied to. With a document: the kid recomputed from the key
+# bytes that verified it AND its header kid, ALWAYS, and any --check-kid besides;
+# --check-kid never replaces the document's own kid, so a revoked signing key
+# cannot be checked under another name. Any one of them listed is REVOKED.
+# §6.3's "unknown_kid upgrade": the header kid is used here EVEN IF the posture
+# check above already failed on it — safe to do with an unverified field because
+# the only reachable effect is a rejection. It can never turn a bad document good.
+CHECK_KIDS=()
+for k in "${DERIVED_KID:-}" "${KID:-}" "$CHECK_KID"; do
+  [ -n "$k" ] || continue
+  case " ${CHECK_KIDS[*]-} " in *" $k "*) ;; *) CHECK_KIDS+=("$k") ;; esac
+done
+EFFECTIVE_KID="${CHECK_KIDS[*]-}"
 EFFECTIVE_SLUG="${CHECK_SUBJECT:-${SLUG:-}}"
 EFFECTIVE_GENAT="${CHECK_GENERATED_AT:-${GENERATED:-}}"
 
@@ -2592,13 +2618,14 @@ elif [ -z "$EFFECTIVE_KID" ] && [ -z "$EFFECTIVE_SLUG" ]; then
 else
   # Rule K — UNCONDITIONAL. revokedAt is deliberately never compared: it is a
   # field the compromised key itself could sign, so a rule over it is decoration.
-  if [ -n "$EFFECTIVE_KID" ]; then
-    KEY_HIT_REASON="$(jq -r --arg kid "$EFFECTIVE_KID" \
+  for k in "${CHECK_KIDS[@]+"${CHECK_KIDS[@]}"}"; do
+    KEY_HIT_REASON="$(jq -r --arg kid "$k" \
       '.keys[]? | select(.kid==$kid) | .reason' "$WORKDIR/list.json" | head -1)"
     if [ -n "$KEY_HIT_REASON" ]; then
       REVOCATION_STATUS='revoked'; REVOCATION_REASON="$KEY_HIT_REASON"; REVOCATION_VIA='key'
+      break
     fi
-  fi
+  done
 
   # Rule B — reads the timestamp; legitimate only because this branch presumes
   # the key is NOT compromised (Rule K above would already have fired if it were).
@@ -2646,7 +2673,11 @@ case "$REVOCATION_STATUS" in
   good)
     record good pass 0
     printf '\n%s%sGOOD%s' "$GREEN" "$BOLD" "$RESET"
-    [ -n "$(esc "$EFFECTIVE_KID")" ]  && printf ' — kid %s is not revoked' "$(esc "$EFFECTIVE_KID")"
+    if [ "${#CHECK_KIDS[@]}" -gt 1 ]; then
+      printf ' — kids %s are not revoked' "$(esc "${EFFECTIVE_KID// /, }")"
+    elif [ -n "$EFFECTIVE_KID" ]; then
+      printf ' — kid %s is not revoked' "$(esc "$EFFECTIVE_KID")"
+    fi
     [ -n "$(esc "$EFFECTIVE_SLUG")" ] && printf ', subject %s carries no earlier withdrawal' "$(esc "$EFFECTIVE_SLUG")"
     printf ' (list seq %s).\n' "$(esc "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')")"
     ;;
