@@ -134,6 +134,11 @@ script from v1.4.0. It behaves as follows:
   exact identity (not a pattern) and the same issuer. If cosign does not verify
   it, the run ends with exit 2 (`anchor_unverified`), and no release tag is
   reported.
+- **The certificate is from this repository by its numeric ID.** The same
+  certificate must carry the Source Repository Identifier extension (OID
+  `1.3.6.1.4.1.57264.1.15`) with this repository's GitHub ID, `1340684886`,
+  exactly once, as the UTF8String Fulcio writes. Anything else is exit 2
+  (`anchor_unverified`). See "Consequences".
 - cosign may contact the Sigstore TUF repository to refresh its trust root, so
   the option can need network access even though the rest of the verifier does
   not.
@@ -212,11 +217,32 @@ a key set whose key is not one the issuer published through this repository: the
 `kid` of the signing key must be in a statement signed by this repository's
 release workflow.
 
+**The anchor trusts any `v*` tag built by `release.yml` in this repository.**
+The release workflow signs the statement as soon as a `v*` tag is pushed, for
+whatever commit the tag points to, before the draft release exists and whether
+or not it is ever published. The signature and its certificate are in the public
+Rekor log from that moment, so a usable bundle exists even for a draft that is
+deleted. Publishing the draft by hand is therefore not a control on what the
+anchor accepts, and neither is signing the tags: the workflow does not check a
+tag's signature. What limits the set of statements the anchor accepts is who can
+push a `v*` tag (a tag ruleset on `v*`), and the version check above (a tag older
+than the verifier is refused).
+
+The identity names the repository by name. A name is given up when a repository
+is renamed or deleted, and another repository could take it and run its own
+`release.yml`. So the verifier also requires the verified certificate to carry
+this repository's numeric GitHub ID, `1340684886`, in the Source Repository
+Identifier extension that Fulcio writes (OID `1.3.6.1.4.1.57264.1.15`). The ID
+is never reused. A certificate without it, or with another value, is exit 2
+(`anchor_unverified`, "the certificate is not from this repository"). It is read
+from the certificate cosign verified, with `openssl asn1parse`; no new
+dependency.
+
 It does not protect against:
 
-- a compromised release pipeline or GitHub account, which can sign a statement
-  with a different key. The tags are signed and the release is published by
-  hand from a draft, which makes that harder but not impossible.
+- anyone who can push a `v*` tag to this repository, a compromised GitHub
+  account with that right, or a compromised release pipeline: each can have a
+  statement with a different key signed, as described above.
 - a compromised issuer key. That is handled by revocation (§7 and §7.1 of the
   verification document), not by this statement.
 

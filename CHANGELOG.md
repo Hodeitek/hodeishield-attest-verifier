@@ -70,6 +70,14 @@ before it takes effect. Only the latest release is supported, as
   second time for the exact identity read from the certificate (a failure is
   `anchor_unverified`, exit 2). `--anchor-file` is new in this release; no
   earlier release is affected.
+- `--anchor-file` bound the release workflow to this repository by name only.
+  The verified certificate must now also carry this repository's numeric GitHub
+  ID, `1340684886`, in Fulcio's Source Repository Identifier extension (OID
+  1.3.6.1.4.1.57264.1.15), or the anchor could not be checked (exit 2), so a
+  repository that takes over the name after a rename or deletion is not
+  accepted. The decision record no longer presents publishing the draft release
+  by hand as a mitigation: the statement is signed when a `v*` tag is pushed,
+  so the anchor trusts any `v*` tag that `release.yml` of this repository built.
 - `--check-kid` replaced the document's own kid in the revocation check. With
   `--status-list` and a document, `--check-kid OTHER` looked up `OTHER` and never
   the kid of the key that signed, so a document signed by a revoked key could end

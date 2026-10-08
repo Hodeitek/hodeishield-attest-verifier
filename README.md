@@ -428,7 +428,12 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   it; any other shape, such as cosign's legacy bundle format, is refused before
   cosign runs (exit 2). cosign is then asked a second time for the exact
   identity read from the bundle's certificate, so the release tag below comes
-  from the certificate cosign verified.
+  from the certificate cosign verified. That certificate must also carry this
+  repository's numeric GitHub ID (Fulcio's Source Repository Identifier), so a
+  repository that took over the name is not accepted.
+- The anchor accepts a statement signed for any `v*` tag that `release.yml` of
+  this repository built, published or not: the workflow signs when the tag is
+  pushed. See "Consequences" in [the decision record](docs/security/key-anchor.md).
 - Exit 2, "anchor could not be checked", when cosign is missing or older, the
   bundle is not v0.3, or the statement does not verify (wrong identity, altered
   statement, unreadable bundle, no trust root), or is not a well-formed statement. This is by design:

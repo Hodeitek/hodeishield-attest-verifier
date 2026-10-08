@@ -864,11 +864,17 @@ st() { edit "$T/stmt-base.json" "$1" "$2"; }
 # single SAN is the workflow identity at a tag: the verifier reads the release tag
 # from it, as it does from the certificate cosign has just verified.
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:prime256v1 -out "$T/anchor-k.pem" 2>/dev/null
-# mint_bundle OUT SAN — a Sigstore v0.3 bundle (in shape: the stub verifies
-# nothing) whose certificate has this subjectAltName ('' for none).
+# mint_bundle OUT SAN [REPO] — a Sigstore v0.3 bundle (in shape: the stub verifies
+# nothing) whose certificate has this subjectAltName ('' for none) and, as Fulcio
+# writes it, the Source Repository Identifier extension (OID
+# 1.3.6.1.4.1.57264.1.15): REPO is its value in openssl's ASN1: syntax, by
+# default this repository's ID as a UTF8String, or '-' for no extension.
+REPO_ID=1340684886
 mint_bundle() {
-  local ext=()
+  local ext=() repo="${3:-ASN1:UTF8String:$REPO_ID}"
+  rm -f "$T/anchor-c.der"
   if [ -n "$2" ]; then ext=(-addext "subjectAltName=$2"); fi
+  if [ "$repo" != - ]; then ext+=(-addext "1.3.6.1.4.1.57264.1.15=$repo"); fi
   openssl req -new -x509 -key "$T/anchor-k.pem" -subj '/CN=anchor-test' -days 2 ${ext[@]+"${ext[@]}"} \
     -outform DER -out "$T/anchor-c.der" 2>/dev/null
   printf '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","verificationMaterial":{"certificate":{"rawBytes":"%s"},"tlogEntries":[{"logIndex":"1"}],"timestampVerificationData":{}},"messageSignature":{"messageDigest":{"algorithm":"SHA2_256","digest":"AAAA"},"signature":"AAAA"}}\n' \
@@ -993,6 +999,32 @@ if [ "$V_MAJ" -eq 1 ] && [ "$V_MIN" -lt 10 ]; then
   # 10 > 4 as numbers, and "1.10.0" sorts before "1.4.0" as text.
   tagcase 'v1.10.0 is newer than v1.4.0: the comparison is numeric, not a string comparison' "URI:${ANCHOR_WF}v1.10.0" 0 "is signed by ${ANCHOR_WF}v1.10.0"
 fi
+# --- the repository, by its numeric ID (the Source Repository Identifier) ----------
+# The identity names the repository; the certificate must also carry its numeric
+# ID, which a repository that took over the name would not have.
+if grep -qxF "ANCHOR_REPOSITORY_ID='$REPO_ID'" "$VERIFIER"; then
+  printf 'ok - the script pins the repository ID %s\n' "$REPO_ID"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - the script does not pin the repository ID %s\n' "$REPO_ID"; FAILED=$((FAILED + 1))
+fi
+NOT_REPO='anchor could not be checked: the certificate is not from this repository'
+repocase() {   # NAME REPO_EXTENSION
+  mint_bundle "$T/repo-bundle.json" "URI:${ANCHOR_WF}v${VER}" "$2"
+  expect 2 "$NOT_REPO" "repository ID, $1: could not check (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/repo-bundle.json"
+  lacks 'VERIFIED' "repository ID, $1: no verdict on the attestation"
+}
+repocase 'no Source Repository Identifier' -
+repocase 'another repository ID' "ASN1:UTF8String:$((REPO_ID + 1))"
+repocase 'the ID with a digit more' "ASN1:UTF8String:${REPO_ID}0"
+repocase 'the ID with a digit less' "ASN1:UTF8String:${REPO_ID%?}"
+repocase 'the ID as another string type' "ASN1:PRINTABLESTRING:$REPO_ID"
+repocase 'the ID as an integer' "ASN1:INTEGER:$REPO_ID"
+repocase 'an empty value' 'ASN1:UTF8String:'
+mint_bundle "$T/repo-bundle.json" "URI:${ANCHOR_WF}v${VER}"
+expect 0 "$ANCHOR_SIGNED" 'repository ID, this repository: accepted' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/repo-bundle.json"
+
 CANNOT='anchor could not be checked: the statement'"'"'s release tag cannot be read'
 tagcase 'a pre-release tag' "URI:${ANCHOR_WF}v${VER}-rc1" 2 "$CANNOT"
 tagcase 'build metadata' "URI:${ANCHOR_WF}v${VER}+build" 2 "$CANNOT"
@@ -1526,6 +1558,11 @@ jexpect 0 'a standalone status query: the status-list key listed is enough' \
 COSIGN_STUB_RC_IDENTITY=1 jexpect 2 'the exact identity does not verify: could not check, and the tag read is not reported' \
   'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+mint_bundle "$T/repo-bundle.json" "URI:${ANCHOR_WF}v${VER}" "ASN1:UTF8String:$((REPO_ID + 1))"
+jexpect 2 'a certificate from another repository ID: anchor_unverified, no tag reported' \
+  'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None
+   and "Source Repository Identifier" in o["message"]' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/repo-bundle.json"
 jexpect 2 'a bundle in the legacy format: anchor_bundle_unsupported' \
   'o["reason"] == "anchor_bundle_unsupported" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None
    and "not a Sigstore v0.3 bundle" in o["message"]' -- \

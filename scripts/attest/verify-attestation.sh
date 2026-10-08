@@ -88,8 +88,9 @@
 #                      environment variable to change it. The bundle must be exactly
 #                      a Sigstore bundle v0.3 (anything else is exit 2), and cosign
 #                      is asked a second time for the exact identity read from its
-#                      certificate, whose release tag must not be older than this
-#                      script. It then requires the key
+#                      certificate, which must carry this repository's numeric ID
+#                      (Fulcio's Source Repository Identifier) and whose release
+#                      tag must not be older than this script. It then requires the key
 #                      that signed to be listed, under the right role, with a
 #                      retirement that agrees with hs_retired_at. cosign is an
 #                      OPTIONAL dependency, needed only here, version 3.1.3 or later.
@@ -213,6 +214,12 @@ ANCHOR_FILE=''; ANCHOR_BUNDLE=''
 ANCHOR_MIN_COSIGN='3.1.3'   # the version release.yml pins
 ANCHOR_IDENTITY_RE='^https://github\.com/Hodeitek/hodeishield-attest-verifier/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
 ANCHOR_OIDC_ISSUER='https://token.actions.githubusercontent.com'
+# The identity above names this repository by NAME, which a deleted or renamed
+# repository gives up to whoever takes the name next. Fulcio also writes the
+# repository's numeric GitHub ID, which is never reused, into every certificate it
+# issues to a workflow: the Source Repository Identifier extension, OID
+# 1.3.6.1.4.1.57264.1.15. The certificate cosign verified must carry this one.
+ANCHOR_REPOSITORY_ID='1340684886'
 ANCHOR_READY=0; ANCHOR_STMT=''; ANCHOR_ISSUER=''
 # --expect-kid, repeatable: the kids the attestation's signing key may have. Empty
 # means no pin. Not --check-kid, which looks a kid up in a status list.
@@ -1410,6 +1417,29 @@ anchor_cosign_new_enough() {
   [ -z "$pre" ]
 }
 
+# Whether the certificate (DER) $1 carries the Source Repository Identifier
+# extension exactly once, as a top-level extension of the certificate, with a
+# value that is exactly the DER UTF8String of ANCHOR_REPOSITORY_ID (as Fulcio
+# encodes it). Read with `openssl asn1parse`, which prints the extension's OID and
+# then its value as a hex dump; nothing else is accepted, not another string
+# type, not a critical flag in between, not a longer or shorter number.
+anchor_repository_id_ok() {
+  local LC_ALL=C id_hex='' h='' i=0 line='' after=0 lines=()
+  local oid_re=':d=5 +hl=[0-9]+ +l= *[0-9]+ +prim: +OBJECT +:1\.3\.6\.1\.4\.1\.57264\.1\.15$'
+  local val_re=':d=5 +hl=[0-9]+ +l= *[0-9]+ +prim: +OCTET STRING +\[HEX DUMP\]:([0-9A-F]+)$'
+  printf -v id_hex '0C%02X' "${#ANCHOR_REPOSITORY_ID}"
+  for (( i = 0; i < ${#ANCHOR_REPOSITORY_ID}; i++ )); do
+    printf -v h '%02X' "'${ANCHOR_REPOSITORY_ID:i:1}"; id_hex+="$h"
+  done
+  # Each occurrence of the OID, and the line that follows it.
+  while IFS= read -r line; do
+    if [ "$after" -eq 1 ]; then lines+=("$line"); after=0; fi
+    if [[ "$line" =~ $oid_re ]]; then lines+=(OID); after=1; fi
+  done < <(openssl asn1parse -inform DER -in "$1" 2>/dev/null || true)
+  [ "${#lines[@]}" -eq 2 ] && [ "${lines[0]}" = OID ] && [[ "${lines[1]}" =~ $val_re ]] \
+    && [ "${BASH_REMATCH[1]}" = "$id_hex" ]
+}
+
 # cosign's own diagnostics, for the reader: directories taken off every path
 # (a name only, never a temporary or an absolute path), every line through esc(),
 # indented. URLs are left alone: the pattern needs a path to start after a space,
@@ -1585,6 +1615,13 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign.out")"
        This is not evidence that the attestation is forged. The run ends without a verdict on it: re-fetch the statement and
        its bundle from the release you trust, or drop --anchor-file.
 $(anchor_diagnostics "$WORKDIR/anchor/cosign-identity.out")"
+  fi
+  # The same verified certificate must be from THIS repository, by its numeric ID.
+  if ! anchor_repository_id_ok "$WORKDIR/anchor/cert.der"; then
+    die anchor_unverified "anchor could not be checked: the certificate is not from this repository.
+       Its Source Repository Identifier (OID 1.3.6.1.4.1.57264.1.15) is not ${ANCHOR_REPOSITORY_ID}, the numeric GitHub ID
+       of Hodeitek/hodeishield-attest-verifier. A repository that took over the name would have another ID.
+       This is not evidence against the attestation."
   fi
   anchor_tag_ok=1
   IFS=. read -r -a anchor_tv <<< "${anchor_tag#v}"
