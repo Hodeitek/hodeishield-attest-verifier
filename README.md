@@ -149,7 +149,15 @@ Posture mode (the default, as above):
 |---|---|
 | **0** | Verified. The signature holds and every requested check passed. |
 | **1** | **Check failed.** Something did not hold. Do not rely on the document. |
-| **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key. This is *not* a statement about the document — do not read it as failure. |
+| **2** | **Could not check.** Missing tool, an `openssl` that cannot do ML-DSA, unreadable input, unknown key, a key set whose `hs_retired_at` is malformed. This is *not* a statement about the document — do not read it as failure. |
+
+A document generated at or after the retirement of the key that signed it also
+exits 1, with a `FAIL` line starting `retired_key`: by policy, a retired key stays
+published and is marked with `hs_retired_at` in its key set (see
+[Current signing keys](docs/security/keys.md)).
+The signature may be genuine, but the document is not one to rely on, and a
+fresh copy signed by the same key would fail the same way. Its last line is
+`VERIFICATION FAILED`, not `EXPIRED`.
 
 A genuine document that is only out of date also exits 1: it is not one to rely
 on. Its last line tells it apart from a tampered or invalid one. It starts with
@@ -165,7 +173,7 @@ appears when the signature verified and age or expiry was the only problem.
 | **0** | Good. If a document was given, its posture checks passed **and** it is not revoked. |
 | **1** | **Revoked**, or the posture check of the document you gave failed. |
 | **2** | **Could not check.** Bad flags, a missing tool, or a status list that could not be fetched or read. |
-| **3** | **Unknown.** The list was obtained but does not verify, is stale, was rolled back, or names its own signer. This is neither "good" nor "revoked". |
+| **3** | **Unknown.** The list was obtained but does not verify, is stale, was rolled back, names its own signer, or was issued at or after the retirement of its key (`retired_key`). This is neither "good" nor "revoked". |
 
 Never test `$? -ne 0` and treat the result as one outcome. In `--status-list`
 mode that collapses "revoked" (1), "could not check" (2) and "unknown" (3) into
@@ -193,6 +201,39 @@ bash scripts/attest/verify-attestation.sh --status-list \
 `--jwks` and `--status-keys` are different key sets and are never
 interchangeable. What the list can and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
+
+## What the output shows
+
+The checks print as `PASS`, `WARN` and `FAIL` lines, in numbered sections, with
+the last line giving the verdict. What the document *says* (its overall band
+and, for each framework, its name and band, plus the subject, `generatedAt`,
+`lastCheckedAt` and visibility) is printed in an "Attested content" block just
+before the verdict, and only when the run ends `VERIFIED` (or `GOOD` in
+`--status-list` mode). A document that is tampered, expired, revoked, of unknown
+status, or that could not be checked shows none of it: the output says
+`attested content withheld: this document did not verify` instead.
+
+The full signed posture JSON is printed only with `--raw`, under the same rule.
+Bands, framework names and the raw posture are never shown for a document that
+does not verify, even with `--raw`.
+
+A run that does not verify still prints what is needed to see why. These are
+failure reasons, not attested content:
+
+- the check lines, the protected header and the `kid` (and the kid derived from
+  the key bytes, when they differ);
+- the envelope identifiers `docVersion`, `iss`, `kid`, `jti` and `nonce`;
+- `generatedAt` and `expiresAt`, with the age, on every run (and the issued and
+  next-update times of a status list);
+- the subject slug: in the expected-and-found slug message, in the `curl` hint
+  under an `EXPIRED` verdict, and on the `subjectHash` line in `--status-list`
+  mode;
+- the visibility `gated`, in a redaction failure message;
+- the words "nothing is attested", in the `PASS` line for a null `overallBand`.
+
+Every value taken from a document, key set or status list is printed with
+control characters, and any byte outside printable ASCII, as a visible `\xHH`
+escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
 
 ## Convince yourself it can fail
 
@@ -262,8 +303,30 @@ a downloaded `jwks.json`, one value per key:
 python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
 ```
 
-Compare the output with the `kid` you pinned. This repository does not yet
-publish the current values.
+Compare the output with the `kid` you pinned. The current values are listed in
+[docs/security/keys.md](docs/security/keys.md); the current attestation key is
+`roeFReafBOA_WF3cqfilHA`.
+
+Let the verifier do the comparison with `--expect-kid`:
+
+```bash
+bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com \
+  --expect-kid <the kid you pinned>
+```
+
+- The run exits 1 with a `FAIL` line, `unexpected_kid`, naming the kid found and
+  the kids expected, unless the key that signed has that kid. The comparison is
+  with the kid recomputed from the key bytes, never with a label in the
+  document or the JWKS, so a key relabelled to the kid you pinned does not pass.
+- Repeat the option to pin two kids during a key rotation overlap
+  (`--expect-kid <old> --expect-kid <new>`): the key may have either.
+- A value that is not the shape of a kid (22 base64url characters) is a usage
+  error, exit 2.
+- It is not `--check-kid`. `--check-kid` looks a kid up in a revocation status
+  list; `--expect-kid` requires the attestation's signing key to be one you
+  pinned. It does not apply to the key that signs the status list, which has no
+  pin option in this release.
 
 ## Where this comes from, and what is redacted
 
@@ -284,8 +347,28 @@ publish the current values.
   **provenance** — they say where a constant or a rule came from. They are not
   steps you are expected to follow. The same holds for references to
   `docs/architecture/specs/…` (the revocation design document) in the script's
-  comments and in some of its messages: that document is not public. §7 of the
-  public document covers what a verifier needs.
+  comments: that document is not public, and nothing the script prints points to
+  it. Where a message sends you to a document, it is §7 or §7.1 of the public
+  one, which covers what a verifier needs.
+
+## Compatibility
+
+The verifier checks two document formats, and no other version of either:
+
+| Verifier version | Attestation | Status list |
+|---|---|---|
+| every release so far (v1.0.0 to v1.2.1) | `attest.attestation.v1` | `attest.statuslist.v1` |
+
+- A change to either format that older verifiers cannot read is announced at
+  least 90 days before it takes effect.
+- Only the latest release is supported (see [SECURITY.md](SECURITY.md)). Update
+  to it before relying on a result, and see the [changelog](CHANGELOG.md) for
+  what each release changed.
+- A document with a format version the verifier does not know is never read as
+  an older format, and is never verified. An attestation whose `docVersion` or
+  posture version is not the one above stops the run with exit 2 ("could not
+  check", the canonical encoder refuses it). A status list with another
+  `docVersion` is `unknown`, exit 3.
 
 ## Verifying a release
 

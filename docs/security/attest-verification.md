@@ -449,6 +449,13 @@ the key belongs to who you think, or that the document was meant to exist.
 Read docs/security/attest-verification.md §6 before relying on it.
 ```
 
+> **Note on the output above.** That run predates a change to what the script
+> prints. Today the overall band and the frameworks are shown in an "Attested
+> content" block just before the verdict, and only when the document verifies;
+> the full posture JSON is printed only with `--raw`; and a document that does
+> not verify prints `attested content withheld: this document did not verify`
+> in their place. The checks and the verdict are unchanged.
+
 **Always pass `--expect-issuer`.** `iss` decides whose key set is
 authoritative, and a verifier that never checks it will happily accept a
 perfectly valid document signed by somebody else's deployment of this software.
@@ -1299,32 +1306,51 @@ This section matters more than the commands.
 ## 7. Key rotation, revocation and what to do with an old document
 
 The attestation key rotates on a **12-month** cadence, and immediately on
-suspected compromise.
+suspected compromise. The current keys are listed in [`keys.md`](keys.md).
 
-**Planned rotation** is designed to publish both keys during a **90-day
-overlap**: the key document lists two entries, new attestations carry the new
-`kid`, and documents you already hold keep verifying until the old key is
-retired.
+**Planned rotation** publishes both keys during a **90-day overlap**: the key
+document lists two entries, new attestations carry the new `kid`, and documents
+you already hold keep verifying while the old key is still within its validity.
 
-Multi-key publication is **implemented and live** (`app/src/lib/attest/published-keys.ts`):
-the key document lists the ACTIVE signing key first, then every still-published
-retired key, deduplicated by `kid`. Two consequences for you:
+**A retired key stays published.** It is not removed from the set when it is
+retired; it is marked as retired, so documents signed before its retirement can
+still be checked. A document signed by a retired key is acceptable only if its
+`generatedAt` is before the retirement time. As policy, the key set marks a
+retired key with the member `hs_retired_at`, an RFC 3339 UTC time with seconds
+(`YYYY-MM-DDTHH:MM:SSZ`). Verifier v1.3.0 and later reject a document whose
+`generatedAt` is at or after it (exit 1, `retired_key`; the instants are
+compared exactly, milliseconds included), and a status list issued at or after
+the retirement of its own key is unknown (exit 3). Earlier versions ignore the
+member, so with them check that a document signed by a retired key has a
+`generatedAt` before the retirement time listed in [`keys.md`](keys.md). The
+one-hour validity ceiling means an attestation from a retired key cannot pass at
+the current time: a backdated one has already expired, and a current one is dated
+after the retirement. A status list can be valid for up to 24 hours plus a 300
+second allowance, so one signed by a retired status key and issued just before
+the retirement can still be accepted for that long; a compromise goes through
+revocation, not retirement. With `--now` set to a past instant, a backdated document
+is judged as of that instant.
+
+The key document lists the ACTIVE signing key first, then every retired key,
+deduplicated by `kid`. Two consequences for you:
 
 - **Do not take `keys[0]` and stop.** Active-first is a contract, so `keys[0]`
   is what we are signing with right now — but a document you already hold may
   legitimately name a later entry. Resolve by `kid` across the whole set.
 - **Do not cache a key set indefinitely, and do re-fetch on an unknown `kid`.**
-  A retired key leaves the set at the end of its overlap, by design.
+  A new key appears in the set at the start of an overlap.
 
-**Compromise rotation is deliberately abrupt.** The old key is withdrawn
+**Compromise is not handled by retirement.** A compromised key is revoked
+through the status list: its `kid` is listed in `keys[]`, and every document it
+ever signed stops verifying at once (§7.1). Retirement would not do that, since
+a retired key's earlier documents stay acceptable. The old key is withdrawn
 immediately with no overlap, because during an overlap an attacker holding the
-leaked seed can forge attestations that verify. Every document ever signed with
-that key stops verifying at once. That is the intended behaviour.
+leaked seed can forge attestations that verify. That is the intended behaviour.
 
 If a HodeiShield attestation that previously verified suddenly does not:
 
 1. Re-fetch `/api/public/attest/keys`. The `kid` in your
-   document may simply have aged out of the overlap window.
+   document may simply be signed by a key that is now retired.
 2. **Fetch `/api/public/attest/status` and run the §7.1 procedure below**
    against the `kid` (and, if you know it, the trust-center slug). This is the
    fastest way to learn *why* — `revoked` with a reason (exit 1), versus
@@ -1344,11 +1370,9 @@ If a HodeiShield attestation that previously verified suddenly does not:
 2026-07-30 there is a signed, freshness-bounded **status list**, published at
 `GET /api/public/attest/status` and verified against its **own**, separate key
 set at `GET /api/public/attest/status-keys` — never the attestation key set at
-`/keys`. The two key sets are disjoint by construction (a holder of the
-attestation seed cannot sign a status list any conforming verifier will even
-look at, and vice versa — full argument in
-`docs/architecture/specs/2026-07-30-attest-revocation-design.md`). It gives
-you two real primitives:
+`/keys`. The two key sets are disjoint by construction (a holder of
+the attestation seed cannot sign a status list any conforming verifier
+will even look at, and vice versa). It gives you two real primitives:
 
 - **Key revocation, unconditional.** If the `kid` that signed your document
   appears in the list's `keys[]`, the document is **revoked** — full stop,
@@ -1367,12 +1391,10 @@ you two real primitives:
 still cannot recall the one mis-issued attestation without revoking either the
 key or the subject it belongs to. Combined with the 1-hour `MAX_TTL_SECONDS`
 ceiling, an isolated mis-issued document that does not warrant either of those
-simply expires — that has not changed.
-`docs/architecture/specs/2026-07-30-attest-revocation-design.md` argues the
-arithmetic in full: a per-`jti` entry would be worth, at best, the remaining
-minutes of a document that was going to die within the hour anyway, against a
-permanent cost (a durable write on every anonymous fetch of an attestation, an
-enumerable issuance corpus).
+simply expires — that has not changed. The arithmetic: a per-`jti` entry
+would be worth, at best, the remaining minutes of a document that was going
+to die within the hour anyway, against a permanent cost (a durable write on
+every anonymous fetch of an attestation, an enumerable issuance corpus).
 
 **If you never fetch the status list, nothing about your position changes.**
 A verifier who only performs the checks in §4, and who pinned the key
@@ -1492,6 +1514,18 @@ into one outcome by checking `$? -ne 0`:
 | `1` | `revoked` — the key rule or the subject rule fired, **or** the posture check of the document you gave failed |
 | `2` | **could not check** — usage or environment problem (bad flags, missing `curl`/`openssl`/`python3`/`jq`, an unreadable file), **or a `--status` / `--status-keys` source that could not be fetched** (the script stops with `error: failed to fetch …`). Says nothing about the subject. |
 | `3` | `unknown` — the list was obtained but does not verify: bad signature, stale past `nextUpdate` (300 s skew allowance), rolled back (`--min-seq`), self-revoking, an unresolved or mislabelled `kid`, a malformed document; **or** the subject rule could not be decided (see above). The list's `iss` is compared to `--expect-issuer` **only if you pass it**; without it, a list from another issuer is not caught. **Not** evidence of anything either way — see the "if you never fetch" paragraph above. |
+
+**Unknown is not good.** An `unknown` outcome (exit 3) means a status list was
+obtained but could not be verified, or the subject rule could not be decided
+from the list it has, so the verifier has **not** established that the key or
+the subject is fine. (A list that could not be fetched at all is a different
+case, exit 2: "could not check".) Treat `unknown` exactly as you would an
+unreachable revocation authority: do not read it as "not revoked" and do not
+carry on as if the check had passed. It is a distinct outcome, not a synonym for
+`good` (exit 0) or for `revoked` (exit 1), which is why a script must not
+collapse it into either by testing `$? -eq 0` or `$? -ne 0`. Re-fetch the status
+list and the key set and run the check again; if it persists, follow the steps
+in §7.
 
 A `404 status_list_unavailable` from `/api/public/attest/status` means this
 deployment publishes no list at all (unconfigured, or the publisher has never

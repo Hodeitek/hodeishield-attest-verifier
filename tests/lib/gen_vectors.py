@@ -524,6 +524,7 @@ def build(g):
            + COMMON, 1, "unsigned_member", "unsigned_member")
 
     build_signature_cases(g, A, S, SL, COMMON, issuer_kid)
+    build_retired_cases(g, A, S, issuer_kid)
 
 
 def common_with(common, jwks):
@@ -737,6 +738,122 @@ def build_signature_cases(g, A, S, SL, COMMON, issuer_kid):
         g.case("status-alg-" + name, "A status list whose signed header alg is %r." % alg,
                SL + ["--status", S + "alg-" + name + ".json"], 3, "status_unknown_unsupported_alg",
                "alg is '%s', expected 'ML-DSA-65'" % alg)
+
+
+def build_retired_cases(g, A, S, issuer_kid):
+    """Retired keys: the hs_retired_at member of a JWK, for both key sets."""
+    def common(now, jwks=J_ISSUER):
+        return ["--jwks", jwks, "--expect-slug", SLUG, "--expect-issuer", ISS, "--now", str(now)]
+
+    # ---- retired keys (hs_retired_at), added for v1.3.0 ------------------------
+    RET = "2026-07-31T18:53:58Z"
+    RET_BEFORE = "2026-07-31T18:53:57.999Z"    # one millisecond before RET
+    RET_AT = "2026-07-31T18:53:58.000Z"        # exactly RET
+    RET_NOW = 1785524038                       # RET as an epoch
+
+    def with_retired(src, dst, value, index=0):
+        def fn(d):
+            d["keys"][index]["hs_retired_at"] = value
+        g.edit(src, dst, fn)
+
+    g.attest(A + "retired-before.json", generated_at=RET_BEFORE, expires_at="2026-07-31T19:08:57.999Z")
+    g.attest(A + "retired-at.json", generated_at=RET_AT, expires_at="2026-07-31T19:08:58.000Z")
+    sha_rb = sha_envelope(g, A + "retired-before.json")
+    with_retired(J_ISSUER, "jwks/retired.json", RET)
+    g.case("retired-key-before", "The key is retired at 2026-07-31T18:53:58Z; the document was generated one "
+           "millisecond earlier (18:53:57.999Z): it verifies and says the key is retired.",
+           ["--attestation", A + "retired-before.json"] + common(RET_NOW, jwks="jwks/retired.json"),
+           0, "verified", "but this document was generated at 2026-07-31T18:53:57.999Z, before the retirement",
+           canonical_sha256=sha_rb)
+    g.case("retired-key-at", "The same retired key; the document was generated exactly at the retirement "
+           "(18:53:58.000Z): a failed check, not an expiry.",
+           ["--attestation", A + "retired-at.json"] + common(RET_NOW, jwks="jwks/retired.json"),
+           1, "retired_key", "retired_key \u2014 this document was generated at 2026-07-31T18:53:58.000Z, "
+           "at or after the retirement of key " + issuer_kid + " at 2026-07-31T18:53:58Z",
+           absent=["EXPIRED"])
+    g.case("retired-key-pinned", "--expect-kid pinned to the retired kid does not rescue a document generated "
+           "at the retirement.",
+           ["--attestation", A + "retired-at.json", "--expect-kid", issuer_kid]
+           + common(RET_NOW, jwks="jwks/retired.json"),
+           1, "retired_key", "retired_key \u2014 this document was generated at", absent=["EXPIRED"])
+    with_retired(J_ISSUER, "jwks/retired-malformed.json", "2026-07-31T18:53:58.000Z")
+    g.case("retired-key-malformed", "hs_retired_at carries a fraction: the key set is invalid, could not check (2).",
+           ["--attestation", A + "retired-at.json"] + common(RET_NOW, jwks="jwks/retired-malformed.json"),
+           2, "jwks_retired_at_malformed", "hs_retired_at of the key '" + issuer_kid + "' is")
+
+    def other_retired(value):
+        def fn(p):
+            d = json.load(open(g.path("jwks/issuer-and-other.json")))
+            d["keys"][1]["hs_retired_at"] = value
+            json.dump(d, open(p, "w"), indent=2)
+        return fn
+    g.make("jwks/retired-other-key.json", other_retired("2026-01-01T00:00:00Z"))
+    g.case("retired-other-key-ignored", "Another key in the set is retired long before the document; the "
+           "selected key is not, so nothing changes.",
+           ["--attestation", A + "retired-at.json"] + common(RET_NOW, jwks="jwks/retired-other-key.json"),
+           0, "verified", "VERIFIED \u2014 this document was signed", absent=["retired"])
+    g.make("jwks/retired-other-key-malformed.json", other_retired("not a time"))
+    g.case("retired-other-key-malformed-ignored", "Another key in the set carries a malformed hs_retired_at; "
+           "only the selected key's member is read.",
+           ["--attestation", A + "retired-at.json"] + common(RET_NOW, jwks="jwks/retired-other-key-malformed.json"),
+           0, "verified", "VERIFIED \u2014 this document was signed", absent=["retired"])
+
+    SR_COMMON = ["--attestation", A + "retired-before.json"] + common(RET_NOW)
+    g.status(S + "retired-before.json", issued_at=RET_BEFORE, next_update="2026-07-31T20:53:57.999Z", seq=10)
+    g.status(S + "retired-at.json", issued_at=RET_AT, next_update="2026-07-31T20:53:58.000Z", seq=10)
+    with_retired(J_STATUS, "jwks/status-retired.json", RET)
+    with_retired(J_STATUS, "jwks/status-retired-malformed.json", "2026-07-31 18:53:58Z")
+    SKR = ["--status-list", "--status-keys", "jwks/status-retired.json"] + SR_COMMON
+    g.case("status-retired-key-before", "The status key is retired at 2026-07-31T18:53:58Z; the list was issued one "
+           "millisecond earlier: it is trusted.",
+           SKR + ["--status", S + "retired-before.json"], 0, "good",
+           "but this list was issued at 2026-07-31T18:53:57.999Z, before the retirement")
+    g.case("status-retired-key-at", "The list was issued exactly at the retirement of its key: not trusted, unknown.",
+           SKR + ["--status", S + "retired-at.json"], 3, "status_unknown_retired_key",
+           "retired_key \u2014 this status list was issued at 2026-07-31T18:53:58.000Z, at or after the retirement of key")
+    g.case("status-retired-key-malformed", "hs_retired_at of the status key is not RFC 3339 UTC: the status key set "
+           "is defective, unknown (3), as for any other defect in it.",
+           ["--status-list", "--status-keys", "jwks/status-retired-malformed.json"] + SR_COMMON
+           + ["--status", S + "retired-before.json"], 3, "status_unknown_retired_at_malformed",
+           "malformed_document \u2014 hs_retired_at of the --status-keys entry")
+
+    # Key sets that cannot be read one way: the first entry would win, so a
+    # retirement marker could be dodged by ordering.
+    def reshape(kind, marker):
+        def fn(d):
+            k = d["keys"][0]
+            if kind == "dup":
+                d["keys"] = [dict(k), dict(k, hs_retired_at=marker)]
+            elif kind == "object":
+                d["keys"] = {"a": dict(k, hs_retired_at=marker)}
+            else:
+                d["keys"] = ["str", dict(k)]
+        return fn
+    g.edit(J_ISSUER, "jwks/duplicate-kid.json", reshape("dup", RET))
+    g.case("jwks-duplicate-kid", "Two keys carry the same kid, the second marked retired: the key set is invalid, "
+           "could not check (2).",
+           ["--attestation", A + "retired-before.json"] + common(RET_NOW, jwks="jwks/duplicate-kid.json"),
+           2, "jwks_duplicate_kid", "two of its keys carry the same kid")
+    g.edit(J_ISSUER, "jwks/keys-not-array.json", reshape("object", RET))
+    g.case("jwks-keys-not-array", "`keys` is an object, not an array: the key set is invalid, could not check (2).",
+           ["--attestation", A + "retired-before.json"] + common(RET_NOW, jwks="jwks/keys-not-array.json"),
+           2, "jwks_keys_not_array", "keys` is not an array of objects")
+    g.edit(J_STATUS, "jwks/status-duplicate-kid.json", reshape("dup", RET))
+    g.case("status-keys-duplicate-kid", "The status key set has two keys with the same kid: unknown (3).",
+           ["--status-list", "--status-keys", "jwks/status-duplicate-kid.json"] + SR_COMMON
+           + ["--status", S + "retired-before.json"], 3, "status_unknown_duplicate_kid",
+           "duplicate_key \u2014 status-keys.json has two keys with the same kid")
+    g.edit(J_STATUS, "jwks/status-keys-object.json", reshape("object", RET))
+    g.case("status-keys-not-array", "`keys` of the status key set is an object, whose member carries a retirement "
+           "marker: unknown (3), not a list trusted without reading the marker.",
+           ["--status-list", "--status-keys", "jwks/status-keys-object.json"] + SR_COMMON
+           + ["--status", S + "retired-at.json"], 3, "status_unknown_keys_not_array",
+           "malformed_document \u2014 status-keys.json: `keys` is not an array of objects")
+    g.edit(J_STATUS, "jwks/status-keys-str-entry.json", reshape("str", RET))
+    g.case("status-keys-entry-not-object", "An entry of the status key set's `keys` is a string: unknown (3).",
+           ["--status-list", "--status-keys", "jwks/status-keys-str-entry.json"] + SR_COMMON
+           + ["--status", S + "retired-before.json"], 3, "status_unknown_keys_not_array",
+           "malformed_document \u2014 status-keys.json: `keys` is not an array of objects")
 
 
 def write_outputs(g):

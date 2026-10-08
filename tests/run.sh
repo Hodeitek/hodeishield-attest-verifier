@@ -207,6 +207,46 @@ edit "$T/other-jwks.json" "$T/mislabelled-jwks.json" "d['keys'][0]['kid'] = '$IS
 expect 1 'kid mismatch — header says' 'a key published under a kid its bytes do not derive is rejected' -- \
   --attestation "$T/att.json" --jwks "$T/mislabelled-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
 
+# --expect-kid (#13): pin the key that signed. It is compared with the kid
+# recomputed from the key bytes, never with a label. It is a usage error when it
+# is not the shape of a kid, and it is not --check-kid (the status-list lookup).
+OTHER_KID="$(jq -r '.keys[0].kid' "$T/other-jwks.json")"
+expect 0 'one of the kids you pinned with --expect-kid' 'a pinned kid that matches the signing key verifies' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID"
+expect 0 'one of the kids you pinned with --expect-kid' 'two pinned kids, the first matching, verify (rotation overlap)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID" --expect-kid "$OTHER_KID"
+expect 0 'one of the kids you pinned with --expect-kid' 'two pinned kids, the second matching, verify (rotation overlap)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$OTHER_KID" --expect-kid "$ISSUER_KID"
+expect 1 "unexpected_kid — the key bytes derive kid '$ISSUER_KID'" 'a pinned kid that does not match is a failed check (1) that names the kid found' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$OTHER_KID"
+lacks 'one of the kids you pinned' 'a failed pin is never reported as matched'
+expect 1 "pinned with --expect-kid: $OTHER_KID AAAAAAAAAAAAAAAAAAAAAA" 'a failed pin lists every kid that was expected' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$OTHER_KID" --expect-kid AAAAAAAAAAAAAAAAAAAAAA
+expect 2 'is not a kid' 'a pinned value too short to be a kid is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid short
+expect 2 'is not a kid' 'a pinned value with characters outside base64url is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAA+A'
+expect 2 'is not a kid' 'a pinned value that no 16-byte digest can encode to is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid AAAAAAAAAAAAAAAAAAAAAB
+expect 2 'is not a kid' 'a malformed pin among valid ones is still a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID" --expect-kid nope
+expect 2 'needs a value' '--expect-kid without a value is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid
+expect 2 'it needs --attestation' '--expect-kid without a document to pin is a usage error, not silently ignored (2)' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" \
+  --check-kid "$ISSUER_KID" --expect-kid "$ISSUER_KID" --now "$NOW"
+# A key document that publishes the OTHER key under the issuer's kid (the header
+# kid of att.json). The existing rule already rejects it (the bytes do not derive
+# that label), and a pin cannot rescue it: pinning the label the document claims
+# fails on the recomputed kid, and pinning the bytes' real kid still leaves the
+# label mismatch. The pin never compares the label.
+expect 1 "unexpected_kid — the key bytes derive kid '$OTHER_KID'" 'a key relabelled to the pinned kid does not satisfy the pin (the bytes decide)' -- \
+  --attestation "$T/att.json" --jwks "$T/mislabelled-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" \
+  --expect-kid "$ISSUER_KID"
+expect 1 'kid mismatch — header says' 'a relabelled key whose real kid is pinned still fails the existing label rule' -- \
+  --attestation "$T/att.json" --jwks "$T/mislabelled-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" \
+  --expect-kid "$OTHER_KID"
+
 # The 2026-09-29 bypass: an unsigned nested object placed before the genuine
 # posture fields used to be what the slug/freshness checks read.
 edit "$T/att.json" "$T/decoy-slug.json" '
@@ -390,6 +430,11 @@ expect 1 'REVOKED — via subject' 'a document minted before its subject was wit
 expect 0 'GOOD — not revoked, per a verified status list' 'a document minted after the withdrawal notBefore is good' -- \
   "${SL[@]}" --status "$T/list-subj-before.json"
 
+expect 0 'one of the kids you pinned with --expect-kid' '--expect-kid works beside --status-list on the attestation key' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$ISSUER_KID"
+expect 1 'unexpected_kid' '--expect-kid does not look at the status list, only at the attestation key' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$OTHER_KID"
+
 edit "$T/list-key.json" "$T/list-key-stripped.json" 'd["statusList"]["keys"] = []'
 expect 3 'bad_signature' 'a list with a revocation removed after signing is UNKNOWN, never good' -- \
   "${SL[@]}" --status "$T/list-key-stripped.json"
@@ -443,6 +488,322 @@ c["posture"] = {"x": {"generatedAt": "2026-01-01T00:12:00.000Z"}, **c["posture"]
 expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subject withdrawal' -- \
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --attestation "$T/decoy-revoked.json" "${COMMON[@]}"
+
+# Attested content (#14). What a document SAYS (its bands and frameworks) is
+# printed only when the run ends VERIFIED/GOOD. A document that does not verify
+# shows none of it, even with --raw; it gets one line saying it was withheld.
+echo '# attested content'
+WITHHELD='attested content withheld: this document did not verify'
+# lacks_all NAME STRING... — the previous expect() output has none of the strings.
+lacks_all() {
+  local out="$T/out.$((PASSED + FAILED - 1))" name="$1" str bad=0; shift
+  for str in "$@"; do
+    if grep -qF -- "$str" "$out"; then
+      printf 'not ok - %s (output contains: %s)\n' "$name" "$str"; bad=1
+    fi
+  done
+  if [ "$bad" -eq 0 ]; then printf 'ok - %s\n' "$name"; PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); fi
+}
+SECRETS=(substantial basic advanced ISO27001 iso27001 NIS2 nis2 in_progress)
+
+expect 0 'ISO27001 (iso27001): substantial' 'a verified document shows its frameworks and their bands' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+expect 0 'overallBand: basic' 'a verified document shows its overallBand' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+lacks '"frameworks"' 'a verified document does not print the raw posture JSON without --raw'
+expect 0 'subject:     fixture-org  (visibility: public)' 'a verified document shows its subject slug and visibility' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'posture (E7' 'the raw posture heading is absent without --raw'
+expect 0 '"band": "substantial"' 'with --raw a verified document also prints the raw posture JSON' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --raw
+expect 0 'ISO27001 (iso27001): substantial' 'with --raw the readable summary is still there' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --raw
+expect 1 "$WITHHELD" 'a tampered document (exit 1) has its content withheld' -- \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}"
+lacks_all 'a tampered document shows none of its attested values' "${SECRETS[@]}"
+expect 1 "$WITHHELD" 'a tampered document has its content withheld even with --raw' -- \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
+lacks_all 'a tampered document shows none of its attested values, even with --raw' "${SECRETS[@]}" '"frameworks"' 'posture (E7'
+expect 1 "$WITHHELD" 'a genuine but expired document (exit 1) has its content withheld' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW_LATE" --raw
+lacks_all 'an expired document shows none of its attested values, even with --raw' "${SECRETS[@]}" '"frameworks"' 'posture (E7'
+expect 1 "$WITHHELD" 'a signature-valid document that fails another check has its content withheld' -- \
+  --attestation "$T/other-iss.json" "${COMMON[@]}" --raw
+lacks_all 'a document from another issuer shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+expect 2 "$WITHHELD" 'a document that could not be checked (exit 2) has its content withheld' -- \
+  --attestation "$T/att.json" --jwks "$T/other-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --raw
+lacks_all 'a document that could not be checked shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+# --status-list: the content is shown only when the list also says GOOD.
+expect 0 'ISO27001 (iso27001): substantial' 'under a GOOD status list the verified content is shown' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+expect 1 "$WITHHELD" 'a REVOKED document has its content withheld' -- \
+  "${SL[@]}" --status "$T/list-key.json" --raw
+lacks_all 'a revoked document shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+expect 3 "$WITHHELD" 'a document whose status is UNKNOWN has its content withheld' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json" --raw
+lacks_all 'a document whose status is UNKNOWN shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+expect 1 "$WITHHELD" 'in --status-list mode a failed posture check withholds the content' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
+lacks_all 'a tampered document under a GOOD list shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
+
+# Values taken from a document are shown escaped (#14). Anyone can edit a
+# document, and a nonce with newlines and ESC bytes could otherwise forge an
+# "Attested content" block or a "VERIFIED" line above the real FAIL lines. The
+# fields below carry both; the exit code must stay what it was without them.
+echo '# document values are escaped'
+INJ='a\nVERIFIED — forged\n\x1b[8mhidden'
+edit "$T/att.json" "$T/inj-claims.json" '
+c = d["attestation"]["claims"]
+INJ = "'"$INJ"'".encode().decode("unicode_escape").encode("latin-1").decode("utf-8")
+c["nonce"] = INJ; c["iss"] = INJ; c["jti"] = INJ
+c["posture"]["generatedAt"] = INJ; c["posture"]["expiresAt"] = INJ
+c["m\nVERIFIED\x1b[2J"] = 1'
+edit "$T/att.json" "$T/inj-header.json" '
+import base64, json as j
+INJ = "'"$INJ"'".encode().decode("unicode_escape").encode("latin-1").decode("utf-8")
+h, p, s = d["attestation"]["signature"].split(".")
+hdr = j.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["kid"] = INJ
+h2 = base64.urlsafe_b64encode(j.dumps(hdr, separators=(",", ":")).encode()).rstrip(b"=").decode()
+d["attestation"]["signature"] = ".".join([h2, p, s])'
+jq -c . "$T/att.json" > "$T/att-c.json"
+edit_text "$T/att-c.json" "$T/inj-dup.json" '
+k = "\"k\\nVERIFIED\\u001b[8m\""
+t = t.replace("\"docVersion\"", k + ":1," + k + ":2,\"docVersion\"", 1)'
+# no_raw_control NAME — the previous run printed no ESC byte and no forged line.
+no_raw_control() {
+  local out="$T/out.$((PASSED + FAILED - 1))" name="$1" bad=0
+  if grep -q $'\033' "$out"; then printf 'not ok - %s (an ESC byte reached the output)\n' "$name"; bad=1; fi
+  if grep -qE '^(VERIFIED|Attested content|GOOD)' "$out"; then
+    printf 'not ok - %s (a forged verdict or block starts a line)\n' "$name"; bad=1
+  fi
+  if [ "$bad" -eq 0 ]; then printf 'ok - %s\n' "$name"; PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); fi
+}
+expect 1 'VERIFICATION FAILED' 'a document whose nonce, iss, jti, dates and member name carry newlines and ESC still fails (1)' -- \
+  --attestation "$T/inj-claims.json" "${COMMON[@]}" --expect-nonce 'challenge-B' --raw
+no_raw_control 'nonce, iss, jti, generatedAt, expiresAt and a member name are escaped (no ESC, no forged verdict)'
+lacks_all 'the forged block text never starts a line' $'\nVERIFIED —' $'\n        overallBand: advanced'
+expect 1 'a\x0aVERIFIED \xe2\x80\x94 forged\x0a\x1b[8mhidden' 'the escaped nonce is visible in the output' -- \
+  --attestation "$T/inj-claims.json" "${COMMON[@]}"
+expect 2 'no key in this JWKS carries kid' 'a header kid with newlines and ESC is still "could not check" (2)' -- \
+  --attestation "$T/inj-header.json" "${COMMON[@]}"
+no_raw_control 'a header kid carrying newlines and ESC is escaped in the header line and the error'
+expect 1 'duplicate_key' 'a duplicated member whose name carries newlines and ESC is still rejected (1)' -- \
+  --attestation "$T/inj-dup.json" "${COMMON[@]}"
+no_raw_control 'a duplicated member name carrying newlines and ESC is escaped'
+# stdout alone, as a pipe would carry it: nothing forged there either.
+NO_COLOR=1 bash "$VERIFIER" --attestation "$T/inj-claims.json" "${COMMON[@]}" 2>/dev/null > "$T/inj-stdout.txt"
+if ! grep -q $'\033' "$T/inj-stdout.txt" && ! grep -qE '^(VERIFIED|Attested content)' "$T/inj-stdout.txt"; then
+  printf 'ok - stdout alone carries no ESC byte and no forged verdict\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
+fi
+
+# A display problem must never change a verdict (#14): the summary is written as
+# UTF-8 bytes, so a non-UTF-8 stdout does not turn a verified document into an error.
+mint_attest --out "$T/label.json" --framework 'ens—alto=basic'
+PYTHONIOENCODING=ascii expect 0 'ENS—ALTO (ens—alto): basic' 'a non-ASCII framework label under an ASCII Python stdout still verifies (0)' -- \
+  --attestation "$T/label.json" "${COMMON[@]}"
+PYTHONIOENCODING=ascii expect 0 'VERIFIED — this document was signed' 'the same document still reaches its VERIFIED verdict' -- \
+  --attestation "$T/label.json" "${COMMON[@]}" --raw
+
+# --expect-kid is judged in the C locale: an accented letter is not in A-Z (#13).
+# A locale with real collation rules is the one that used to accept them.
+KID_LOCALE=C
+for cand in en_US.utf8 en_GB.utf8 C.utf8; do
+  if locale -a 2>/dev/null | grep -qix "$cand"; then KID_LOCALE="$cand"; break; fi
+done
+LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter in --expect-kid is a usage error (2) under $KID_LOCALE" -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'ééééééééééééééééééééé'
+LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter among valid characters is a usage error (2) under $KID_LOCALE" -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAAéA'
+
+# Retired keys (hs_retired_at). The published vectors hold the boundary cases;
+# these are the grammar, the key-selection and the escaping cases, which need
+# values a fixture file would have to carry byte for byte.
+echo '# retired keys'
+RET_AT_S='2026-07-31T18:53:58Z'
+RET_NOW=1785524038                                   # RET_AT_S as an epoch
+mint_attest --out "$T/ret-after.json" --generated-at '2026-07-31T18:53:58.000Z' --expires-at '2026-07-31T19:08:58.000Z'
+mint_attest --out "$T/ret-before.json" --generated-at '2026-07-31T18:53:57.999Z' --expires-at '2026-07-31T19:08:57.999Z'
+RET_COMMON=(--jwks "$T/jwks-ret.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
+# set_retired FILE JSON_VALUE — the selected key's hs_retired_at, as raw JSON.
+set_retired() { edit "$T/jwks.json" "$T/jwks-ret.json" "d['keys'][0]['hs_retired_at'] = json.loads(r'''$1''')"; }
+
+set_retired '"2026-07-31T18:53:58Z"'
+expect 1 "retired_key — this document was generated at 2026-07-31T18:53:58.000Z, at or after the retirement of key $ISSUER_KID at $RET_AT_S" \
+  'a document generated at the retirement instant fails retired_key' -- --attestation "$T/ret-after.json" "${RET_COMMON[@]}"
+lacks 'EXPIRED' 'retired_key is not reported as a staleness failure'
+expect 0 'is retired (at 2026-07-31T18:53:58Z), but this document was generated at 2026-07-31T18:53:57.999Z' \
+  'one millisecond before the retirement passes' -- --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+expect 1 'retired_key' '--expect-kid pinned to the retired kid does not rescue a post-retirement document' -- \
+  --attestation "$T/ret-after.json" "${RET_COMMON[@]}" --expect-kid "$ISSUER_KID"
+expect 0 'VERIFIED — this document was signed' '--pub-b64url has no JWK, so retirement does not apply' -- \
+  --attestation "$T/ret-after.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+# Same retirement, a document generated later on the clock but with a lexically
+# smaller string would be the trap of a string comparison; instants are compared.
+mint_attest --out "$T/ret-offset.json" --generated-at '2026-07-31T20:53:57.999+02:00' --expires-at '2026-07-31T20:53:58.999+02:00'
+expect 0 'before the retirement' 'an offset form of 18:53:57.999Z is compared as an instant' -- \
+  --attestation "$T/ret-offset.json" "${RET_COMMON[@]}"
+
+# No claims JSON to read generatedAt from (an attached JWS whose payload is not
+# an envelope): a retired key cannot be shown to predate its retirement, so the
+# run fails closed (1) with retired_key, besides the failures it already has.
+IFS=. read -r UH _ US < <(jq -r '.attestation.signature' "$T/ret-before.json")
+printf '%s.AAAA.%s\n' "$UH" "$US" > "$T/ret-undecodable.jws"
+set_retired '"2026-07-31T18:53:58Z"'
+expect 1 "retired_key — key $ISSUER_KID is retired (at $RET_AT_S) and without the claims JSON there is no generatedAt" \
+  'a retired key with no claims JSON to compare fails closed' -- --jws "$T/ret-undecodable.jws" "${RET_COMMON[@]}"
+
+# The grammar: anything but YYYY-MM-DDTHH:MM:SSZ is a malformed key set (2).
+for bad_val in '"2026-07-31T18:53:58.000Z"' '"2026-07-31T18:53:58+00:00"' '"2026-07-31t18:53:58Z"' \
+               '"2026-07-31T18:53:58z"' '"2026-07-31T18:53:58"' '"2026-07-31"' '""' '1785524038' 'null' 'true' \
+               '["2026-07-31T18:53:58Z"]' '"2026-02-30T18:53:58Z"' '"2026-07-31T24:00:00Z"' '"2026-07-31T18:60:00Z"' \
+               '"2026-07-31T18:53:60Z"' '"2026-13-01T00:00:00Z"' '" 2026-07-31T18:53:58Z"' \
+               '"2026-07-31T18:53:58Z\n"' '"２０２６-07-31T18:53:58Z"'; do
+  set_retired "$bad_val"
+  expect 2 'hs_retired_at of the key' "hs_retired_at $bad_val is malformed: could not check (2)" -- \
+    --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+done
+set_retired '"2024-02-29T00:00:00Z"'
+expect 1 'retired_key' 'a leap-day retirement is a valid date (and a document after it fails)' -- \
+  --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+
+# A retired key that is not the selected key has no effect, whatever its value.
+for other_val in '"2026-01-01T00:00:00Z"' '"not a time"'; do
+  edit "$T/jwks.json" "$T/jwks-ret.json" "d['keys'].insert(0, {'kty': 'AKP', 'alg': 'ML-DSA-65', 'pub': 'AAAA', 'kid': 'Zm9vYmFyZm9vYmFyZm9vYg', 'hs_retired_at': json.loads('''$other_val''')})"
+  expect 0 'VERIFIED — this document was signed' "another key with hs_retired_at $other_val does not affect the selected key" -- \
+    --attestation "$T/ret-after.json" "${RET_COMMON[@]}"
+  lacks 'retired' 'and nothing about retirement is printed'
+done
+
+# Values from the key set are printed through esc().
+set_retired '"2026-07-31T18:53:58Z\u001b[31m\nPASS  forged"'
+expect 2 'hs_retired_at of the key' 'a malformed hs_retired_at with control characters is rejected' -- \
+  --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+if grep -q $'\x1b' "$T/out.$((PASSED + FAILED - 1))" || grep -q '^PASS  forged' "$T/out.$((PASSED + FAILED - 1))"; then
+  printf 'not ok - control characters of hs_retired_at reached the terminal unescaped\n'; FAILED=$((FAILED + 1))
+else
+  printf 'ok - control characters of hs_retired_at are escaped before they reach the terminal\n'; PASSED=$((PASSED + 1))
+fi
+expect 2 '\x1b[31m\x0aPASS  forged' 'the control characters are shown as visible \xHH escapes' -- \
+  --attestation "$T/ret-before.json" "${RET_COMMON[@]}"
+
+# The status list's own key set. A list issued at or after the retirement of its
+# key is UNKNOWN (3); a malformed marker is a defective status key set, UNKNOWN too.
+"${MINT[@]}" status --key "$T/status.pem" --out "$T/list-ret-at.json" --iss "$ISS" --seq 9 \
+  --issued-at '2026-07-31T18:53:58.000Z' --next-update '2026-07-31T20:53:58.000Z' >/dev/null
+"${MINT[@]}" status --key "$T/status.pem" --out "$T/list-ret-before.json" --iss "$ISS" --seq 9 \
+  --issued-at '2026-07-31T18:53:57.999Z' --next-update '2026-07-31T20:53:57.999Z' >/dev/null
+SKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+RETS=(--status-list --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
+edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$RET_AT_S'"
+expect 3 "retired_key — this status list was issued at 2026-07-31T18:53:58.000Z, at or after the retirement of key $SKID at $RET_AT_S" \
+  'a status list issued at the retirement of its key is UNKNOWN' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-at.json"
+expect 0 'before the retirement' 'a status list issued one millisecond before the retirement is trusted' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+for bad_val in '2026-07-31T18:53:58.000Z' '2026-07-31t18:53:58Z' '' '2026-02-30T18:53:58Z'; do
+  edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$bad_val'"
+  expect 3 'hs_retired_at of the --status-keys entry' "status key hs_retired_at '$bad_val' is malformed: UNKNOWN (3)" -- \
+    "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+done
+edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = 5"
+expect 3 'hs_retired_at of the --status-keys entry' 'a non-string status key hs_retired_at is UNKNOWN (3)' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$RET_AT_S\u001b[31m'"
+expect 3 '\x1b[31m' 'a status key hs_retired_at with control characters is printed escaped' -- \
+  "${RETS[@]}" --status-keys "$T/status-keys-ret.json" --status "$T/list-ret-before.json"
+# The attestation key set's marker does not touch the status list, nor the reverse.
+edit "$T/jwks.json" "$T/jwks-ret.json" "d['keys'][0]['hs_retired_at'] = '2000-01-01T00:00:00Z'"
+expect 1 'retired_key' 'the attestation key retired long ago still fails a recent document under --status-list' -- \
+  --status-list --attestation "$T/ret-before.json" --jwks "$T/jwks-ret.json" --expect-slug "$SLUG" \
+  --expect-issuer "$ISS" --now "$RET_NOW" --status-keys "$T/status-keys.json" --status "$T/list-ret-before.json"
+
+# A key set that cannot be read one way: `keys` that is not an array of objects,
+# or two keys with the same kid (the first would win, so a marker could be dodged
+# by ordering). --jwks: could not check (2). --status-keys: UNKNOWN (3).
+for variant in dup-first dup-last keys-object str-entry; do
+  case "$variant" in
+    dup-first)   PY="k = d['keys'][0]; d['keys'] = [dict(k), dict(k, hs_retired_at='$RET_AT_S')]" ;;
+    dup-last)    PY="k = d['keys'][0]; d['keys'] = [dict(k, hs_retired_at='$RET_AT_S'), dict(k)]" ;;
+    keys-object) PY="d['keys'] = {'a': dict(d['keys'][0], hs_retired_at='$RET_AT_S')}" ;;
+    str-entry)   PY="d['keys'] = ['str', d['keys'][0]]" ;;
+  esac
+  edit "$T/jwks.json" "$T/jwks-bad.json" "$PY"
+  expect 2 'is invalid' "attestation key set, $variant: could not check (2)" -- \
+    --attestation "$T/ret-before.json" --jwks "$T/jwks-bad.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+  edit "$T/status-keys.json" "$T/status-keys-bad.json" "$PY"
+  expect 3 'status-keys.json' "status key set, $variant: UNKNOWN (3), never a crash" -- \
+    "${RETS[@]}" --status-keys "$T/status-keys-bad.json" --status "$T/list-ret-at.json"
+done
+
+# --pub-b64url and --jwks are two sources for the same key.
+expect 2 'cannot be combined with --jwks' '--pub-b64url together with --jwks is a usage error (2)' -- \
+  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable --jwks is a usage error too' -- \
+  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+
+# --help (#15): a short usage, not the header comment. It must exit 0, stay
+# under 40 lines, carry the exit codes, and list EVERY option the argument
+# parser accepts. The options are read from the parser's own `case` patterns, so
+# an option added later without help text fails here.
+echo '# --help'
+expect 0 'Exit codes:' '--help exits 0 and prints the exit codes' -- --help
+HELP_OUT="$T/out.$((PASSED + FAILED - 1))"
+HELP_LINES="$(wc -l < "$HELP_OUT" | tr -d ' ')"
+if [ "$HELP_LINES" -le 40 ]; then
+  printf 'ok - --help is %s lines (at most 40)\n' "$HELP_LINES"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - --help is %s lines, expected at most 40\n' "$HELP_LINES"; FAILED=$((FAILED + 1))
+fi
+for code in 0 1 2 3; do
+  if grep -qE "^  $code  " "$HELP_OUT"; then
+    printf 'ok - --help documents exit code %s\n' "$code"; PASSED=$((PASSED + 1))
+  else
+    printf 'not ok - --help has no line for exit code %s\n' "$code"; FAILED=$((FAILED + 1))
+  fi
+done
+lacks 'set -euo pipefail' '--help is the usage text, not the header comment of the script'
+# The parser's patterns: from `while [ $# -gt 0 ]` to its `done`, the lines that
+# open a case arm, e.g. `    --jws)` or `    -h|--help)`.
+mapfile -t PARSER_OPTS < <(sed -n '/^while \[ \$# -gt 0 \]; do$/,/^done$/p' "$VERIFIER" \
+  | sed -nE 's/^    (-[-A-Za-z0-9|]+)\).*/\1/p' | tr '|' '\n' | grep -E '^--[a-z]' | sort -u)
+if [ "${#PARSER_OPTS[@]}" -ge 19 ]; then
+  printf 'ok - found %d options in the argument parser\n' "${#PARSER_OPTS[@]}"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - read only %d options from the argument parser; did its shape change?\n' "${#PARSER_OPTS[@]}"
+  FAILED=$((FAILED + 1))
+fi
+for opt in "${PARSER_OPTS[@]}"; do
+  if grep -qE -- "(^|[^-A-Za-z])${opt}([^-A-Za-z]|\$)" "$HELP_OUT"; then
+    printf 'ok - --help lists %s\n' "$opt"; PASSED=$((PASSED + 1))
+  else
+    printf 'not ok - --help does not list %s\n' "$opt"; FAILED=$((FAILED + 1))
+  fi
+done
+
+# Nothing the verifier prints may send the reader to a document that is not
+# public (#34). Every run above left its stdout and stderr in $T/out.N, the
+# --status-list runs that end UNKNOWN among them.
+expect 3 'attest-verification.md' 'an UNKNOWN verdict points to the public verification document' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json"
+expect 3 '"Unknown is not good"' 'an UNKNOWN verdict cites the public paragraph that explains it' -- \
+  "${SL[@]}" --status "$T/list-key-stripped.json"
+mapfile -t leaks < <(grep -lE 'docs/architecture|design doc' "$T"/out.* 2>/dev/null || true)
+runs=("$T"/out.*)
+if [ "${#leaks[@]}" -eq 0 ]; then
+  printf 'ok - no run printed a reference to a non-public design document (%d runs)\n' "${#runs[@]}"
+  PASSED=$((PASSED + 1))
+else
+  printf 'not ok - output refers to a non-public design document:\n'
+  grep -nE 'docs/architecture|design doc' "${leaks[@]}" | sed 's/^/    # /'
+  FAILED=$((FAILED + 1))
+fi
 
 echo
 printf '# %d passed, %d failed\n' "$PASSED" "$FAILED"
