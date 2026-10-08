@@ -78,6 +78,7 @@ own starts at [hodeishield.com](https://hodeishield.com).
 | **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
 | `jq` | Only for `--status-list` (revocation checking). |
+| `cosign` ≥ 3.1.3 | Only for `--anchor-file` ([Anchor the key](#anchor-the-key)). Optional: nothing else needs it. |
 
 `xxd` is used when present and is not required.
 
@@ -373,6 +374,58 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   pinned. It does not apply to the key that signs the status list, which has no
   pin option in this release.
 
+### Anchor the key
+
+The key set comes from the issuer's web host, so on its own it proves nothing
+about who published the key. A release of this repository from v1.4.0 publishes
+a key statement, `keys-statement.json`, signed with Sigstore by the release
+workflow ([the decision record](docs/security/key-anchor.md)). `--anchor-file`
+checks that statement and requires it to list the key that signed your document,
+by a channel other than the issuer's web host. Download the statement and its
+bundle from the release you trust (not from the issuer's host):
+
+```bash
+gh release download <TAG> -R Hodeitek/hodeishield-attest-verifier \
+  -p keys-statement.json -p keys-statement.json.sigstore.json
+bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com \
+  --anchor-file keys-statement.json
+```
+
+- It needs [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+  3.1.3 or later, for this option only. cosign may contact the Sigstore TUF
+  repository to refresh its trust root. The bundle is read from
+  `keys-statement.json.sigstore.json` next to the statement, or from the file
+  given with `--anchor-bundle`.
+- The identity cosign must see is fixed in the script (this repository's release
+  workflow at a tag `vN.N.N`, issued by GitHub Actions). No option or environment
+  variable changes it.
+- Exit 2, "anchor could not be checked", when cosign is missing or older, or the
+  statement does not verify (wrong identity, altered statement, unreadable
+  bundle, no trust root), or is not a well-formed statement. This is by design:
+  a statement that does not verify says nothing about the attestation, just as a
+  wrong key document does not. The run never ends in `VERIFIED` then, and the
+  message says which cause it found.
+- A statement from a release older than the verifier is refused (exit 2): the
+  release tag is read from the verified certificate and compared with the
+  script's own version (`--version`), so an old, genuinely signed statement
+  cannot stand in for the current one. A tag that cannot be read is exit 2 too.
+  The check has a limit: an OLD verifier can still be served a statement as old
+  as itself. That is why only the latest release is supported, and why
+  `--status-list`, which revokes a compromised key unconditionally, remains the
+  path for a key compromise.
+- Exit 1, with a `FAIL` line, when the statement verifies and does not list the
+  key that signed, lists it under another role, retires it differently from the
+  key set's `hs_retired_at`, or names another issuer than the document's `iss`.
+  With `--status-list`, the same questions about the status-list key leave the
+  revocation status unknown (exit 3).
+- With `--pub-b64url` there is no JWK, but the kid is still recomputed from the
+  key bytes, so the statement is still asked about it. There is no key set, so
+  there is no `hs_retired_at` to compare; a retirement in the statement still
+  applies to the document's `generatedAt`.
+- A release made before a rotation does not list the new key: update the
+  verifier.
+
 ## Where this comes from, and what is redacted
 
 - `scripts/attest/verify-attestation.sh` is the same script we keep, byte for
@@ -455,10 +508,14 @@ the reason it is a short, single, readable script.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
   printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
+  The anchor cases use a test double in place of cosign.
 - `bash tests/vectors.sh` runs the published, versioned test vectors in
   `tests/vectors/v1/`: fixed documents, TEST-ONLY keys, a fixed `--now` and the
   expected exit code and reason for each, so you can check another verifier
   against them. `tests/run.sh` runs them too; see `tests/vectors/v1/README.md`.
+  The few cases that use real Sigstore bundles need cosign ≥ 3.1.3 and the
+  network; where cosign is missing they are reported as skipped, never as
+  passed.
 - `bash tests/mutants.sh` builds a copy of the verifier whose signature check
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled

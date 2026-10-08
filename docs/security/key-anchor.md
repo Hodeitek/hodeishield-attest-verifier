@@ -96,29 +96,93 @@ bash verify-attestation.sh --attestation att.json --jwks jwks.json \
 ```
 
 The bundle is read from `keys-statement.json.sigstore.json` next to the
-statement, or from the file given with `--anchor-bundle`. The exact names of the
-options are those of the release that ships them; its `--help` is authoritative.
-The option behaves as follows:
+statement, or from the file given with `--anchor-bundle`. The option is in the
+script from v1.4.0. It behaves as follows:
 
-- It runs `cosign verify-blob` on the statement and its bundle. The certificate
-  identity is a regular expression fixed in the script that accepts this
+- It runs `cosign verify-blob` on the statement and its bundle:
+
+  ```bash
+  cosign verify-blob --bundle BUNDLE \
+    --certificate-identity-regexp '^https://github\.com/Hodeitek/hodeishield-attest-verifier/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    STATEMENT
+  ```
+
+  The identity is a regular expression fixed in the script that accepts this
   repository's release workflow at a tag `vN.N.N` and nothing else, with the
-  issuer above. The reader does not choose the identity.
-- It needs cosign, version 3.1.3 or later. cosign is an optional dependency,
-  needed only for this option. Everything else the verifier does is unchanged
-  and does not need it.
-- Without cosign, with an older one, or if the verification cannot be performed
-  for any reason (an unreadable file, no bundle, no network where cosign needs
-  it), the run ends with exit 2, "anchor could not be checked". It is never
-  reported as a pass and never as a failure of the document.
-- The statement must list the attestation key that signed the document, and, in
-  `--status-list` mode, the status-list key, each under the right `role`, with a
-  retirement consistent with the `hs_retired_at` of the key set. A statement
-  that does not is a failed check (exit 1), not a "could not check".
+  issuer above. The reader does not choose the identity: there is no option and
+  no environment variable for it. The script verifies and parses one private
+  copy of the statement, so the file cannot change between the two.
+- cosign may contact the Sigstore TUF repository to refresh its trust root, so
+  the option can need network access even though the rest of the verifier does
+  not.
+- It needs cosign, version 3.1.3 or later (the version `release.yml` pins),
+  compared numerically. cosign is an optional dependency, needed only for this
+  option. Everything else the verifier does is unchanged and does not need it.
+- **Exit 2, by design, when the anchor cannot be checked.** Without cosign, with
+  an older one, or if the statement does not verify for any reason (a tampered
+  statement, a signing identity that is not this repository's release workflow,
+  an invalid signature, an unreadable or malformed bundle, a trust root that
+  cannot be obtained), or if what cosign verified is not a well-formed
+  statement, the run ends with exit 2, "anchor could not be checked". It is not
+  exit 1, and it is never reported as a pass. The reason is the one that applies
+  to a wrong key document elsewhere in the verifier: a statement that does not
+  verify says nothing about the attestation itself, so it is not evidence that
+  the attestation is forged, and the run never ends in `VERIFIED`. The message
+  says which cause was found (cosign reports all of them with exit 1, so the
+  script reads what cosign printed; when it matches nothing the message is
+  "cosign could not verify the statement"), and shows cosign's own diagnostics
+  with every value escaped and every path cut to a file name.
+- **Anti-rollback.** After cosign accepts the statement, the script reads the
+  release tag from the verified certificate (its single identity, which must be
+  this repository's release workflow at `vN.N.N`, with no pre-release, no build
+  metadata and no leading zeros) and compares it, number by number, with
+  `VERIFIER_VERSION`, the version the script is released as (`--version`). A tag
+  that cannot be read is exit 2 (`anchor_tag_unreadable`, "the statement's
+  release tag cannot be read"); a tag older than the verifier is exit 2
+  (`anchor_statement_older`, "statement from vA, older than this verifier vB");
+  an equal or newer tag goes on. This is done before the statement's content is
+  read. Without it, any older statement that was genuinely signed would be
+  accepted, including one from before a rotation or one that still lists a key
+  that was later retired. `tests/version-consistency.sh` keeps
+  `VERIFIER_VERSION` in step with the changelog in CI, and equal to the tag on a
+  release.
+- The statement is read strictly: valid UTF-8 JSON, no duplicate member, the
+  schema `hodeishield.keys.statement.v1`, only the documented members,
+  `retired_at` in the exact `YYYY-MM-DDTHH:MM:SSZ` form and present for retired
+  keys only. Anything else is exit 2 (`anchor_malformed`).
+- Membership is asked once the key has been selected and its `kid` recomputed
+  from the key bytes, never of a label. The statement must list the attestation
+  key that signed the document under the role `attestation`, with a retirement
+  that is the same instant as the key set's `hs_retired_at` (both absent, or
+  both present and equal), and its `issuer` must be the document's `iss`. A
+  retirement the statement carries applies to the document like the key set's:
+  a document generated at or after it fails the ordinary `retired_key` check.
+  In `--status-list` mode the status-list key is asked the same way with the
+  role `status-list`. A statement that verifies and does not satisfy these is a
+  failed check (exit 1; for the status-list key, status unknown, exit 3), not a
+  "could not check".
+- With `--pub-b64url` there is no JWK, but the `kid` is still recomputed from
+  the key bytes, so the statement is asked about it. There is no key set and so
+  no `hs_retired_at` to compare; the statement's `retired_at`, if any, still
+  applies to the document's `generatedAt`.
 
 `--anchor-file` arrives in v1.4.0. Earlier releases carry no statement, so there
 is nothing to check them against; a reader of an earlier release keeps
 [keys.md](keys.md) and `--expect-kid`.
+
+### What the anti-rollback check does not cover
+
+A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why only the latest release is supported ([SECURITY.md](../../SECURITY.md)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
+
+### The reason codes
+
+The codes are in [reason-codes.md](reason-codes.md#the-anchor---anchor-file).
+`anchor_cosign_unavailable`, `anchor_unverified`, `anchor_tag_unreadable`,
+`anchor_statement_older` and `anchor_malformed` are exit
+2. `anchor_kid_absent`, `anchor_role_mismatch`, `anchor_retired_mismatch` and
+`anchor_issuer_mismatch` are exit 1; the retirement itself is the existing
+`retired_key`. The three `anchor_status_*` failures are exit 3.
 
 ## Consequences
 

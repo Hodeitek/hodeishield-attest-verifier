@@ -35,10 +35,20 @@ jobs:
         with:
           persist-credentials: false
       - name: Install openssl, python3, jq, curl
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base
+      # cosign, as in release.yml, for the last step of tests/live.sh: the
+      # production example against the latest release's key statement
+      # (--anchor-file). It is skipped, with a warning, while the latest release
+      # has no statement.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
       # An outage is a warning (exit 0); a document that does not verify, a
       # revoked or unknown status, or a 404 on the README's example fail.
       - name: tests/live.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash tests/live.sh
       # A rotation alarm: every live kid, recomputed from its pub bytes, must be
       # in docs/security/keys.json under the right role, and a live

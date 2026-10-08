@@ -47,6 +47,7 @@
 #   verify-attestation.sh --attestation FILE --jwks FILE
 #                         [--expect-slug SLUG] [--expect-nonce STR]
 #                         [--expect-issuer ORIGIN] [--pub-b64url STR]
+#                         [--anchor-file STATEMENT [--anchor-bundle FILE]]
 #                         [--max-age-seconds N] [--now EPOCH]
 #
 #   verify-attestation.sh --jws FILE --claims FILE --jwks FILE [...]
@@ -77,6 +78,26 @@
 #                      it to pin two through a rotation overlap. Compared with the
 #                      kid RECOMPUTED from the key bytes, never with a label. Not
 #                      --check-kid, and it does not apply to the status-list key.
+#   --anchor-file      a key statement (keys-statement.json, schema
+#                      hodeishield.keys.statement.v1) from a release of this
+#                      repository. The script runs `cosign verify-blob` on it with
+#                      the bundle given by --anchor-bundle (default: the statement's
+#                      name plus .sigstore.json), under an identity FIXED in this
+#                      script (the release workflow of this repository at a tag
+#                      vN.N.N, issued by GitHub Actions); there is no option and no
+#                      environment variable to change it. It then requires the key
+#                      that signed to be listed, under the right role, with a
+#                      retirement that agrees with hs_retired_at. cosign is an
+#                      OPTIONAL dependency, needed only here, version 3.1.3 or later.
+#                      cosign may contact the Sigstore TUF repository to refresh its
+#                      trust root. A statement that cannot be verified is exit 2
+#                      ("anchor could not be checked"), never 1: it is not evidence
+#                      against the attestation, as a wrong key document is not. A
+#                      statement that verifies but does not list the key is exit 1
+#                      (exit 3 for the status-list key in --status-list mode).
+#                      With --pub-b64url the kid is still recomputed from the key
+#                      bytes, so membership is checked; there is no key set, so there
+#                      is no hs_retired_at to compare.
 #   --raw              also print the full signed posture JSON, but only when the
 #                      document verified (what it says is never shown otherwise)
 #   --max-age-seconds  staleness tolerance on `generatedAt` (default 3600 = 1 h)
@@ -165,11 +186,23 @@
 # =============================================================================
 set -euo pipefail
 
+# The version this script is released as. --anchor-file refuses a key statement
+# from an older release than this (anti-rollback); tests/version-consistency.sh
+# keeps it in step with CHANGELOG.md and, on a release, with the tag.
+VERIFIER_VERSION="1.4.0"
+
 JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
 EXPECT_SLUG=''; EXPECT_NONCE_SET=0; EXPECT_NONCE=''
 MAX_AGE_SECONDS=3600; NOW_OVERRIDE=''
 SHOW_RAW=0
+# --anchor-file / --anchor-bundle (see the header). The identity and the issuer
+# below are FIXED: nothing the caller passes can change who may sign the statement.
+ANCHOR_FILE=''; ANCHOR_BUNDLE=''
+ANCHOR_MIN_COSIGN='3.1.3'   # the version release.yml pins
+ANCHOR_IDENTITY_RE='^https://github\.com/Hodeitek/hodeishield-attest-verifier/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+ANCHOR_OIDC_ISSUER='https://token.actions.githubusercontent.com'
+ANCHOR_READY=0; ANCHOR_STMT=''; ANCHOR_ISSUER=''
 # --expect-kid, repeatable: the kids the attestation's signing key may have. Empty
 # means no pin. Not --check-kid, which looks a kid up in a status list.
 EXPECT_KIDS=()
@@ -212,8 +245,7 @@ Usage:
 
 Attestation mode (the default):
   --attestation FILE     the document as the endpoint serves it
-  --jws FILE             a compact JWS, with --claims FILE or attached
-  --claims FILE          the claims object that the JWS signs
+  --jws FILE, --claims FILE  a compact JWS, and the claims object that it signs (or attached)
   --posture FILE         a full claims object (a bare posture is refused)
   --jwks FILE            the attestation key set
   --pub-b64url KEY       the raw public key, instead of --jwks
@@ -221,21 +253,22 @@ Attestation mode (the default):
   --expect-issuer URL    require this issuer (iss)
   --expect-nonce VALUE   require this challenge ('' requires none)
   --expect-kid KID       require the signing key to have this kid; repeat for a rotation overlap
-  --max-age-seconds N    reject a document older than N seconds (default 3600)
-  --max-age-days N       the same, in days
+  --max-age-seconds N    reject a document older than N seconds, default 3600 (--max-age-days N: days)
   --raw                  also print the full signed posture JSON (verified documents only)
   --now EPOCH            take this Unix time as now (for testing)
 
 Status-list mode (revocation):
   --status-list          check a signed revocation status list
-  --status FILE|URL      the status list
-  --status-keys FILE|URL the status list's own key set (never --jwks)
+  --status FILE|URL      the status list, and --status-keys FILE|URL its own key set (never --jwks)
   --check-kid KID        look this kid up in the list (not --expect-kid, which pins)
   --check-subject SLUG   look this organisation up in the list
   --check-generated-at T the document time to compare with the subject entry
   --min-seq N            reject a list older than sequence N (rollback)
 
 Common:
+  --anchor-file FILE     check the signing key against a signed key statement (needs cosign >= 3.1.3)
+  --anchor-bundle FILE   the statement's Sigstore bundle (default: FILE.sigstore.json)
+  --version              print the version of this script
   -h, --help             this text
 
 Exit codes:
@@ -302,6 +335,8 @@ while [ $# -gt 0 ]; do
       is_kid_shape "$2" \
         || { printf 'error: --expect-kid %s is not a kid (22 base64url characters)\n' "$(esc "$2")" >&2; exit 2; }
       EXPECT_KIDS+=("$2"); shift 2 ;;
+    --anchor-file)          ANCHOR_FILE="${2:?}"; shift 2 ;;
+    --anchor-bundle)        ANCHOR_BUNDLE="${2:?}"; shift 2 ;;
     --status-list)         STATUS_LIST_MODE=1; shift ;;
     --status)               STATUS_SRC="${2:?}"; shift 2 ;;
     --status-keys)          STATUS_KEYS_SRC="${2:?}"; shift 2 ;;
@@ -311,6 +346,7 @@ while [ $# -gt 0 ]; do
     --min-seq)              MIN_SEQ="${2:?}"; shift 2
       [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || { printf 'error: --min-seq must be a non-negative integer\n' >&2; exit 2; } ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
+    --version)      printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
     -h|--help)      usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -410,6 +446,9 @@ if [ -n "$JWKS_FILE" ] && [ -n "$PUB_B64URL" ]; then
 raw key has no kid, no retirement marker and no key set to look them up in. Drop one."
 fi
 
+[ -z "$ANCHOR_BUNDLE" ] || [ -n "$ANCHOR_FILE" ] \
+  || die anchor_bundle_without_file "--anchor-bundle is the bundle of the statement given with --anchor-file, so it needs --anchor-file."
+
 # Refused rather than resolved by precedence. Two sources for the same document
 # is exactly the situation where a verifier reads one and reports on the other.
 if [ -n "$POSTURE_FILE" ] && { [ -n "$CLAIMS_FILE" ] || [ -n "$ATTESTATION_FILE" ]; }; then
@@ -466,7 +505,7 @@ if ! openssl list -signature-algorithms 2>/dev/null | grep -qi 'ML-DSA-65'; then
 fi
 ok openssl_mldsa65_available "OpenSSL ${OSSL_V} offers ML-DSA-65"
 
-if [ -n "$ATTESTATION_FILE" ] || [ -n "$CLAIMS_FILE" ] || [ -n "$POSTURE_FILE" ]; then
+if [ -n "$ATTESTATION_FILE" ] || [ -n "$CLAIMS_FILE" ] || [ -n "$POSTURE_FILE" ] || [ -n "$ANCHOR_FILE" ]; then
   command -v python3 >/dev/null 2>&1 \
     || die python3_missing "python3 is needed to read the claims JSON and re-derive the canonical envelope bytes."
 fi
@@ -839,9 +878,53 @@ if sys.argv[1] == "key":
                     break
     open(sys.argv[4], "wb").write(pub)
     out.write(status.encode() + b"\n" + val)
-else:
+elif sys.argv[1] == "cmp":
     a, b = instant(sys.argv[2]), instant(sys.argv[3])
     out.write(b"unparseable" if a is None or b is None else b"at_or_after" if a >= b else b"before")
+else:
+    # The key statement (--anchor-file). The file has already been read strictly
+    # (UTF-8, one value, no duplicate member) by the caller.
+    #   argv[1] = "statement"  argv[2] = file
+    #       line 1: ok | bad; then the issuer (ok) or a fixed reason (bad)
+    #   argv[1] = "lookup"     argv[2] = file  argv[3] = kid
+    #       line 1: absent | found; then the role and the retired_at ("" if none)
+    KID = re.compile(r"[A-Za-z0-9_-]{21}[AQgw]", re.ASCII)
+    DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+    def day(v):
+        try: datetime.date(int(v[0:4]), int(v[5:7]), int(v[8:10]))
+        except ValueError: return False
+        return True
+    def why(d):
+        if not isinstance(d, dict) or set(d) != {"schema", "issuer", "keys"}:
+            return "its members are not exactly schema, issuer and keys"
+        if d["schema"] != "hodeishield.keys.statement.v1": return "its schema is not hodeishield.keys.statement.v1"
+        if not isinstance(d["issuer"], str) or not d["issuer"]: return "its issuer is not a string"
+        ks = d["keys"]
+        if not isinstance(ks, list) or not ks: return "its keys are not a non-empty array"
+        seen = set()
+        for k in ks:
+            if not isinstance(k, dict): return "a key entry is not an object"
+            if not {"kid", "role", "status", "published_at"} <= set(k) <= {"kid", "role", "status", "published_at", "active_since", "retired_at"}:
+                return "a key entry lacks a documented member or has one that is not documented"
+            if not (isinstance(k["kid"], str) and KID.fullmatch(k["kid"])): return "a kid is not the shape of a kid"
+            if k["kid"] in seen: return "a kid is listed twice"
+            seen.add(k["kid"])
+            if not (isinstance(k["role"], str) and k["role"] in ("attestation", "status-list")): return "a role is neither attestation nor status-list"
+            if not (isinstance(k["status"], str) and k["status"] in ("active", "retired")): return "a status is neither active nor retired"
+            if not isinstance(k["published_at"], str): return "a published_at is not a string"
+            if "active_since" in k:
+                v = k["active_since"]
+                if not (isinstance(v, str) and DAY.fullmatch(v) and day(v)): return "an active_since is not a date, YYYY-MM-DD"
+            if (k["status"] == "retired") != ("retired_at" in k): return "retired_at is not present exactly for the retired keys"
+            if "retired_at" in k and not strict(k["retired_at"]): return "a retired_at is not an RFC 3339 UTC time with seconds (YYYY-MM-DDTHH:MM:SSZ)"
+        return None
+    doc = json.load(open(sys.argv[2], "rb"))
+    if sys.argv[1] == "statement":
+        r = why(doc)
+        out.write(b"bad\n" + r.encode() if r else b"ok\n" + doc["issuer"].encode("utf-8", "surrogatepass"))
+    else:
+        hit = [k for k in doc["keys"] if k["kid"] == sys.argv[3]]
+        out.write(b"absent" if not hit else ("found\n%s\n%s" % (hit[0]["role"], hit[0].get("retired_at", ""))).encode())
 '
 
 # Document surgery: pull the pieces out of whatever JSON the caller handed us.
@@ -976,6 +1059,163 @@ out += [u64(len(se))]
 for e in se: out += [st(e["subjectHash"]), rs(e["reason"]), st(e["notBefore"]), st(e["expiresAt"])]
 sys.stdout.buffer.write(b"".join(out))
 '
+
+# --- 0b. The anchor (--anchor-file) -------------------------------------------
+# A signed key statement from a release of this repository, checked with cosign
+# before any document is read. See the header and docs/security/key-anchor.md.
+# Every way the statement cannot be verified ends here, with exit 2: a statement
+# that does not verify is not evidence that the attestation is forged, in the
+# same way a wrong key document is not. Membership of the key (a failed check,
+# exit 1 or 3) is decided later, once the key has been selected and its kid
+# recomputed from the key bytes.
+
+# Whether the cosign version $1 (GitVersion, e.g. v3.1.3) is at least
+# $ANCHOR_MIN_COSIGN. Numeric, in the C locale; a pre-release of the minimum
+# itself does not count.
+anchor_cosign_new_enough() {
+  local LC_ALL=C v="${1#v}" i=0 have=() want=() pre=''
+  local re='^([0-9]{1,6})\.([0-9]{1,6})\.([0-9]{1,6})(-[0-9A-Za-z.+-]*)?$'
+  [[ "$v" =~ $re ]] || return 1
+  have=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+  pre="${BASH_REMATCH[4]}"
+  IFS=. read -r -a want <<< "$ANCHOR_MIN_COSIGN"
+  for i in 0 1 2; do
+    if [ $(( 10#${have[i]} )) -gt "${want[i]}" ]; then return 0; fi
+    if [ $(( 10#${have[i]} )) -lt "${want[i]}" ]; then return 1; fi
+  done
+  [ -z "$pre" ]
+}
+
+# cosign's own diagnostics, for the reader: directories taken off every path
+# (a name only, never a temporary or an absolute path), every line through esc(),
+# indented. URLs are left alone: the pattern needs a path to start after a space,
+# a quote or a bracket.
+anchor_diagnostics() {
+  local line='' n=0
+  while IFS= read -r line && [ "$n" -lt 12 ]; do
+    line="$(printf '%s' "$line" | LC_ALL=C sed -E 's#(^|[ "(])(\.{0,2}/)?[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/([A-Za-z0-9._-]+)#\1\4#g')"
+    printf '         cosign: %s\n' "$(esc "${line:0:400}")"
+    n=$((n + 1))
+  done < "$1"
+}
+
+# The leaf certificate (base64 DER) of the bundle cosign has just accepted. Its
+# SAN is the verified signing identity, whose tag is compared with this version.
+ANCHOR_IDENTITY_PY='
+import json, sys
+b = json.load(open(sys.argv[1], "rb"))
+m = b["verificationMaterial"]
+c = m.get("certificate") or m["x509CertificateChain"]["certificates"][0]
+sys.stdout.write(c["rawBytes"])
+'
+
+if [ -n "$ANCHOR_FILE" ]; then
+  [ -n "$ANCHOR_BUNDLE" ] || ANCHOR_BUNDLE="${ANCHOR_FILE}.sigstore.json"
+  anchor_sn="$(basename -- "$ANCHOR_FILE")"; anchor_bn="$(basename -- "$ANCHOR_BUNDLE")"
+  printf '        anchor: %s, bundle %s\n' "$(esc "$anchor_sn")" "$(esc "$anchor_bn")"
+  anchor_v=''
+  if command -v cosign >/dev/null 2>&1; then
+    anchor_v="$(cosign version 2>/dev/null | awk '$1 == "GitVersion:" { print $2; exit }' || true)"
+  fi
+  if ! anchor_cosign_new_enough "$anchor_v"; then
+    if [ -z "$anchor_v" ]; then anchor_found='no usable cosign was found'
+    else anchor_found="this one reports '$(esc "${anchor_v:0:40}")'"; fi
+    die anchor_cosign_unavailable "anchor could not be checked: --anchor-file needs cosign ${ANCHOR_MIN_COSIGN} or later, and ${anchor_found}.
+       cosign is needed for this option only. This is a tooling limit, not evidence against the attestation."
+  fi
+  if [ ! -r "$ANCHOR_FILE" ] || [ ! -f "$ANCHOR_FILE" ]; then
+    die anchor_unverified "anchor could not be checked: the statement $(esc "$anchor_sn") cannot be read.
+       This is not evidence against the attestation."
+  fi
+  if [ ! -r "$ANCHOR_BUNDLE" ] || [ ! -f "$ANCHOR_BUNDLE" ]; then
+    die anchor_unverified "anchor could not be checked: the bundle $(esc "$anchor_bn") cannot be read (pass it with --anchor-bundle).
+       This is not evidence against the attestation."
+  fi
+  # cosign checks, and this script reads, one private copy of the statement: the
+  # file cannot change between the two. Names that are not plain are replaced.
+  case "$anchor_sn" in
+    ''|.|..|*[!A-Za-z0-9._-]*) anchor_fs='statement.json' ;;
+    *) anchor_fs="$anchor_sn" ;;
+  esac
+  case "$anchor_bn" in
+    ''|.|..|*[!A-Za-z0-9._-]*) anchor_fb='bundle.json' ;;
+    *) anchor_fb="$anchor_bn" ;;
+  esac
+  mkdir -p "$WORKDIR/anchor/s" "$WORKDIR/anchor/b"
+  cp -- "$ANCHOR_FILE" "$WORKDIR/anchor/s/$anchor_fs"
+  cp -- "$ANCHOR_BUNDLE" "$WORKDIR/anchor/b/$anchor_fb"
+  ANCHOR_STMT="$WORKDIR/anchor/s/$anchor_fs"
+  # cosign may contact the Sigstore TUF repository here to refresh its trust root.
+  anchor_rc=0
+  ( cd "$WORKDIR/anchor" && cosign verify-blob --bundle "b/$anchor_fb" \
+      --certificate-identity-regexp "$ANCHOR_IDENTITY_RE" \
+      --certificate-oidc-issuer "$ANCHOR_OIDC_ISSUER" "s/$anchor_fs" ) \
+    > "$WORKDIR/anchor/cosign.out" 2>&1 < /dev/null || anchor_rc=$?
+  if [ "$anchor_rc" -ne 0 ]; then
+    # cosign says exit 1 for all of these; the cause is read from what it printed.
+    # It changes the explanation only: every one of them is exit 2.
+    anchor_why='cosign could not verify the statement'
+    if grep -qiE 'no matching CertificateIdentity|none of the expected identities|failed to verify certificate identity|expected (SAN|issuer) value' "$WORKDIR/anchor/cosign.out"; then
+      anchor_why='the signing identity does not match the release workflow of this repository'
+    elif grep -qiE 'failed to verify signature|invalid signature|error verifying bundle|cert verification failed|failed to verify (leaf )?certificate|failed to verify log inclusion|does not match digest|digest does not match|could not verify (message|envelope)' "$WORKDIR/anchor/cosign.out"; then
+      anchor_why='the signature is invalid, or the statement was altered after it was signed'
+    elif grep -qiE 'trusted root|TUF|dial tcp|no such host|i/o timeout|connection refused|deadline exceeded|network is unreachable|TLS handshake' "$WORKDIR/anchor/cosign.out"; then
+      anchor_why='the Sigstore trust root could not be obtained (cosign may contact the Sigstore TUF repository: check the network)'
+    elif grep -qiE 'unexpected end of JSON|invalid character|proto:|validation error|unsupported media type|invalid bundle|missing (verification material|bundle content)|empty protobuf|no such file|reading |unmarshal' "$WORKDIR/anchor/cosign.out"; then
+      anchor_why='the bundle is unreadable or malformed'
+    fi
+    die anchor_unverified "anchor could not be checked: ${anchor_why}.
+       This is not evidence that the attestation is forged. The run ends without a verdict on it: re-fetch the statement and
+       its bundle from the release you trust, or drop --anchor-file.
+$(anchor_diagnostics "$WORKDIR/anchor/cosign.out")"
+  fi
+  # ANTI-ROLLBACK. The release tag comes from the certificate cosign has just
+  # verified (its single SAN, the workflow identity), read from the same private
+  # copy of the bundle. Any older, genuinely signed statement would otherwise be
+  # accepted, so a statement from a release older than this script is refused,
+  # BEFORE its content is read. An unreadable or unusual tag is refused too.
+  anchor_id=''; anchor_tag=''
+  anchor_san="$( { python3 -c "$ANCHOR_IDENTITY_PY" "$WORKDIR/anchor/b/$anchor_fb" | openssl base64 -d -A \
+      | openssl x509 -inform DER -noout -ext subjectAltName; } 2>/dev/null || true)"
+  mapfile -t anchor_san_lines <<< "$anchor_san"
+  anchor_prefix='https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/'
+  anchor_tag_re='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+  anchor_tag_ok=0
+  if [ "${#anchor_san_lines[@]}" -eq 2 ] && [[ "${anchor_san_lines[1]}" =~ ^[[:space:]]*URI:([^[:space:],]+)$ ]]; then
+    anchor_id="${BASH_REMATCH[1]}"
+    anchor_tag="${anchor_id#"$anchor_prefix"}"
+    if [ "$anchor_tag" != "$anchor_id" ] && [[ "$anchor_tag" =~ $anchor_tag_re ]]; then anchor_tag_ok=1; fi
+  fi
+  if [ "$anchor_tag_ok" -ne 1 ]; then
+    die anchor_tag_unreadable "anchor could not be checked: the statement's release tag cannot be read.
+       The signing identity of the bundle is not this repository's release workflow at a tag vN.N.N (no pre-release, no
+       build metadata, no leading zeros). This is not evidence against the attestation."
+  fi
+  IFS=. read -r -a anchor_tv <<< "${anchor_tag#v}"
+  IFS=. read -r -a anchor_vv <<< "$VERIFIER_VERSION"
+  for i in 0 1 2; do
+    if [ $(( 10#${anchor_tv[i]} )) -lt $(( 10#${anchor_vv[i]} )) ]; then
+      die anchor_statement_older "anchor could not be checked: statement from ${anchor_tag}, older than this verifier v${VERIFIER_VERSION}.
+       A statement from an older release may not list the current key, and accepting it would let an old, genuinely
+       signed statement stand in for the current one. Download the statement from the latest release.
+       This is not evidence against the attestation."
+    fi
+    if [ $(( 10#${anchor_tv[i]} )) -gt $(( 10#${anchor_vv[i]} )) ]; then break; fi
+  done
+  # The statement, strictly: UTF-8, no BOM, one value, no duplicate member; then
+  # the schema, the documented members only, the grammar of retired_at.
+  anchor_dups="$(python3 -c "$DUPKEY_PY" "$ANCHOR_STMT" 2>/dev/null)" \
+    || die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") is not strict JSON (UTF-8, no BOM, one value)."
+  [ -z "$anchor_dups" ] \
+    || die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") repeats members ($(esc "$(printf '%s' "$anchor_dups" | tr '\n' ' ')"))."
+  anchor_st="$(LC_ALL=C python3 -c "$RETIRED_PY" statement "$ANCHOR_STMT" 2>/dev/null || printf 'bad\nit could not be read\n')"
+  if [ "${anchor_st%%$'\n'*}" != ok ]; then
+    die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") is malformed: $(esc "${anchor_st#*$'\n'}")."
+  fi
+  ANCHOR_ISSUER="${anchor_st#*$'\n'}"
+  ANCHOR_READY=1
+  ok anchor_verified "the key statement $(esc "$anchor_sn") is signed by $(esc "$anchor_id") (issuer ${ANCHOR_OIDC_ISSUER})"
+fi
 
 # --- Document resolution -----------------------------------------------------
 # Normalise whatever the caller passed into (a) a file holding the compact JWS,
@@ -1241,6 +1481,44 @@ if [ "${#EXPECT_KIDS[@]}" -gt 0 ]; then
   fi
 fi
 
+# --anchor-file: is this key one the signed statement lists? Asked of the kid
+# RECOMPUTED from the key bytes above, never of a label, so a mislabelled key
+# cannot be admitted by naming itself after a listed kid. (With --pub-b64url
+# there is no JWK, but the kid is still recomputed, so this still works; there is
+# no key set either, so there is no hs_retired_at to compare.) Each failure is a
+# failed check, exit 1: the statement verified, and it does not list this key.
+if [ "$ANCHOR_READY" -eq 1 ]; then
+  ANCHOR_OK=1
+  ANCHOR_ENTRY="$(LC_ALL=C python3 -c "$RETIRED_PY" lookup "$ANCHOR_STMT" "$DERIVED_KID" 2>/dev/null || printf 'absent')"
+  mapfile -t ANCHOR_E <<< "$ANCHOR_ENTRY"
+  if [ "${ANCHOR_E[0]:-absent}" != found ]; then
+    ANCHOR_OK=0
+    bad anchor_kid_absent "anchor_kid_absent — the key bytes derive kid '${DERIVED_KID}', which the signed key statement does not list"
+  else
+    if [ "${ANCHOR_E[1]:-}" != attestation ]; then
+      ANCHOR_OK=0
+      bad anchor_role_mismatch "anchor_role_mismatch — the signed key statement lists kid '${DERIVED_KID}' as '$(esc "${ANCHOR_E[1]:-}")', not as an attestation key"
+    fi
+    # The statement's retirement and the key set's must be the same instant (both
+    # have the strict grammar, so equal instants are equal strings), or both absent.
+    if [ -n "$JWKS_FILE" ] && [ "${ANCHOR_E[2]:-}" != "$RETIRED_AT" ]; then
+      ANCHOR_OK=0
+      bad anchor_retired_mismatch "anchor_retired_mismatch — the signed key statement retires kid '${DERIVED_KID}' at '$(esc "${ANCHOR_E[2]:-}")' (empty: not retired), the key set says hs_retired_at '$(esc "$RETIRED_AT")' (empty: none)"
+    fi
+    # A retirement the statement carries applies even when the key set carries
+    # none (or a later one): the earlier instant is used by the retired_key check
+    # in section 6.
+    if [ -n "${ANCHOR_E[2]:-}" ]; then
+      if [ -z "$RETIRED_AT" ] || [ "$(LC_ALL=C python3 -c "$RETIRED_PY" cmp "${ANCHOR_E[2]}" "$RETIRED_AT" 2>/dev/null)" = before ]; then
+        RETIRED_AT="${ANCHOR_E[2]}"
+      fi
+    fi
+  fi
+  if [ "$ANCHOR_OK" -eq 1 ]; then
+    ok anchor_kid_listed "the signed key statement lists kid '${DERIVED_KID}' as an attestation key"
+  fi
+fi
+
 # OpenSSL loads SubjectPublicKeyInfo; the JWK carries the bare FIPS 204 key.
 # 22-byte SPKI prefix for ML-DSA-65 (OID 2.16.840.1.101.3.4.3.12):
 printf '308207b2300b0609608648016503040312038207a100' | hex_to_bin > "$WORKDIR/pub.der"
@@ -1285,6 +1563,17 @@ if [ -n "$CLAIMS_FILE" ]; then
   # envelope was in view — E3 is inside the signature, the header kid is inside
   # the signing input, and both must agree.)
   CLAIMS_KID="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" field kid)"
+  # --anchor-file: the statement names the issuer origin; the signed iss must be it.
+  if [ "$ANCHOR_READY" -eq 1 ]; then
+    ANCHOR_CLAIMS_ISS="$(python3 -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
+    if [ -z "$ANCHOR_CLAIMS_ISS" ]; then
+      :  # no iss in the document: nothing to compare (section 7 reports the absence)
+    elif [ "$ANCHOR_CLAIMS_ISS" = "$ANCHOR_ISSUER" ]; then
+      ok anchor_issuer_matches "iss (E2) is the issuer '$(esc "$ANCHOR_CLAIMS_ISS")' the signed key statement names"
+    else
+      bad anchor_issuer_mismatch "anchor_issuer_mismatch — iss is '$(esc "$ANCHOR_CLAIMS_ISS")', the signed key statement names the issuer '$(esc "$ANCHOR_ISSUER")'"
+    fi
+  fi
   if [ "$CLAIMS_KID" = "$KID" ]; then
     ok claims_kid_matches "claims.kid (E3) equals the protected-header kid — one key, named twice, agreeing"
   else
@@ -1736,6 +2025,35 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   else
     stat_bad status_unknown_kid_mismatch "kid mismatch — status-keys entry claims '$(esc "${STATUS_LIST_KID}")', its bytes derive \
 '${STATUS_DERIVED_KID}'"
+  fi
+fi
+# --anchor-file: the same membership question for the status-list key, asked of
+# the recomputed kid and with the role status-list. A failure leaves the status
+# UNKNOWN (exit 3), as every failure to establish the list does.
+if [ "$ANCHOR_READY" -eq 1 ] && [ "$STATUS_FAILURES" -eq 0 ]; then
+  ANCHOR_SOK=1
+  ANCHOR_SENTRY="$(LC_ALL=C python3 -c "$RETIRED_PY" lookup "$ANCHOR_STMT" "$STATUS_DERIVED_KID" 2>/dev/null || printf 'absent')"
+  mapfile -t ANCHOR_SE <<< "$ANCHOR_SENTRY"
+  if [ "${ANCHOR_SE[0]:-absent}" != found ]; then
+    ANCHOR_SOK=0
+    stat_bad anchor_status_kid_absent "anchor_status_kid_absent — the status-list key bytes derive kid '${STATUS_DERIVED_KID}', which the signed key statement does not list"
+  else
+    if [ "${ANCHOR_SE[1]:-}" != status-list ]; then
+      ANCHOR_SOK=0
+      stat_bad anchor_status_role_mismatch "anchor_status_role_mismatch — the signed key statement lists kid '${STATUS_DERIVED_KID}' as '$(esc "${ANCHOR_SE[1]:-}")', not as a status-list key"
+    fi
+    if [ "${ANCHOR_SE[2]:-}" != "$STATUS_RETIRED_AT" ]; then
+      ANCHOR_SOK=0
+      stat_bad anchor_status_retired_mismatch "anchor_status_retired_mismatch — the signed key statement retires kid '${STATUS_DERIVED_KID}' at '$(esc "${ANCHOR_SE[2]:-}")' (empty: not retired), the status key set says hs_retired_at '$(esc "$STATUS_RETIRED_AT")' (empty: none)"
+    fi
+    if [ -n "${ANCHOR_SE[2]:-}" ]; then
+      if [ -z "$STATUS_RETIRED_AT" ] || [ "$(LC_ALL=C python3 -c "$RETIRED_PY" cmp "${ANCHOR_SE[2]}" "$STATUS_RETIRED_AT" 2>/dev/null)" = before ]; then
+        STATUS_RETIRED_AT="${ANCHOR_SE[2]}"
+      fi
+    fi
+  fi
+  if [ "$ANCHOR_SOK" -eq 1 ]; then
+    ok anchor_status_kid_listed "the signed key statement lists kid '${STATUS_DERIVED_KID}' as a status-list key"
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then

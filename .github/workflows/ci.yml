@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh
 
   tests:
     name: offline tests (valid + rejection)
@@ -48,13 +48,27 @@ jobs:
         with:
           persist-credentials: false
       - name: Install openssl, python3, jq
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base
       - name: Toolchain
         run: |
           openssl version
           openssl list -signature-algorithms | grep -i ml-dsa-65
           python3 --version
           jq --version
+      # cosign, the version and the installer release.yml pins. It is needed by
+      # the vectors with real Sigstore bundles (tests/vectors/v1/anchor/), which
+      # tests/vectors.sh skips where cosign is missing; the stub-based anchor
+      # tests in tests/run.sh do not need it.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+      - name: cosign version
+        run: cosign version
+      # VERIFIER_VERSION is the version --anchor-file compares a statement's
+      # release tag with: it must agree with CHANGELOG.md.
+      - name: VERIFIER_VERSION agrees with CHANGELOG.md
+        run: bash tests/version-consistency.sh
       - name: tests/run.sh
         run: bash tests/run.sh
 

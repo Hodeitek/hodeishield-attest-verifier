@@ -2660,6 +2660,99 @@
         "code": "status_unknown_keys_not_array",
         "match": "malformed_document — status-keys.json: `keys` is not an array of objects"
       }
+    },
+    {
+      "id": "anchor-statement-older-than-verifier",
+      "description": "The real SHA256SUMS of the v1.3.0 release, with its real bundle, is given as the anchor. cosign accepts the signing identity (the release workflow of this repository at a tag), so the identity pattern fixed in the script is shown to accept a real release identity. The release tag read from the verified certificate, v1.3.0, is older than this verifier, so the anchor could not be checked: an old, genuinely signed statement is not accepted (anti-rollback). This happens before the content is read.",
+      "requires": [
+        "cosign"
+      ],
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--anchor-file",
+        "anchor/release-v1.3.0/SHA256SUMS",
+        "--anchor-bundle",
+        "anchor/release-v1.3.0/SHA256SUMS.sigstore.json"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "anchor_statement_older",
+        "match": "anchor could not be checked: statement from v1.3.0, older than this verifier",
+        "absent": [
+          "VERIFIED"
+        ]
+      }
+    },
+    {
+      "id": "anchor-tampered-statement",
+      "description": "The same real bundle, given with a copy of SHA256SUMS in which one name was changed after signing. The signature no longer covers the file: the anchor could not be checked (exit 2, never 1: a statement that does not verify says nothing about the attestation).",
+      "requires": [
+        "cosign"
+      ],
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--anchor-file",
+        "anchor/release-v1.3.0/SHA256SUMS.tampered",
+        "--anchor-bundle",
+        "anchor/release-v1.3.0/SHA256SUMS.sigstore.json"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "anchor_unverified",
+        "match": "anchor could not be checked: the signature is invalid, or the statement was altered",
+        "absent": [
+          "VERIFIED"
+        ]
+      }
+    },
+    {
+      "id": "anchor-wrong-identity",
+      "description": "A genuine Sigstore bundle made by another identity (the cosign project release checksums, signed by the Sigstore release service account, not by this repository workflow), with the file it signs. The signature is valid, the identity is not the one fixed in the script: the anchor could not be checked.",
+      "requires": [
+        "cosign"
+      ],
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--anchor-file",
+        "anchor/third-party/cosign_checksums.txt",
+        "--anchor-bundle",
+        "anchor/third-party/cosign_checksums.txt.sigstore.json"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "anchor_unverified",
+        "match": "anchor could not be checked: the signing identity does not match the release workflow",
+        "absent": [
+          "VERIFIED"
+        ]
+      }
     }
   ]
 }

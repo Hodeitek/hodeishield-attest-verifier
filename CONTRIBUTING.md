@@ -106,6 +106,22 @@ No issue stays open once the code that fixes it is on `main`.
 - Closing comments are in English and, like everything in this public
   repository, cite only public material.
 
+## Releasing
+
+The release commit does two things, and `tests/version-consistency.sh` checks
+both:
+
+- It sets `VERIFIER_VERSION` in `scripts/attest/verify-attestation.sh` to the
+  version being released. `--anchor-file` compares the release tag of a key
+  statement with it, so a statement from an older release is refused.
+- It dates the changelog heading: `## Unreleased` becomes
+  `## vX.Y.Z - YYYY-MM-DD`.
+
+Between releases, with `## Unreleased` on top, `VERIFIER_VERSION` is the next
+version and must be greater than the newest dated heading. On a tag push,
+`release.yml` fails before signing anything unless `VERIFIER_VERSION` equals the
+tag without its `v` and the changelog has the dated heading.
+
 ## Dependencies
 
 No third-party bot with write access runs on this repository.

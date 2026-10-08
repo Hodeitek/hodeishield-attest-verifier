@@ -144,6 +144,48 @@ cannot emit.
 | `slug_mismatch` | The slug is not the expected one. | fail | 1 | both | 5: `wrong-slug`, `expired-wrong-slug`, `decoy-slug-reads-signed-slug`, ... |
 | `freshness_unchecked` | Warning: no claims JSON, so freshness is not checked. | warn | 0 | both |  |
 
+## The anchor (`--anchor-file`)
+
+[key-anchor.md](key-anchor.md) describes the option. **A statement that does not
+verify, or cannot be checked, is exit 2 by design ("anchor could not be
+checked"), never exit 1.** A statement that does not verify says nothing about
+the attestation itself, just as a wrong key document does not (`unknown_kid`,
+`jwks_duplicate_key`): it is not evidence that the attestation is forged, and
+the run never ends in `VERIFIED`. Only a statement that verifies and does not
+list the key is a failed check. The cause of a verification failure (the
+identity does not match, the signature is invalid or the statement was altered,
+the bundle is unreadable, the trust root could not be obtained) is in the text of
+`anchor_unverified`; it is one code, not several. A retired key used after its
+retirement is the existing `retired_key`, compared with the statement's
+`retired_at` as well as the key set's `hs_retired_at`.
+
+**Anti-rollback.** The release tag is read from the verified certificate and
+compared, number by number, with the version of the script. A statement from an
+older release is refused (`anchor_statement_older`), and a tag that cannot be
+read strictly is refused too (`anchor_tag_unreadable`), both exit 2 and both
+before the statement is read, because any older statement that was genuinely
+signed would otherwise be accepted. A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why only the latest release is supported ([SECURITY.md](../../SECURITY.md)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
+
+| Code | Meaning | Result | Exit | Mode | Vectors |
+|---|---|---|---|---|---|
+| `anchor_bundle_without_file` | `--anchor-bundle` without `--anchor-file`. | fail | 2 | both |  |
+| `anchor_cosign_unavailable` | cosign is missing, older than 3.1.3, or its version cannot be read. | fail | 2 | both |  |
+| `anchor_unverified` | cosign did not verify the statement (identity, signature, bundle or trust root), or the statement or bundle cannot be read. | fail | 2 | both | 2: `anchor-tampered-statement`, `anchor-wrong-identity` |
+| `anchor_tag_unreadable` | The release tag of the verified certificate identity cannot be read: no tag, a pre-release, build metadata, a leading zero, not `vN.N.N`, or an identity that is not this repository's release workflow. | fail | 2 | both |  |
+| `anchor_statement_older` | The statement is from a release older than this verifier (`VERIFIER_VERSION`), compared numerically. Checked before the content is read. | fail | 2 | both | 1: `anchor-statement-older-than-verifier` |
+| `anchor_malformed` | The verified statement is not strict JSON, has a duplicate member, or is not a well-formed `hodeishield.keys.statement.v1`. | fail | 2 | both |  |
+| `anchor_verified` | cosign verified the statement under the fixed identity. | pass | 0 | both |  |
+| `anchor_issuer_matches` | `iss` is the issuer the statement names. | pass | 0 | attestation |  |
+| `anchor_issuer_mismatch` | `iss` is not the issuer the statement names. | fail | 1 | attestation |  |
+| `anchor_kid_absent` | The kid recomputed from the key bytes is not listed. | fail | 1 | both |  |
+| `anchor_role_mismatch` | The kid is listed with a role other than `attestation`. | fail | 1 | both |  |
+| `anchor_retired_mismatch` | The statement's `retired_at` and the key set's `hs_retired_at` disagree. | fail | 1 | attestation |  |
+| `anchor_kid_listed` | The statement lists the kid as an attestation key. | pass | 0 | both |  |
+| `anchor_status_kid_absent` | The status-list key's recomputed kid is not listed. | fail | 3 | status-list |  |
+| `anchor_status_role_mismatch` | The status-list kid is listed with a role other than `status-list`. | fail | 3 | status-list |  |
+| `anchor_status_retired_mismatch` | The statement's `retired_at` and the status key set's `hs_retired_at` disagree. | fail | 3 | status-list |  |
+| `anchor_status_kid_listed` | The statement lists the kid as a status-list key. | pass | 0 | status-list |  |
+
 ## Claims
 
 | Code | Meaning | Result | Exit | Mode | Vectors |
