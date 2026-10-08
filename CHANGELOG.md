@@ -15,6 +15,15 @@ before it takes effect. Only the latest release is supported, as
 ## Unreleased
 
 ### Added
+- `--json`: one JSON object on stdout and nothing else, with the verdict, the
+  reason code that decided the exit code, every check, the attested content
+  (only when the exit code is 0, with `--raw` also the signed posture), the
+  values read from a document that did not verify (under `unverified`, not
+  established) and the result of `--anchor-file`. The exit codes do not change;
+  an argument error is JSON too (`reason` `usage`, exit 2). The schema is
+  `hodeishield.verifier.result.v1`, described in
+  [docs/security/json-output.md](docs/security/json-output.md); `tests/vectors.sh --json`
+  checks it against every published vector (Closes #38).
 - [`docs/security/keys.json`](docs/security/keys.json), the machine-readable
   list of the issuer's signing keys (schema `hodeishield.keys.statement.v1`),
   kept identical to `docs/security/keys.md` by a CI check. Releases from the
@@ -49,6 +58,11 @@ before it takes effect. Only the latest release is supported, as
 - Machine reason codes for every check, listed in
   [docs/security/reason-codes.md](docs/security/reason-codes.md). The text
   output is unchanged.
+
+### Fixed
+- The list of checks behind the reason codes lost a check made inside a
+  subshell, and merged two different checks that share a code. Both are fixed;
+  the text output is unchanged.
 
 ### Changed
 - §6 item 2 of the verification document no longer says the Web PKI is the only

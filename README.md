@@ -281,6 +281,26 @@ Every value taken from a document, key set or status list is printed with
 control characters, and any byte outside printable ASCII, as a visible `\xHH`
 escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
 
+## Machine-readable output
+
+`--json` prints one JSON object on stdout and nothing else (no text on stdout
+or stderr), with the same exit codes. Add `--json` to any other options,
+anywhere in the arguments (an argument error is reported as JSON too); `--help`
+and `--version` keep printing their text.
+
+```bash
+bash scripts/attest/verify-attestation.sh --json \
+  --attestation att.json --jwks jwks.json --expect-slug acme --expect-issuer https://issuer.example
+```
+
+The object has the `verdict` (`verified`, `expired`, `failed`,
+`could_not_check`, `good`, `revoked` or `unknown`), the `reason` code that
+decided the exit code, every check with its code and result, and, **only when
+the exit code is 0**, the `attested` content. The values it reads from a
+document that did not verify are under `unverified`, and are not established.
+Test the exit code first. The fields, their stability and examples are in
+[docs/security/json-output.md](docs/security/json-output.md).
+
 ## Convince yourself it can fail
 
 A verifier that has only ever printed `PASS` has told you nothing. Each of these
@@ -516,6 +536,8 @@ the reason it is a short, single, readable script.
   The few cases that use real Sigstore bundles need cosign ≥ 3.1.3 and the
   network; where cosign is missing they are reported as skipped, never as
   passed.
+- `bash tests/vectors.sh --json` runs every vector again with `--json` and checks
+  the object instead of the text; `tests/run.sh` runs it too.
 - `bash tests/mutants.sh` builds a copy of the verifier whose signature check
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled
