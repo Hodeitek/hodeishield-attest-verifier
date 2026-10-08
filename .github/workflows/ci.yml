@@ -48,7 +48,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install openssl, python3, jq
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq gettext-base
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base
       - name: Toolchain
         run: |
           openssl version
