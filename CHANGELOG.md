@@ -60,6 +60,10 @@ before it takes effect. Only the latest release is supported, as
   output is unchanged.
 
 ### Fixed
+- An option given without its value exited 1, as if a check had failed. It is now
+  a usage error, exit 2, with `error: --jws needs a value` (and likewise for
+  every option that takes a value); the next option is never taken as the
+  value, so `--jwks --json` is a usage error.
 - The list of checks behind the reason codes lost a check made inside a
   subshell, and merged two different checks that share a code. Both are fixed;
   the text output is unchanged.

@@ -563,15 +563,15 @@ on_exit() {
 trap on_exit EXIT
 
 while [ $# -gt 0 ]; do
-  # A missing or empty value is an argument error with exit 2 in --json mode (the
-  # text mode keeps what the shell does for ${2:?}).
-  if [ "$JSON_MODE" -eq 1 ]; then
-    case "$1" in
-      --jws|--jwks|--attestation|--claims|--posture|--pub-b64url|--expect-slug|--max-age-seconds|--max-age-days|--now|\
-      --anchor-file|--anchor-bundle|--status|--status-keys|--check-kid|--check-subject|--check-generated-at|--min-seq|--expect-issuer)
-        [ -n "${2:-}" ] || arg_die "error: $1 needs a value" ;;
-    esac
-  fi
+  # An option that takes a value, given without one, is a usage error (exit 2) in
+  # every mode: the value is missing when it is absent, empty, or the next option
+  # (starting with --), which is never taken in its place. One rule for all of
+  # them; --expect-nonce and --expect-kid check their own value below.
+  case "$1" in
+    --jws|--jwks|--attestation|--claims|--posture|--pub-b64url|--expect-slug|--max-age-seconds|--max-age-days|--now|\
+    --anchor-file|--anchor-bundle|--status|--status-keys|--check-kid|--check-subject|--check-generated-at|--min-seq|--expect-issuer)
+      if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then arg_die "error: $1 needs a value"; fi ;;
+  esac
   case "$1" in
     --jws)          JWS_FILE="${2:?}"; shift 2 ;;
     --jwks)         JWKS_FILE="${2:?}"; shift 2 ;;
@@ -584,7 +584,7 @@ while [ $# -gt 0 ]; do
     # meaningful assertion ("this document must carry NO challenge"), and an
     # empty string must not silently mean "do not check".
     --expect-nonce)
-      [ $# -ge 2 ] || arg_die "error: --expect-nonce needs a value (use '' for \"no challenge\")"
+      { [ $# -ge 2 ] && [[ "$2" != --* ]]; } || arg_die "error: --expect-nonce needs a value (use '' for \"no challenge\")"
       EXPECT_NONCE_SET=1; EXPECT_NONCE="$2"; shift 2 ;;
     --max-age-seconds) MAX_AGE_SECONDS="${2:?}"; shift 2 ;;
     --max-age-days) MAX_AGE_SECONDS=$(( ${2:?} * 86400 )); shift 2 ;;
@@ -595,7 +595,7 @@ while [ $# -gt 0 ]; do
     # A Q g w (the last character carries only 2 bits). Anything else can never
     # equal a derived kid, so it is a usage error, not a check that always fails.
     --expect-kid)
-      [ $# -ge 2 ] || arg_die 'error: --expect-kid needs a value'
+      { [ $# -ge 2 ] && [[ "$2" != --* ]]; } || arg_die 'error: --expect-kid needs a value'
       is_kid_shape "$2" \
         || arg_die "error: --expect-kid $(esc "$2") is not a kid (22 base64url characters)"
       EXPECT_KIDS+=("$2"); shift 2 ;;

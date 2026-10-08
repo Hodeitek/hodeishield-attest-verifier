@@ -1230,6 +1230,21 @@ else printf 'not ok - json: --json as the first argument\n'; FAILED=$((FAILED + 
 jexpect 2 'an environment problem is a die: the check, the message' \
   'o["reason"] == "attestation_missing" and o["checks"][-1]["exit_class"] == 2 and "--attestation" in o["message"]' --
 
+# Every option that takes a value: without it, exit 2 and one line, in the text
+# mode and with --json; and the next option is never taken as the value.
+for opt in --jws --jwks --attestation --claims --posture --pub-b64url --expect-slug --expect-issuer --expect-kid \
+           --expect-nonce --max-age-seconds --max-age-days --now --anchor-file --anchor-bundle --status --status-keys \
+           --check-kid --check-subject --check-generated-at --min-seq; do
+  expect 2 "error: $opt needs a value" "$opt without a value is a usage error (2)" -- "$opt"
+  jexpect 2 "$opt without a value is a usage error" 'o["reason"] == "usage" and o["message"].startswith("error: '"$opt"' needs a value")' -- "$opt"
+done
+for opt in --jws --jwks --status --expect-slug; do
+  expect 2 "error: $opt needs a value" "$opt followed by another option does not take it as its value (2)" -- "$opt" --raw
+done
+expect 2 "error: --jwks needs a value" '--jwks --json is a usage error, --json is not its value' -- --jwks --json
+expect 0 'VERIFIED — this document was signed' "--expect-nonce '' keeps its meaning: an empty challenge is a value" -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --expect-nonce ''
+
 # --help and --version print their usual text, even with --json.
 NO_COLOR=1 bash "$VERIFIER" --json --help > "$T/jhelp.out" 2> "$T/jhelp.err"; got=$?
 if [ "$got" -eq 0 ] && grep -q '^Exit codes:' "$T/jhelp.out" && [ ! -s "$T/jhelp.err" ] && ! grep -q '^{' "$T/jhelp.out"; then
