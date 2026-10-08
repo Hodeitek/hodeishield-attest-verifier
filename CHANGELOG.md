@@ -12,18 +12,10 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
-## Unreleased
+## v1.3.0 - 2026-10-08
 
-### Tests
-- The mutant check can be skipped locally with `VERIFIER_SKIP_MUTANTS=1`, which
-  allows contributors to run the suite without building the signature-disabled
-  verifier. CI always runs the mutant check and fails if the variable is set in
-  a GitHub Actions environment.
-
-## v1.3.0 - not yet released
-
-`scripts/attest/verify-attestation.sh` changes, so there will be a new sha256 at
-release.
+`verify-attestation.sh` changes. sha256
+`0e7d4a27f2834a69a7173731a7589bca6566355cedce11dfc9a4b71c25745552`.
 
 ### Security
 - Every value taken from a document, key set or status list is printed with
@@ -49,9 +41,36 @@ release.
   `status-retired-key-*`) appended to `tests/vectors/v1/`, with the new codes
   `retired_key`, `jwks_retired_at_malformed`, `status_unknown_retired_key` and
   `status_unknown_retired_at_malformed`; no existing vector changed.
+- Five more test vectors for key sets that cannot be read one way
+  (`jwks-duplicate-kid`, `jwks-keys-not-array`, `status-keys-duplicate-kid`,
+  `status-keys-not-array`, `status-keys-entry-not-object`). The set now has 115
+  cases; the first 101 are unchanged.
 - `docs/security/keys.md`: the versioned list of the current signing keys (the
   attestation key and the status-list key), how to check them yourself, and the
   rotation policy. The README "Pinning the key" section points to it.
+- `--raw`: also print the full signed posture JSON, for a document that verifies.
+- `--expect-kid KID`: require that the key that signed the attestation has this
+  kid, compared with the kid recomputed from the key bytes. Repeat it to pin two
+  kids through a rotation overlap. A mismatch is a failed check (exit 1,
+  `unexpected_kid`); a value that is not the shape of a kid is a usage error
+  (exit 2). It is not `--check-kid`, which looks a kid up in a status list, and
+  it does not apply to the status-list signing key.
+- Documentation corrections: the Compatibility section gives the real exit codes
+  for an unknown format version (2 for an attestation, 3 for a status list);
+  "Unknown is not good" says a fetch failure is exit 2; "What the output shows"
+  lists exactly what a run that does not verify still prints.
+- README: a Compatibility section (format versions per verifier version, the
+  90-day notice, latest release only), "What the output shows", and
+  `--expect-kid` in "Pinning the key".
+- Tests for all of the above, including a check that no output refers to a
+  document that is not public.
+- Issue form for "the verifier cannot run or cannot check", and a contact link
+  to private vulnerability reporting.
+- Links to the guides on docs.hodeishield.com, and a pointer to hodeishield.com
+  for organisations that want to publish their own attestations.
+- README and verification document §6: what the key fingerprint to pin is (the
+  `kid`), and a command that computes it from a downloaded `jwks.json`.
+- This changelog.
 
 ### Fixed
 - A verified document with a non-ASCII framework label no longer ends in an
@@ -104,30 +123,11 @@ release.
 - Verification document brought up to date with v1.2.1 (ML-DSA capability gate,
   the `EXPIRED` verdict).
 
-### Added
-- `--raw`: also print the full signed posture JSON, for a document that verifies.
-- `--expect-kid KID`: require that the key that signed the attestation has this
-  kid, compared with the kid recomputed from the key bytes. Repeat it to pin two
-  kids through a rotation overlap. A mismatch is a failed check (exit 1,
-  `unexpected_kid`); a value that is not the shape of a kid is a usage error
-  (exit 2). It is not `--check-kid`, which looks a kid up in a status list, and
-  it does not apply to the status-list signing key.
-- Documentation corrections: the Compatibility section gives the real exit codes
-  for an unknown format version (2 for an attestation, 3 for a status list);
-  "Unknown is not good" says a fetch failure is exit 2; "What the output shows"
-  lists exactly what a run that does not verify still prints.
-- README: a Compatibility section (format versions per verifier version, the
-  90-day notice, latest release only), "What the output shows", and
-  `--expect-kid` in "Pinning the key".
-- Tests for all of the above, including a check that no output refers to a
-  document that is not public.
-- Issue form for "the verifier cannot run or cannot check", and a contact link
-  to private vulnerability reporting.
-- Links to the guides on docs.hodeishield.com, and a pointer to hodeishield.com
-  for organisations that want to publish their own attestations.
-- README and verification document §6: what the key fingerprint to pin is (the
-  `kid`), and a command that computes it from a downloaded `jwks.json`.
-- This changelog.
+### Tests
+- The mutant check can be skipped locally with `VERIFIER_SKIP_MUTANTS=1`, which
+  allows contributors to run the suite without building the signature-disabled
+  verifier. CI always runs the mutant check and fails if the variable is set in
+  a GitHub Actions environment.
 
 ## v1.2.1 - 2026-10-06
 
