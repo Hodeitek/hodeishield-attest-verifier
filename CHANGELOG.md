@@ -113,6 +113,14 @@ before it takes effect. Only the latest release is supported, as
   `--anchor-file` skipped its issuer check for it. It is now a failed check,
   `iss_empty` (exit 1), and the anchor's issuer check is never skipped
   (`anchor_issuer_mismatch`). The first part also affected earlier releases.
+- The input files (`--attestation`, `--jws`, `--claims`, `--posture`, `--jwks`,
+  and `--status`/`--status-keys` given as files) were read again by each check,
+  `--claims` more than a dozen times, so a file that changed during the run could be
+  checked as several documents, and an input given as a pipe such as
+  `<(curl ...)` was empty after its first read. Each is now copied once into the
+  private work directory right after the arguments are read, and only the copy
+  is read. Messages name the file as it was given, escaped, never the copy (the
+  claims of an `--attestation` are named "the claims in FILE").
 - `--json`: the script defined `json_str()` twice, and the header reader of
   section 2 replaced the JSON string encoder that the object written without
   python3 relies on. The header reader is now `header_field()`; a test checks

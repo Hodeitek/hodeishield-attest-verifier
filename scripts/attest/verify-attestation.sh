@@ -747,6 +747,39 @@ WORKDIR="$(mktemp -d)"; chmod 700 "$WORKDIR"
 CHECKS_FILE="$WORKDIR/checks"; : > "$CHECKS_FILE"
 record_flush
 
+# Every input file is read ONCE, here, into the private work directory, and from
+# then on only the copy is read: a file that changes while the checks run is
+# still checked as one document, and a pipe such as <(curl ...), which can be
+# read only once, works. The name given is kept for the messages, always shown
+# through esc(). A file that cannot be read leaves a path that does not exist,
+# so the checks below report it, under its given name, where they always did.
+# (The --anchor-file statement and bundle are copied the same way in section 0b;
+# a --status or --status-keys URL is fetched once in section 8.)
+JWS_NAME="$JWS_FILE"; ATTESTATION_NAME="$ATTESTATION_FILE"; CLAIMS_NAME="$CLAIMS_FILE"
+POSTURE_NAME="$POSTURE_FILE"; JWKS_NAME="$JWKS_FILE"
+STATUS_NAME="$STATUS_SRC"; STATUS_KEYS_NAME="$STATUS_KEYS_SRC"
+mkdir "$WORKDIR/in"
+read_input() {   # SRC DEST — print the path to read from now on
+  if [ -r "$1" ] && [ ! -d "$1" ] && { cat < "$1" > "$2"; } 2>/dev/null; then
+    printf '%s' "$2"
+  else
+    rm -f -- "$2"; printf '%s' "$2.unreadable"
+  fi
+}
+[ -z "$JWS_FILE" ]         || JWS_FILE="$(read_input "$JWS_FILE" "$WORKDIR/in/jws")"
+[ -z "$ATTESTATION_FILE" ] || ATTESTATION_FILE="$(read_input "$ATTESTATION_FILE" "$WORKDIR/in/attestation.json")"
+[ -z "$CLAIMS_FILE" ]      || CLAIMS_FILE="$(read_input "$CLAIMS_FILE" "$WORKDIR/in/claims.json")"
+[ -z "$POSTURE_FILE" ]     || POSTURE_FILE="$(read_input "$POSTURE_FILE" "$WORKDIR/in/posture.json")"
+[ -z "$JWKS_FILE" ]        || JWKS_FILE="$(read_input "$JWKS_FILE" "$WORKDIR/in/jwks.json")"
+case "$STATUS_SRC" in
+  ''|http://*|https://*) ;;
+  *) STATUS_SRC="$(read_input "$STATUS_SRC" "$WORKDIR/in/status.json")" ;;
+esac
+case "$STATUS_KEYS_SRC" in
+  ''|http://*|https://*) ;;
+  *) STATUS_KEYS_SRC="$(read_input "$STATUS_KEYS_SRC" "$WORKDIR/in/status-keys.json")" ;;
+esac
+
 # Is a posture attestation being checked at all? `--attestation` carries its own
 # signature, so it stands in for `--jws` everywhere below.
 HAVE_ATTESTATION=0
@@ -765,11 +798,11 @@ fi
 To look a kid up in a status list, use --check-kid."
 if [ "$HAVE_ATTESTATION" -eq 1 ] || [ "$STATUS_LIST_MODE" -eq 0 ]; then
   [ "$HAVE_ATTESTATION" -eq 1 ] || die attestation_missing "missing --attestation (or --jws). Run with --help."
-  [ -z "$JWS_FILE" ] || [ -r "$JWS_FILE" ] || die jws_unreadable "cannot read ${JWS_FILE}"
-  [ -z "$ATTESTATION_FILE" ] || [ -r "$ATTESTATION_FILE" ] || die attestation_unreadable "cannot read ${ATTESTATION_FILE}"
+  [ -z "$JWS_FILE" ] || [ -r "$JWS_FILE" ] || die jws_unreadable "cannot read $(esc "$JWS_NAME")"
+  [ -z "$ATTESTATION_FILE" ] || [ -r "$ATTESTATION_FILE" ] || die attestation_unreadable "cannot read $(esc "$ATTESTATION_NAME")"
   [ -n "$JWKS_FILE" ] || [ -n "$PUB_B64URL" ] || die key_source_missing "need --jwks or --pub-b64url."
 fi
-[ -z "$CLAIMS_FILE" ] || [ -r "$CLAIMS_FILE" ] || die claims_unreadable "cannot read ${CLAIMS_FILE}"
+[ -z "$CLAIMS_FILE" ] || [ -r "$CLAIMS_FILE" ] || die claims_unreadable "cannot read $(esc "$CLAIMS_NAME")"
 
 # The same rule for the key: a --jwks next to a --pub-b64url would be read by
 # neither the kid check nor the retirement check, and the run would report on a
@@ -954,7 +987,7 @@ except Exception:
 # --max-time 15, so a hostile endpoint can stream into the (0700, mktemp -d)
 # work directory for up to 15 seconds.
 fetch_or_read() {
-  local src="$1" out="$2" role="${3:-document}"
+  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}"
   case "$src" in
     https://*)
       curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
@@ -986,7 +1019,7 @@ fetch_or_read() {
       curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
       ;;
     *)
-      [ -r "$src" ] || die file_unreadable "cannot read ${src}"
+      [ -r "$src" ] || die file_unreadable "cannot read $(esc "$name")"
       cp -- "$src" "$out"
       ;;
   esac
@@ -1656,14 +1689,16 @@ fi
 # holding just the nested posture, which sections 6 and 7 read.
 if [ -n "$ATTESTATION_FILE" ]; then
   python3 -I -c "$DOCX_PY" "$ATTESTATION_FILE" split "$WORKDIR/claims.json" > "$WORKDIR/att.jws" \
-    || die attestation_unparseable "could not read ${ATTESTATION_FILE} as an attestation document.
+    || die attestation_unparseable "could not read $(esc "$ATTESTATION_NAME") as an attestation document.
        Expected what GET /api/public/attest/<slug> serves:
        {\"attestation\": {\"claims\": {...}, \"signature\": \"...\"}}"
-  [ -n "$CLAIMS_FILE" ] || CLAIMS_FILE="$WORKDIR/claims.json"
+  if [ -z "$CLAIMS_FILE" ]; then
+    CLAIMS_FILE="$WORKDIR/claims.json"; CLAIMS_NAME="the claims in $ATTESTATION_NAME"
+  fi
   if [ -z "$JWS_FILE" ]; then
-    [ -s "$WORKDIR/att.jws" ] || die attestation_signature_missing "${ATTESTATION_FILE} carries no \"signature\" member. \
+    [ -s "$WORKDIR/att.jws" ] || die attestation_signature_missing "$(esc "$ATTESTATION_NAME") carries no \"signature\" member. \
 Pass the signature with --jws if you hold it separately."
-    JWS_FILE="$WORKDIR/att.jws"
+    JWS_FILE="$WORKDIR/att.jws"; JWS_NAME="the signature in $ATTESTATION_NAME"
   fi
 fi
 
@@ -1675,7 +1710,7 @@ fi
 if [ -n "$POSTURE_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
   case "$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" shape 2>/dev/null || printf 'unknown')" in
     claims)
-      CLAIMS_FILE="$POSTURE_FILE"
+      CLAIMS_FILE="$POSTURE_FILE"; CLAIMS_NAME="$POSTURE_NAME"
       ;;
     posture)
       die posture_bare_refused "--posture was given a bare posture object, and the signature does not cover those bytes.
@@ -1694,7 +1729,7 @@ if [ -n "$POSTURE_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
          verify-attestation.sh --jws att.jws --claims att.claims.json --jwks jwks.json"
       ;;
     *)
-      die posture_unrecognised "could not tell what ${POSTURE_FILE} is. Pass --attestation or --claims."
+      die posture_unrecognised "could not tell what $(esc "$POSTURE_NAME") is. Pass --attestation or --claims."
       ;;
   esac
 fi
@@ -1712,7 +1747,7 @@ if [ -n "$JWS_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
     if b64url_decode "$ATT_PAYLOAD" > "$WORKDIR/attached-payload.bin" 2>/dev/null \
        && python3 -I -c "$DECODE_PY" "$WORKDIR/attached-payload.bin" > "$WORKDIR/claims.json" \
             2>"$WORKDIR/decode_err"; then
-      CLAIMS_FILE="$WORKDIR/claims.json"
+      CLAIMS_FILE="$WORKDIR/claims.json"; CLAIMS_NAME="the claims decoded from $JWS_NAME"
     else
       ATTACHED_UNDECODABLE="$(cat "$WORKDIR/decode_err" 2>/dev/null || true)"
       : "${ATTACHED_UNDECODABLE:=payload segment is not valid base64url}"
@@ -1723,10 +1758,12 @@ fi
 # Duplicate members in the document as the caller handed it over — the raw
 # file, before any re-serialisation hides them. Section 7 FAILS on them.
 DUPLICATE_KEYS=''
-for dup_src in "$ATTESTATION_FILE" "$CLAIMS_FILE"; do
+for dup_which in attestation claims; do
+  if [ "$dup_which" = attestation ]; then dup_src="$ATTESTATION_FILE"; dup_name="$ATTESTATION_NAME"
+  else dup_src="$CLAIMS_FILE"; dup_name="$CLAIMS_NAME"; fi
   [ -n "$dup_src" ] || continue
   dup_found="$(python3 -I -c "$DUPKEY_PY" "$dup_src" 2>/dev/null)" \
-    || dup_found="(the file could not be parsed strictly: $dup_src)"
+    || dup_found="(the file could not be parsed strictly: $(esc "$dup_name"))"
   [ -z "$dup_found" ] || DUPLICATE_KEYS="${DUPLICATE_KEYS:+$DUPLICATE_KEYS
 }$dup_found"
 done
@@ -1737,7 +1774,7 @@ done
 POSTURE_FILE=''
 if [ -n "$CLAIMS_FILE" ]; then
   python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" posture "$WORKDIR/posture.json" \
-    || die claims_posture_missing "claims JSON has no usable \`posture\` object: ${CLAIMS_FILE}"
+    || die claims_posture_missing "claims JSON has no usable \`posture\` object: $(esc "$CLAIMS_NAME")"
   POSTURE_FILE="$WORKDIR/posture.json"
 fi
 
@@ -1753,7 +1790,7 @@ printf '\n%s[1] Structure%s\n' "$BOLD" "$RESET"
 JWS="$(tr -d '[:space:]' < "$JWS_FILE")"
 case "$JWS" in
   *.*.*) : ;;
-  *) die jws_not_compact "not a compact JWS (expected two dots): ${JWS_FILE}" ;;
+  *) die jws_not_compact "not a compact JWS (expected two dots): $(esc "$JWS_NAME")" ;;
 esac
 H="${JWS%%.*}"; REST="${JWS#*.}"; P="${REST%%.*}"; S="${REST#*.}"
 case "$S" in
@@ -1826,14 +1863,14 @@ fi
 # --- 3. Public key -----------------------------------------------------------
 printf '\n%s[3] Public key%s\n' "$BOLD" "$RESET"
 if [ -z "$PUB_B64URL" ]; then
-  [ -r "$JWKS_FILE" ] || die jwks_unreadable "cannot read ${JWKS_FILE}"
+  [ -r "$JWKS_FILE" ] || die jwks_unreadable "cannot read $(esc "$JWKS_NAME")"
   # A key document with a duplicated member is malformed: which `pub` or `kid`
   # counts would depend on the parser. Not evidence against the attestation,
   # so exit 2, like the unknown-kid stop below.
   JWKS_DUPS="$(python3 -I -c "$DUPKEY_PY" "$JWKS_FILE" 2>/dev/null)" \
-    || die not_strict_json "the key document ${JWKS_FILE} is not strict JSON (UTF-8, no BOM, one value).
+    || die not_strict_json "the key document $(esc "$JWKS_NAME") is not strict JSON (UTF-8, no BOM, one value).
        Re-fetch it; do not edit it by hand."
-  [ -z "$JWKS_DUPS" ] || die jwks_duplicate_key "the key document ${JWKS_FILE} repeats members ($(printf '%s' "$JWKS_DUPS" | tr '\n' ' ')).
+  [ -z "$JWKS_DUPS" ] || die jwks_duplicate_key "the key document $(esc "$JWKS_NAME") repeats members ($(printf '%s' "$JWKS_DUPS" | tr '\n' ' ')).
        Which key it names depends on the parser. Re-fetch it; do not edit it by hand."
   # Selected as JSON: the entry of `keys` whose `kid` is the header kid, and its
   # `pub` — never the first line of text that looks like one. The same reader
@@ -1843,9 +1880,9 @@ if [ -z "$PUB_B64URL" ]; then
   RETIRED_OUT="$(LC_ALL=C python3 -I -c "$RETIRED_PY" key "$JWKS_FILE" "$KID" "$WORKDIR/jwks-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
   RETIRED_OUT="${RETIRED_OUT%x}"
   case "${RETIRED_OUT%%$'\n'*}" in
-    invalid) die jwks_keys_not_array "the key document ${JWKS_FILE} is invalid: \`keys\` is not an array of objects.
+    invalid) die jwks_keys_not_array "the key document $(esc "$JWKS_NAME") is invalid: \`keys\` is not an array of objects.
        Re-fetch it; do not edit it by hand." ;;
-    duplicate) die jwks_duplicate_kid "the key document ${JWKS_FILE} is invalid: two of its keys carry the same kid, so
+    duplicate) die jwks_duplicate_kid "the key document $(esc "$JWKS_NAME") is invalid: two of its keys carry the same kid, so
        which one counts would depend on the order. Re-fetch it; do not edit it by hand." ;;
   esac
   PUB_B64URL="$(cat "$WORKDIR/jwks-pub.txt" 2>/dev/null || true)"
@@ -1867,7 +1904,7 @@ if [ -z "$PUB_B64URL" ]; then
     case "${RETIRED_OUT%%$'\n'*}" in
       absent) ;;
       ok) RETIRED_AT="${RETIRED_OUT#*$'\n'}" ;;
-      *) die jwks_retired_at_malformed "the key document ${JWKS_FILE} is invalid: hs_retired_at of the key '$(esc "${KID}")' is
+      *) die jwks_retired_at_malformed "the key document $(esc "$JWKS_NAME") is invalid: hs_retired_at of the key '$(esc "${KID}")' is
        '$(esc "${RETIRED_OUT#*$'\n'}")', not an RFC 3339 UTC time with seconds (YYYY-MM-DDTHH:MM:SSZ).
        Re-fetch the key document; do not edit it by hand." ;;
     esac
@@ -1967,12 +2004,12 @@ ok public_key_loaded "loaded as an ML-DSA-65 public key"
 printf '\n%s[4] Payload — attestation envelope (E1..E7)%s\n' "$BOLD" "$RESET"
 CLAIMS_KID=''
 if [ -n "$CLAIMS_FILE" ]; then
-  [ -r "$CLAIMS_FILE" ] || die claims_unreadable "cannot read ${CLAIMS_FILE}"
+  [ -r "$CLAIMS_FILE" ] || die claims_unreadable "cannot read $(esc "$CLAIMS_NAME")"
   command -v python3 >/dev/null 2>&1 || die python3_missing "python3 is needed to re-derive canonical bytes from the claims JSON."
   python3 -I -c "$CANON_PY" "$CLAIMS_FILE" envelope > "$WORKDIR/canon.bin" \
-    || die canonicalise_failed "could not canonicalise ${CLAIMS_FILE}"
+    || die canonicalise_failed "could not canonicalise $(esc "$CLAIMS_NAME")"
   python3 -I -c "$CANON_PY" "$CLAIMS_FILE" posture > "$WORKDIR/canon-posture.bin" \
-    || die canonicalise_posture_failed "could not canonicalise the nested posture of ${CLAIMS_FILE}"
+    || die canonicalise_posture_failed "could not canonicalise the nested posture of $(esc "$CLAIMS_NAME")"
   CANON_LEN="$(wc -c < "$WORKDIR/canon.bin" | tr -d ' ')"
   NESTED_LEN="$(wc -c < "$WORKDIR/canon-posture.bin" | tr -d ' ')"
   ok canonical_rederived "re-derived ${CANON_LEN} canonical envelope bytes from the claims JSON you can read"
@@ -2307,8 +2344,8 @@ STATUS_PUB_B64URL=''; STATUS_DERIVED_KID=''; STATUS_RETIRED_AT=''
 LIST_KID=''; LIST_ISS=''
 STATUS_LIST_VALID=0
 
-fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list'
-fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set'
+fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list' "$STATUS_NAME"
+fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set' "$STATUS_KEYS_NAME"
 
 for dup_src in status.json status-keys.json; do
   if ! dup_found="$(python3 -I -c "$DUPKEY_PY" "$WORKDIR/$dup_src" 2>/dev/null)"; then

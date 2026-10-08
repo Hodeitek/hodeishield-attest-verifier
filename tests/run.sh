@@ -433,6 +433,41 @@ else
   printf 'not ok - with --json, a planted json.py changed the result (exit %s)\n' "$got"; head -c 1500 "$T/planted.json" | sed 's/^/    # /'; FAILED=$((FAILED + 1))
 fi
 
+# Each input file is read once, into the work directory. A pipe can be read only
+# once, so every input given as <(cat FILE) must still verify; before, the second
+# read of the same pipe found it empty.
+echo '# inputs are read once'
+expect 0 'VERIFIED — this document was signed' '--attestation and --jwks given as pipes (read once) verify' -- \
+  --attestation <(cat "$T/att.json") --jwks <(cat "$T/jwks.json") --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+expect 0 'VERIFIED — this document was signed' '--jws, --claims and --jwks given as pipes verify' -- \
+  --jws <(cat "$T/att.jws") --claims <(cat "$T/claims.json") --jwks <(cat "$T/jwks.json") \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+expect 0 'VERIFIED — this document was signed' '--posture (a claims object) given as a pipe verifies' -- \
+  --jws <(cat "$T/att.jws") --posture <(cat "$T/claims.json") "${COMMON[@]}"
+expect 0 'VERIFIED — this document was signed' 'an attached --jws given as a pipe verifies (its payload is decoded from the copy)' -- \
+  --jws <(cat "$T/attached.jws") "${COMMON[@]}"
+expect 1 'SIGNATURE DOES NOT VERIFY' 'a tampered document given as a pipe still fails on its signature' -- \
+  --attestation <(cat "$T/tampered-field.json") "${COMMON[@]}"
+# A file that cannot be read is named as it was given, escaped, never as a copy.
+expect 2 'cannot read /nonexistent/att\x1b[31m.json' 'an unreadable --attestation is named as given, escaped (2)' -- \
+  --attestation $'/nonexistent/att\e[31m.json' "${COMMON[@]}"
+expect 2 'cannot read /nonexistent/jwks.json' 'an unreadable --jwks is named as given (2)' -- \
+  --attestation "$T/att.json" --jwks /nonexistent/jwks.json --expect-slug "$SLUG" --now "$NOW"
+expect 2 'cannot read /nonexistent/claims.json' 'an unreadable --claims is named as given (2)' -- \
+  --jws "$T/att.jws" --claims /nonexistent/claims.json "${COMMON[@]}"
+expect 2 'cannot read /nonexistent/a.jws' 'an unreadable --jws is named as given (2)' -- \
+  --jws /nonexistent/a.jws --claims "$T/claims.json" "${COMMON[@]}"
+expect 2 'could not tell what /nonexistent/posture.json is' 'an unreadable --posture is named as given (2)' -- \
+  --jws "$T/att.jws" --posture /nonexistent/posture.json "${COMMON[@]}"
+expect 2 "cannot read $T" 'a directory given as --jwks is unreadable (2), and named as given' -- \
+  --attestation "$T/att.json" --jwks "$T" --expect-slug "$SLUG" --now "$NOW"
+edit "$T/att.json" "$T/no-signature.json" 'del d["attestation"]["signature"]'
+expect 2 "$T/no-signature.json carries no \"signature\" member" 'an attestation without a signature is named as given' -- \
+  --attestation "$T/no-signature.json" "${COMMON[@]}"
+edit "$T/att.json" "$T/no-posture.json" 'del d["attestation"]["claims"]["posture"]'
+expect 2 "no usable \`posture\` object: the claims in $T/no-posture.json" 'claims taken from an attestation are named after it' -- \
+  --attestation "$T/no-posture.json" "${COMMON[@]}"
+
 echo '# revocation (--status-list)'
 
 
@@ -484,6 +519,16 @@ expect 3 'rolled_back' 'a list older than one already accepted (--min-seq) is UN
 expect 1 'REVOKED — via subject' 'an attached JWS alone does not dodge a subject withdrawal' -- \
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --jws "$T/attached.jws" "${COMMON[@]}"
+
+# The status list and its key set are read once too.
+expect 1 'REVOKED — via key' '--status, --status-keys and --attestation given as pipes: REVOKED' -- \
+  --status-list --status <(cat "$T/list-key.json") --status-keys <(cat "$T/status-keys.json") \
+  --attestation <(cat "$T/att.json") "${COMMON[@]}"
+expect 0 'GOOD — not revoked' '--status, --status-keys and --attestation given as pipes: GOOD' -- \
+  --status-list --status <(cat "$T/list-empty.json") --status-keys <(cat "$T/status-keys.json") \
+  --attestation <(cat "$T/att.json") "${COMMON[@]}"
+expect 2 'cannot read /nonexistent/status\x0a.json' 'an unreadable --status is named as given, escaped (2)' -- \
+  --status-list --status $'/nonexistent/status\n.json' --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW"
 
 # --check-kid adds a kid to Rule K; it never replaces the document's own kid.
 mint_status --out "$T/list-other-key.json" --seq 8 --revoke-kid="$OTHER_KID"
@@ -1407,6 +1452,10 @@ JTEXT="$LAST_OUT" jexpect 0 'a verified document: verdict, reason, attested cont
        == [l.strip() for l in text.splitlines() if "): " in l and l.startswith("          ")]
    and o["checks"][-1] == {"code": "verified", "result": "pass", "exit_class": 0} and o["anchor"] is None' -- \
   --attestation "$T/att.json" "${COMMON[@]}"
+jexpect 0 'inputs given as pipes: the attested content is read from the copy, at the end of the run' \
+  'o["verdict"] == "verified" and o["attested"]["slug"] == "fixture-org" and o["attested"]["posture"]["slug"] == "fixture-org"' -- \
+  --jws <(cat "$T/att.jws") --claims <(cat "$T/claims.json") --jwks <(cat "$T/jwks.json") \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --raw
 jexpect 0 'the same document from --jws and --claims' 'o["verdict"] == "verified" and o["attested"]["frameworks"][0]["code"] == "iso27001"' -- \
   --jws "$T/att.jws" --claims "$T/claims.json" "${COMMON[@]}"
 jexpect 0 'with --raw the signed posture is there too' \
