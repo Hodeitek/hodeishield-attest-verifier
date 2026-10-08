@@ -1961,10 +1961,10 @@ if [ -n "$CLAIMS_FILE" ]; then
   CLAIMS_KID="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field kid)"
   # --anchor-file: the statement names the issuer origin; the signed iss must be it.
   if [ "$ANCHOR_READY" -eq 1 ]; then
+    # Never skipped: an empty iss is not the issuer the statement names (which is
+    # never empty), so it fails here too, besides iss_empty in section 7.
     ANCHOR_CLAIMS_ISS="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
-    if [ -z "$ANCHOR_CLAIMS_ISS" ]; then
-      :  # no iss in the document: nothing to compare (section 7 reports the absence)
-    elif [ "$ANCHOR_CLAIMS_ISS" = "$ANCHOR_ISSUER" ]; then
+    if [ "$ANCHOR_CLAIMS_ISS" = "$ANCHOR_ISSUER" ]; then
       ok anchor_issuer_matches "iss (E2) is the issuer '$(esc "$ANCHOR_CLAIMS_ISS")' the signed key statement names"
     else
       bad anchor_issuer_mismatch "anchor_issuer_mismatch — iss is '$(esc "$ANCHOR_CLAIMS_ISS")', the signed key statement names the issuer '$(esc "$ANCHOR_ISSUER")'"
@@ -2170,7 +2170,13 @@ if [ -n "$CLAIMS_FILE" ]; then
 
   # `iss` is who VOUCHES. It decides which key set is authoritative, so a
   # verifier that never pins it can be handed a perfectly valid document signed
-  # by somebody else's HodeiShield deployment.
+  # by somebody else's HodeiShield deployment. An EMPTY iss names nobody: it is a
+  # failed check, whether or not --expect-issuer is given. (An absent or null iss
+  # never gets here: the canonical encoder refuses it in section 4.)
+  if [ -z "$CLAIMS_ISS" ]; then
+    bad iss_empty "iss_empty — iss (E2) is empty: the document names no issuer, so nothing says whose key set
+          should verify it. Every genuine HodeiShield attestation names its issuer origin."
+  fi
   if [ -n "$EXPECT_ISSUER" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
       ok issuer_match "iss (E2) is '$(esc "${CLAIMS_ISS}")', as expected"

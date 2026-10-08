@@ -100,6 +100,11 @@ before it takes effect. Only the latest release is supported, as
 - The list of checks behind the reason codes lost a check made inside a
   subshell, and merged two different checks that share a code. Both are fixed;
   the text output is unchanged.
+- A signed but empty `iss` (`""`) was not a failed check: without
+  `--expect-issuer` the document could end `VERIFIED` naming no issuer, and
+  `--anchor-file` skipped its issuer check for it. It is now a failed check,
+  `iss_empty` (exit 1), and the anchor's issuer check is never skipped
+  (`anchor_issuer_mismatch`). The first part also affected earlier releases.
 - `--json`: `anchor.verified` was true when the run stopped after the key
   statement verified and before the membership or issuer check ran (an unknown
   kid, a document that could not be canonicalised, a status list that failed

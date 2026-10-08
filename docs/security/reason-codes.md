@@ -183,7 +183,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `anchor_malformed` | The verified statement is not strict JSON, has a duplicate member, or is not a well-formed `hodeishield.keys.statement.v1`. | fail | 2 | both |  |
 | `anchor_verified` | cosign verified the statement under the fixed identity. | pass | 0 | both |  |
 | `anchor_issuer_matches` | `iss` is the issuer the statement names. | pass | 0 | attestation |  |
-| `anchor_issuer_mismatch` | `iss` is not the issuer the statement names. | fail | 1 | attestation |  |
+| `anchor_issuer_mismatch` | `iss` is not the issuer the statement names (an empty `iss` included). | fail | 1 | attestation |  |
 | `anchor_kid_absent` | The kid recomputed from the key bytes is not listed. | fail | 1 | both |  |
 | `anchor_role_mismatch` | The kid is listed with a role other than `attestation`. | fail | 1 | both |  |
 | `anchor_retired_mismatch` | The statement's `retired_at` and the key set's `hs_retired_at` disagree. | fail | 1 | attestation |  |
@@ -202,6 +202,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `duplicate_key` | The document repeats a member. | fail | 1 | both | 7: `dup-posture-members`, `dup-claims-in-attestation`, `dup-claims-top-level`, ... |
 | `members_signed` | Every member is covered by the signature. | pass | 0 | both |  |
 | `unsigned_member` | The document carries a member the signature does not cover. | fail | 1 | both | 5: `decoy-slug-unsigned-member`, `decoy-timestamps-expired`, `unsigned-member-top-level`, ... |
+| `iss_empty` | `iss` is the empty string: the document names no issuer. With `--anchor-file` it is also `anchor_issuer_mismatch`. | fail | 1 | both |  |
 | `issuer_match` | `iss` is the expected issuer. | pass | 0 | both |  |
 | `issuer_mismatch` | `iss` is not the expected issuer. | fail | 1 | both | 2: `other-issuer`, `attached-issuer-mismatch` |
 | `issuer_unpinned` | Warning: no `--expect-issuer`. | warn | 0 | both |  |

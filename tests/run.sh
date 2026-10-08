@@ -150,6 +150,14 @@ expect 1 'SIGNATURE DOES NOT VERIFY' 'a re-serialised (reordered) protected head
 expect 1 'issuer_mismatch' 'a document from another issuer is rejected by --expect-issuer' -- \
   --attestation "$T/other-iss.json" "${COMMON[@]}"
 
+"${MINT[@]}" attest --key "$T/issuer.pem" --slug "$SLUG" --iss '' \
+  --generated-at "$GEN" --expires-at "$EXP" --framework iso27001=basic --out "$T/empty-iss.json"
+expect 1 "iss_empty — iss (E2) is empty" 'a signed but empty iss is a failed check (1) without --expect-issuer' -- \
+  --attestation "$T/empty-iss.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --now "$NOW"
+lacks 'VERIFIED —' 'a document with an empty iss never ends VERIFIED'
+expect 1 'iss_empty' 'a signed but empty iss is a failed check (1) with --expect-issuer too' -- \
+  --attestation "$T/empty-iss.json" "${COMMON[@]}"
+
 expect 1 "not the expected 'another-org'" 'a document for another slug is rejected by --expect-slug' -- \
   --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug another-org --expect-issuer "$ISS" --now "$NOW"
 
@@ -1189,6 +1197,10 @@ lacks 'lists kid' 'the kid is not reported as listed (text)'
 mem role 'd["keys"][0]["role"] = "status-list"'
 expect 1 "anchor_role_mismatch — the signed key statement lists kid '$ISSUER_KID' as 'status-list'" 'the kid listed with another role is a failed check (1)' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-role.json"
+expect 1 "anchor_issuer_mismatch — iss is '', the signed key statement names the issuer '$ISS'" \
+  'an empty iss is not skipped by the anchor: anchor_issuer_mismatch (1)' -- \
+  --attestation "$T/empty-iss.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --now "$NOW" "${A[@]}"
+lacks "iss (E2) is the issuer" 'an empty iss is never reported as the issuer the statement names'
 mem issuer 'd["issuer"] = "https://other.test"'
 expect 1 "anchor_issuer_mismatch — iss is '$ISS', the signed key statement names the issuer 'https://other.test'" 'an issuer the statement does not name is a failed check (1)' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-issuer.json"
@@ -1485,6 +1497,12 @@ jexpect 1 'a key the statement does not list: anchor not verified, kid not liste
 COSIGN_STUB_RC=1 COSIGN_STUB_ERR='Error: something nobody has seen' jexpect 2 'cosign says no: could not check, anchor not verified' \
   'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None and o["anchor"]["kids"] == []' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+jexpect 1 'an empty iss: iss_empty and anchor_issuer_mismatch both fail, anchor not verified' \
+  '{"iss_empty", "anchor_issuer_mismatch"} <= {c["code"] for c in o["checks"] if c["result"] == "fail"}
+   and o["anchor"]["verified"] is False and o["attested"] is None' -- \
+  --attestation "$T/empty-iss.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --now "$NOW" "${A[@]}"
+jexpect 1 'an empty iss without the anchor: reason iss_empty' 'o["reason"] == "iss_empty" and o["verdict"] == "failed"' -- \
+  --attestation "$T/empty-iss.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --now "$NOW"
 # anchor.verified is true only when every anchor check that applies ran and held.
 # A run that stops after the statement verified, before a membership or issuer
 # check, is not verified, whatever the statement said.
