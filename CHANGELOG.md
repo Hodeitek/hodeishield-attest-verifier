@@ -21,8 +21,20 @@ before it takes effect. Only the latest release is supported, as
   next one publish it as `keys-statement.json`, in `SHA256SUMS` and signed with
   Sigstore (`keys-statement.json.sigstore.json`).
 - [A decision record for the key anchor](docs/security/key-anchor.md): the
-  signed statement, checked by a coming `--anchor-file` option, with "anchor
-  could not be checked" as exit 2. The option is not in the script yet.
+  signed statement, checked by `--anchor-file`, with "anchor could not be
+  checked" as exit 2.
+- `--anchor-file STATEMENT` (and `--anchor-bundle FILE`), from v1.4.0: the
+  verifier runs `cosign verify-blob` on a key statement from a release, with the
+  signing identity fixed in the script, and requires the key that signed (and,
+  with `--status-list`, the status-list key) to be listed under the right role
+  with a matching retirement. cosign 3.1.3 or later is needed for this option
+  only; it may contact the Sigstore TUF repository. A statement that does not
+  verify is exit 2, by design; a key it does not list is exit 1 (3 for the
+  status-list key). See [Anchor the key](README.md#anchor-the-key).
+- Test vectors with real Sigstore bundles for `--anchor-file`
+  (`tests/vectors/v1/anchor/`), marked `requires: ["cosign"]` in the manifest;
+  `tests/vectors.sh` reports them as skipped where cosign is missing. A check of
+  the latest release's key statement in the live workflow.
 - A daily check that the live key sets contain no key, and no retirement time,
   that `keys.json` does not list.
 - A signed container image, from v1.4.0: `ghcr.io/hodeitek/hodeishield-attest-verifier`,

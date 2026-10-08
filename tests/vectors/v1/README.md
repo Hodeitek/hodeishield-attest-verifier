@@ -28,6 +28,8 @@ JWKS you publish, and never treat a document signed by them as genuine.
 - `jwks/`: key-document variants (mislabelled, duplicated member, trailing text,
   keys marked with `hs_retired_at`).
 - `status-lists/`: signed status lists, valid and manipulated.
+- `anchor/`: real Sigstore bundles and the files they sign, for `--anchor-file`
+  (see "Anchor vectors" below).
 - `SHA256SUMS`: sha-256 of every file in this directory except itself.
 
 ## The manifest
@@ -46,6 +48,7 @@ Each case:
 | `expect.absent` | (optional) substrings the reference output must not contain, to keep verdicts that exit alike from being confused (for example "expired" versus "forged") |
 | `canonical_sha256` | (valid documents) sha-256 of the canonical envelope bytes the signature is over, printed by the script in section [4]. Use it to debug your encoder |
 | `status_canonical_sha256` | same, for the status list's canonical bytes |
+| `requires` | (optional) a list of tools the case needs, now `["cosign"]` (cosign 3.1.3 or later, and network access: it may contact the Sigstore TUF repository). `tests/vectors.sh` reports a case whose requirement is absent as skipped, not passed. Your own runner may skip it, or run it with a verifier that has no anchor option and expect it to fail |
 | `signature_only` | (optional, `true`) every check other than the signature check passes for this document, so only the signature check stands between it and acceptance. See "Signature-only vectors" below |
 
 ### Running another implementation
@@ -61,7 +64,7 @@ the reason `expect.code` names. The `code` values are:
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
   `redaction_violation`, `revoked_key`, `revoked_subject`, `retired_key`
 - `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
-  `jwks_duplicate_kid`, `jwks_keys_not_array`
+  `jwks_duplicate_kid`, `jwks_keys_not_array`, `anchor_malformed`, `anchor_unverified`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
   `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
   `unsupported_alg`, `retired_key`, `retired_at_malformed`, `duplicate_kid`,
@@ -74,6 +77,39 @@ description says which.
 The reference runner is `tests/vectors.sh` (`VERIFIER=/path/to/script bash
 tests/vectors.sh`). It checks `SHA256SUMS` first, then runs each case as
 `NO_COLOR=1 bash "$VERIFIER" args...` from this directory.
+
+## Anchor vectors
+
+`--anchor-file` (v1.4.0) checks the signing key against a key statement signed by
+this repository's release workflow. The cases in `anchor/` use REAL Sigstore
+bundles, so they need cosign 3.1.3 or later and network access (`"requires":
+["cosign"]`), and they all end in exit 2, "anchor could not be checked":
+
+- `anchor/release-v1.3.0/SHA256SUMS` and `SHA256SUMS.sigstore.json`: the
+  `SHA256SUMS` asset of this repository's v1.3.0 release and its bundle, as
+  published. cosign accepts the signing identity (the release workflow of this
+  repository at tag v1.3.0), which shows that the identity pattern fixed in the
+  script accepts a real release identity. The file is not a key statement, so the
+  strict parse fails (`anchor_malformed`).
+- `anchor/release-v1.3.0/SHA256SUMS.tampered`: the same file with `.sh` changed to
+  `.zz` in the file name, given with the same bundle (`anchor_unverified`: the
+  signature no longer covers the file).
+- `anchor/third-party/cosign_checksums.txt` and
+  `cosign_checksums.txt.sigstore.json`: a genuine bundle made by another identity,
+  the checksums of the cosign v3.1.3 release, signed by the Sigstore project's
+  release service account (`anchor_unverified`: the identity is not this
+  repository's release workflow). Source:
+  <https://github.com/sigstore/cosign/releases/tag/v3.1.3> (assets
+  `cosign_checksums.txt` and `cosign_checksums.txt.sigstore.json`), unmodified.
+  Licence: Apache License 2.0, <https://github.com/sigstore/cosign/blob/main/LICENSE>.
+  Copyright The Sigstore Authors.
+
+A case with a VALID statement cannot exist before a release carries one: the
+first is the v1.4.0 release itself, which publishes `keys-statement.json` and its
+bundle. It will be appended to this set after v1.4.0 is released (the live check,
+`tests/live.sh`, runs the verifier against the latest release's statement
+meanwhile). The membership checks (key absent, role, retirement, issuer) are
+covered by `tests/run.sh`, which stands in for cosign with a test double.
 
 ## Signature-only vectors
 
@@ -168,3 +204,10 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   it is exit 3 (`status_unknown_duplicate_kid`, `status_unknown_keys_not_array`).
   The manifest and this README changed; every other file keeps its `SHA256SUMS`
   line byte for byte.
+- 2026-10-08: added 3 cases and their files (nothing existing changed) for
+  `--anchor-file`, marked with the new manifest field `requires` (`["cosign"]`):
+  a real release asset that is not a key statement (`anchor_malformed`), a
+  tampered copy of it (`anchor_unverified`), and a genuine bundle of another
+  identity (`anchor_unverified`). New codes: `anchor_malformed`,
+  `anchor_unverified`. The manifest and this README changed; every other file
+  keeps its `SHA256SUMS` line byte for byte.

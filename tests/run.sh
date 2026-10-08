@@ -49,6 +49,7 @@ PASSED=0; FAILED=0
 expect() {
   local want="$1" pattern="$2" name="$3"; shift 4
   local out="$T/out.$((PASSED + FAILED))" got
+  LAST_OUT="$out"
   NO_COLOR=1 bash "$VERIFIER" "$@" > "$out" 2>&1
   got=$?
   if [ "$got" -ne "$want" ]; then
@@ -68,7 +69,7 @@ expect() {
 # lacks PATTERN NAME — the output of the previous expect() has NO line
 # containing PATTERN. For verdicts that must not be confused with each other.
 lacks() {
-  local out="$T/out.$((PASSED + FAILED - 1))"
+  local out="$LAST_OUT"
   if grep -qF -- "$1" "$out"; then
     printf 'not ok - %s (output contains: %s)\n' "$2" "$1"
     sed 's/^/    # /' "$out"
@@ -748,6 +749,322 @@ expect 2 'cannot be combined with --jwks' '--pub-b64url together with --jwks is 
 expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable --jwks is a usage error too' -- \
   --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
+
+# --- anchor (--anchor-file), with a cosign test double -------------------------
+# The stub only stands in for cosign: a program first on PATH that prints a
+# version, records the arguments it was called with, prints what the test tells
+# it to on stderr and exits with the code the test tells it to. The verifier
+# under test still does the version check, the classification of what cosign
+# said, the strict parse of the statement and the membership logic. Real cosign
+# and real bundles are exercised by the published vectors (anchor/), which CI
+# runs with cosign installed.
+echo '# anchor (--anchor-file), cosign test double'
+STUB="$T/stub"; mkdir -p "$STUB"
+cat > "$STUB/cosign" <<'STUBEOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = version ]; then printf 'GitVersion:    %s\n' "${COSIGN_STUB_VERSION-v3.1.3}"; exit 0; fi
+printf '%s\n' "$@" > "${COSIGN_STUB_LOG:-/dev/null}"
+[ -z "${COSIGN_STUB_ERR:-}" ] || printf '%b\n' "$COSIGN_STUB_ERR" >&2
+exit "${COSIGN_STUB_RC:-0}"
+STUBEOF
+chmod +x "$STUB/cosign"
+# A PATH with the tools the verifier needs and no cosign.
+NOCOSIGN="$T/nocosign"; mkdir -p "$NOCOSIGN"
+for tool in bash env openssl python3 jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then ln -sf "$tool_path" "$NOCOSIGN/$tool"; fi
+done
+PATH_BEFORE_STUB="$PATH"
+export COSIGN_STUB_LOG="$T/cosign.argv"
+ANCHOR_RE='^https://github\.com/Hodeitek/hodeishield-attest-verifier/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+ANCHOR_ISSUER_URL='https://token.actions.githubusercontent.com'
+
+# The statement: the issuer, the attestation key and the status-list key of the
+# fixtures, minted from their kids as the key sets above are.
+ASKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+python3 - "$T/stmt-base.json" "$ISSUER_KID" "$ASKID" "$ISS" <<'PY'
+import json, sys
+out, akid, skid, iss = sys.argv[1:5]
+json.dump({"schema": "hodeishield.keys.statement.v1", "issuer": iss, "keys": [
+    {"kid": akid, "role": "attestation", "status": "active",
+     "published_at": iss + "/api/public/attest/keys", "active_since": "2026-01-01"},
+    {"kid": skid, "role": "status-list", "status": "active",
+     "published_at": iss + "/api/public/attest/status-keys", "active_since": "2026-01-01"}]},
+    open(out, "w"), indent=2)
+PY
+# st OUT PYTHON — a statement derived from the base one; `d` is the document.
+st() { edit "$T/stmt-base.json" "$1" "$2"; }
+printf '{}\n' > "$T/stmt.json.sigstore.json"
+cp "$T/stmt-base.json" "$T/stmt.json"
+A=(--anchor-file "$T/stmt.json")                         # the bundle: stmt.json.sigstore.json, by default
+PUB="$(jq -r '.keys[0].pub' "$T/jwks.json")"
+
+export PATH="$STUB:$PATH_BEFORE_STUB"
+
+rm -f "$COSIGN_STUB_LOG"
+expect 0 "the key statement stmt.json is signed by the release workflow of this repository" \
+  'cosign accepts the statement: the anchor is verified' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+expect 0 "lists kid '$ISSUER_KID' as an attestation key" 'the attestation key is listed (anchor_kid_listed)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+expect 0 "iss (E2) is the issuer '$ISS' the signed key statement names" 'the issuer matches the statement (anchor_issuer_matches)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+# What cosign was asked to do: the exact fixed identity pattern and issuer, the
+# bundle and the statement, and nothing that could name another identity.
+argv_has() {
+  if grep -qxF -- "$1" "$COSIGN_STUB_LOG"; then
+    printf 'ok - cosign was called with %s\n' "$2"; PASSED=$((PASSED + 1))
+  else
+    printf 'not ok - cosign was not called with %s\n' "$2"; sed 's/^/    # /' "$COSIGN_STUB_LOG"; FAILED=$((FAILED + 1))
+  fi
+}
+argv_has verify-blob 'verify-blob'
+argv_has '--certificate-identity-regexp' '--certificate-identity-regexp'
+argv_has "$ANCHOR_RE" 'the exact fixed identity pattern'
+argv_has '--certificate-oidc-issuer' '--certificate-oidc-issuer'
+argv_has "$ANCHOR_ISSUER_URL" 'the GitHub Actions OIDC issuer'
+argv_has '--bundle' '--bundle'
+argv_has 'b/stmt.json.sigstore.json' 'the bundle next to the statement (the default name), by name only'
+argv_has 's/stmt.json' 'the statement, by name only'
+if [ "$(wc -l < "$COSIGN_STUB_LOG" | tr -d ' ')" -eq 8 ] && ! grep -qxE -- '--certificate-identity|--certificate|--key|--insecure-ignore-tlog|--trusted-root' "$COSIGN_STUB_LOG"; then
+  printf 'ok - cosign was given exactly those 8 arguments and no option that could change the identity\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cosign was given other arguments\n'; sed 's/^/    # /' "$COSIGN_STUB_LOG"; FAILED=$((FAILED + 1))
+fi
+# No option and no environment variable changes who may sign the statement.
+COSIGN_CERTIFICATE_IDENTITY='x' COSIGN_CERTIFICATE_OIDC_ISSUER='https://evil.test' SIGSTORE_ROOT_FILE='' \
+  bash "$VERIFIER" --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}" > /dev/null 2>&1
+argv_has "$ANCHOR_RE" 'the same fixed pattern with identity variables set in the environment'
+# The statement passed in is not the path cosign saw, and a path is never shown.
+mkdir -p "$T/deep/dir"; cp "$T/stmt.json" "$T/deep/dir/stmt.json"; cp "$T/stmt.json.sigstore.json" "$T/deep/dir/stmt.json.sigstore.json"
+expect 0 'is signed by the release workflow' 'a statement given with a directory is accepted' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/deep/dir/stmt.json"
+lacks 'deep/dir' 'the directory of the statement is not printed'
+lacks "$T" 'no temporary or absolute path is printed on a verified run'
+
+# --- the cosign version ---------------------------------------------------------
+for v in v3.1.3 v3.1.4 v3.10.0 v4.0.0 v3.2.0-rc1; do
+  COSIGN_STUB_VERSION="$v" expect 0 'is signed by the release workflow' "cosign $v is new enough (compared numerically)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+done
+for v in v2.4.0 v3.1.2 v3.0.9 v2.99.99 v3.1.3-rc1 '' devel v3.1 v3.x.1 v03.1.3x; do
+  COSIGN_STUB_VERSION="$v" expect 2 'anchor could not be checked: --anchor-file needs cosign 3.1.3 or later' "cosign '$v' is too old or unreadable: could not check (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+done
+COSIGN_STUB_VERSION='v2.4.0' expect 2 "this one reports 'v2.4.0'" 'the old version is named in the message' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+lacks 'VERIFIED' 'no verdict on the attestation when cosign is too old'
+PATH="$NOCOSIGN" expect 2 'anchor could not be checked: --anchor-file needs cosign 3.1.3 or later, and no usable cosign was found' \
+  'cosign absent: could not check (2)' -- --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+PATH="$NOCOSIGN" expect 0 'VERIFIED — this document was signed' 'cosign is optional: without --anchor-file nothing needs it' -- \
+  --attestation "$T/att.json" "${COMMON[@]}"
+PATH="$NOCOSIGN" expect 0 'GOOD — not revoked' 'cosign is optional: --status-list without --anchor-file does not need it' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+
+# --- cosign says no: always exit 2, with the cause in the text ---------------------
+fail_case() {   # NAME EXPECTED_CAUSE STDERR
+  COSIGN_STUB_RC=1 COSIGN_STUB_ERR="$3" expect 2 "anchor could not be checked: $2" "cosign fails, $1: could not check (2), never 1" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+  lacks 'VERIFIED' "no verdict on the attestation when cosign fails, $1"
+}
+fail_case 'nothing matched' 'cosign could not verify the statement' ''
+fail_case 'unknown message' 'cosign could not verify the statement' 'Error: something nobody has seen'
+fail_case 'wrong identity' 'the signing identity does not match the release workflow of this repository' \
+  'Error: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "^x$", got "keyless@projectsigstore.iam.gserviceaccount.com"\nerror during command execution: failed to verify certificate identity: no matching CertificateIdentity found'
+fail_case 'wrong identity (legacy message)' 'the signing identity does not match the release workflow of this repository' \
+  'Error: none of the expected identities matched what was in the certificate, got subjects [x] with issuer y'
+fail_case 'altered statement' 'the signature is invalid, or the statement was altered after it was signed' \
+  'Error: failed to verify signature: could not verify message: invalid signature when validating ASN.1 encoded signature'
+fail_case 'bad bundle signature' 'the signature is invalid, or the statement was altered after it was signed' \
+  'Error: error verifying bundle: failed to verify certificate: x509: certificate signed by unknown authority'
+fail_case 'trust root' 'the Sigstore trust root could not be obtained' \
+  'Error: getting trusted root from TUF for new bundle verification: error creating TUF client: dial tcp: lookup tuf-repo-cdn.sigstore.dev: no such host'
+fail_case 'trust root (not found)' 'the Sigstore trust root could not be obtained' \
+  'Error: trusted root is required when using new bundle format'
+fail_case 'malformed bundle' 'the bundle is unreadable or malformed' 'Error: unexpected end of JSON input'
+fail_case 'unreadable bundle' 'the bundle is unreadable or malformed' 'Error: reading stmt.json.sigstore.json: open stmt.json.sigstore.json: no such file or directory'
+# cosign is untrusted text: paths are cut to a name and control characters escaped.
+COSIGN_STUB_RC=1 COSIGN_STUB_ERR='Error: open /srv/secret-dir/sub/bundle.json: permission denied\nError: see ./relative/dir/file.json and "../up/dir/x.json" at https://example.test/a/b\n\033[31mred\033[0m' \
+  expect 2 'cosign: Error: open bundle.json: permission denied' 'a path in what cosign printed is cut to its name' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+lacks 'secret-dir' 'a directory of cosign output is not printed'
+lacks 'relative/dir' 'a relative directory of cosign output is not printed'
+lacks "$T" 'no temporary directory of the verifier is printed on a failed anchor'
+if grep -qF 'at https://example.test/a/b' "$LAST_OUT"; then
+  printf 'ok - a URL in what cosign printed is kept whole\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - a URL in what cosign printed was changed\n'; FAILED=$((FAILED + 1))
+fi
+COSIGN_STUB_RC=1 COSIGN_STUB_ERR='\033[31mred\033[0m' expect 2 '\x1b[31mred\x1b[0m' 'control characters in what cosign printed are escaped' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+if grep -q $'\033' "$LAST_OUT"; then
+  printf 'not ok - a raw ESC from cosign reached the terminal\n'; FAILED=$((FAILED + 1))
+else
+  printf 'ok - no raw ESC from cosign reaches the terminal\n'; PASSED=$((PASSED + 1))
+fi
+# A forged document does not turn a failed anchor into a verdict: the anchor stops the run.
+expect 2 'anchor could not be checked' 'a tampered document with a statement that cannot be verified is still exit 2' -- \
+  --attestation "$T/tampered-field.json" "${COMMON[@]}" --anchor-file "$T/stmt.json" --anchor-bundle "$T/missing-bundle.json"
+
+# --- files ----------------------------------------------------------------------------
+cp "$T/stmt-base.json" "$T/stmt-nobundle.json"
+expect 2 'anchor could not be checked: the bundle stmt-nobundle.json.sigstore.json cannot be read' 'no bundle next to the statement (the default name is the statement plus .sigstore.json): could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-nobundle.json"
+expect 2 'anchor could not be checked: the statement nothing.json cannot be read' 'an unreadable statement: could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/nothing.json"
+cp "$T/stmt-base.json" "$T/other-name.json"; cp "$T/stmt.json.sigstore.json" "$T/b.bundle"
+rm -f "$COSIGN_STUB_LOG"
+expect 0 'is signed by the release workflow' '--anchor-bundle names a bundle that is not next to the statement' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/other-name.json" --anchor-bundle "$T/b.bundle"
+argv_has 'b/b.bundle' 'the bundle given with --anchor-bundle, by name only'
+expect 2 '--anchor-bundle is the bundle of the statement given with --anchor-file' '--anchor-bundle without --anchor-file is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-bundle "$T/b.bundle"
+
+# --- the statement is read strictly ----------------------------------------------------
+# Each of these has a good signature as far as the stub goes: it is the statement
+# itself that is wrong. Exit 2 (anchor_malformed), never 1.
+bad_statement() {   # NAME PYTHON
+  st "$T/stmt-bad.json" "$2"; cp "$T/stmt.json.sigstore.json" "$T/stmt-bad.json.sigstore.json"
+  expect 2 'anchor could not be checked: the statement stmt-bad.json is malformed' "malformed statement, $1: could not check (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-bad.json"
+}
+bad_statement 'wrong schema' 'd["schema"] = "hodeishield.keys.statement.v2"'
+bad_statement 'a member that is not documented' 'd["note"] = "hello"'
+bad_statement 'no issuer' 'del d["issuer"]'
+bad_statement 'issuer not a string' 'd["issuer"] = 5'
+bad_statement 'keys empty' 'd["keys"] = []'
+bad_statement 'keys not an array' 'd["keys"] = {"a": 1}'
+bad_statement 'a key entry that is not an object' 'd["keys"].append("x")'
+bad_statement 'an undocumented key member' 'd["keys"][0]["extra"] = 1'
+bad_statement 'a missing key member' 'del d["keys"][0]["published_at"]'
+bad_statement 'a kid that is not a kid' 'd["keys"][0]["kid"] = "short"'
+bad_statement 'the same kid twice' 'd["keys"].append(dict(d["keys"][0]))'
+bad_statement 'a role that is not a role' 'd["keys"][0]["role"] = "admin"'
+bad_statement 'a status that is not a status' 'd["keys"][0]["status"] = "gone"'
+bad_statement 'a bad active_since' 'd["keys"][0]["active_since"] = "2026-02-30"'
+bad_statement 'retired_at on an active key' 'd["keys"][0]["retired_at"] = "2026-07-31T18:53:58Z"'
+bad_statement 'a retired key without retired_at' 'd["keys"][0]["status"] = "retired"'
+for bad_val in '2026-07-31T18:53:58.000Z' '2026-07-31t18:53:58Z' '2026-07-31T18:53:58+00:00' '2026-02-30T18:53:58Z' '2026-07-31'; do
+  bad_statement "retired_at '$bad_val'" "d['keys'][0].update(status='retired', retired_at='$bad_val')"
+done
+edit_text "$T/stmt-base.json" "$T/stmt-dup.json" 't = t.replace("\"issuer\"", "\"issuer\": \"https://other.test\",\n  \"issuer\"", 1)'
+cp "$T/stmt.json.sigstore.json" "$T/stmt-dup.json.sigstore.json"
+expect 2 'anchor could not be checked: the statement stmt-dup.json repeats members (issuer)' 'a duplicate member is not accepted: could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-dup.json"
+edit_text "$T/stmt-base.json" "$T/stmt-dupkey.json" 't = t.replace("\"role\": \"attestation\"", "\"role\": \"status-list\", \"role\": \"attestation\"", 1)'
+cp "$T/stmt.json.sigstore.json" "$T/stmt-dupkey.json.sigstore.json"
+expect 2 'repeats members' 'a duplicate member inside a key entry is not accepted: could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-dupkey.json"
+printf '\xef\xbb\xbf' | cat - "$T/stmt-base.json" > "$T/stmt-bom.json"; cp "$T/stmt.json.sigstore.json" "$T/stmt-bom.json.sigstore.json"
+expect 2 'anchor could not be checked: the statement stmt-bom.json is not strict JSON' 'a statement with a BOM is not strict JSON: could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-bom.json"
+printf 'not json\n' > "$T/stmt-text.json"; cp "$T/stmt.json.sigstore.json" "$T/stmt-text.json.sigstore.json"
+expect 2 'anchor could not be checked: the statement stmt-text.json is not strict JSON' 'a statement that is not JSON: could not check (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-text.json"
+# A value from the statement is escaped before it is shown.
+st "$T/stmt-esc.json" 'd["issuer"] = "https://x.test\u001b[31m"'; cp "$T/stmt.json.sigstore.json" "$T/stmt-esc.json.sigstore.json"
+expect 1 'https://x.test\x1b[31m' 'an issuer with control characters is printed escaped (anchor_issuer_mismatch)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-esc.json"
+
+# --- membership: the statement verified, and it does not list this key ---------------------
+mem() {   # NAME STATEMENT_PYTHON
+  st "$T/stmt-$1.json" "$2"; cp "$T/stmt.json.sigstore.json" "$T/stmt-$1.json.sigstore.json"
+}
+mem nokid 'd["keys"] = d["keys"][1:]'
+expect 1 "anchor_kid_absent — the key bytes derive kid '$ISSUER_KID', which the signed key statement does not list" 'a key the statement does not list is a failed check (1)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-nokid.json"
+lacks 'anchor_kid_listed' 'the kid is not reported as listed'
+lacks 'lists kid' 'the kid is not reported as listed (text)'
+mem role 'd["keys"][0]["role"] = "status-list"'
+expect 1 "anchor_role_mismatch — the signed key statement lists kid '$ISSUER_KID' as 'status-list'" 'the kid listed with another role is a failed check (1)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-role.json"
+mem issuer 'd["issuer"] = "https://other.test"'
+expect 1 "anchor_issuer_mismatch — iss is '$ISS', the signed key statement names the issuer 'https://other.test'" 'an issuer the statement does not name is a failed check (1)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-issuer.json"
+# The kid is recomputed from the key bytes: a key set that labels the other key
+# with the listed kid is mislabelled (kid_mismatch), and the pin to the kid is
+# compared with the recomputed one, so the statement cannot be satisfied by a label.
+edit "$T/other-jwks.json" "$T/other-as-issuer.json" "d['keys'][0]['kid'] = '$ISSUER_KID'"
+"${MINT[@]}" attest --key "$T/other.pem" --slug "$SLUG" --iss "$ISS" --generated-at "$GEN" --expires-at "$EXP" \
+  --framework iso27001=substantial --declare-kid "$ISSUER_KID" --out "$T/att-other-label.json" >/dev/null
+expect 1 "anchor_kid_absent" 'a key that names a listed kid but derives another is not admitted by its label' -- \
+  --attestation "$T/att-other-label.json" --jwks "$T/other-as-issuer.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --anchor-file "$T/stmt.json"
+
+# --- retirement ------------------------------------------------------------------------------
+set_retired '"2026-07-31T18:53:58Z"'
+cp "$T/jwks-ret.json" "$T/jwks-ret-keep.json"
+RETC=(--jwks "$T/jwks-ret-keep.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
+mem ret "d['keys'][0].update(status='retired', retired_at='$RET_AT_S'); d['keys'][0].pop('active_since')"
+expect 0 "is retired (at $RET_AT_S), but this document was generated at 2026-07-31T18:53:57.999Z" \
+  'statement and key set agree on the retirement and the document predates it' -- \
+  --attestation "$T/ret-before.json" "${RETC[@]}" --anchor-file "$T/stmt-ret.json"
+expect 1 "retired_key — this document was generated at 2026-07-31T18:53:58.000Z, at or after the retirement of key $ISSUER_KID at $RET_AT_S" \
+  'a retired kid used at the retirement instant fails retired_key (existing code), with the anchor agreeing' -- \
+  --attestation "$T/ret-after.json" "${RETC[@]}" --anchor-file "$T/stmt-ret.json"
+lacks 'anchor_retired_mismatch' 'agreeing retirements are not a mismatch'
+expect 1 "anchor_retired_mismatch — the signed key statement retires kid '$ISSUER_KID' at '' (empty: not retired), the key set says hs_retired_at '$RET_AT_S'" \
+  'the key set retires a key the statement does not: a failed check (1)' -- \
+  --attestation "$T/ret-before.json" "${RETC[@]}" --anchor-file "$T/stmt.json"
+expect 1 "anchor_retired_mismatch — the signed key statement retires kid '$ISSUER_KID' at '$RET_AT_S' (empty: not retired), the key set says hs_retired_at '' (empty: none)" \
+  'the statement retires a key the key set does not: a failed check (1)' -- \
+  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW" --anchor-file "$T/stmt-ret.json"
+expect 1 "retired_key — this document was generated at 2026-07-31T18:53:58.000Z" \
+  'the retirement of the statement applies even when the key set has none (retired_key)' -- \
+  --attestation "$T/ret-after.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW" --anchor-file "$T/stmt-ret.json"
+mem ret2 "d['keys'][0].update(status='retired', retired_at='2026-07-31T18:53:59Z'); d['keys'][0].pop('active_since')"
+expect 1 "anchor_retired_mismatch — the signed key statement retires kid '$ISSUER_KID' at '2026-07-31T18:53:59Z'" \
+  'two different instants are a failed check (1)' -- \
+  --attestation "$T/ret-before.json" "${RETC[@]}" --anchor-file "$T/stmt-ret2.json"
+expect 1 'retired_key — this document was generated at 2026-07-31T18:53:58.000Z' \
+  'the earlier of two different retirements is the one that applies' -- \
+  --attestation "$T/ret-after.json" "${RETC[@]}" --anchor-file "$T/stmt-ret2.json"
+
+# --- --pub-b64url: no JWK, but the kid is recomputed from the key bytes ------------------------
+expect 0 "lists kid '$ISSUER_KID' as an attestation key" '--pub-b64url with an anchor: the recomputed kid is listed' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" "${A[@]}"
+expect 1 "anchor_kid_absent — the key bytes derive kid '$ISSUER_KID'" '--pub-b64url with an anchor that does not list the recomputed kid: a failed check (1)' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --anchor-file "$T/stmt-nokid.json"
+expect 1 'anchor_role_mismatch' '--pub-b64url with an anchor that lists the kid under another role: a failed check (1)' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" --anchor-file "$T/stmt-role.json"
+expect 0 'before the retirement' '--pub-b64url with a retired statement entry and a document that predates the retirement' -- \
+  --attestation "$T/ret-before.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW" --anchor-file "$T/stmt-ret.json"
+lacks 'anchor_retired_mismatch' '--pub-b64url has no key set, so there is no hs_retired_at to disagree with'
+expect 1 'retired_key — this document was generated at 2026-07-31T18:53:58.000Z' '--pub-b64url: the statement retirement applies to a document generated at the retirement' -- \
+  --attestation "$T/ret-after.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW" --anchor-file "$T/stmt-ret.json"
+
+# --- --status-list: the status key is checked the same way, and a failure is UNKNOWN (3) ------------
+expect 0 "lists kid '$ASKID' as a status-list key" 'the status-list key is listed (anchor_status_kid_listed)' -- \
+  "${SL[@]}" --status "$T/list-empty.json" "${A[@]}"
+expect 0 'GOOD — not revoked' 'a listed attestation key and status key: good' -- \
+  "${SL[@]}" --status "$T/list-empty.json" "${A[@]}"
+mem nostatus 'd["keys"] = d["keys"][:1]'
+expect 3 "anchor_status_kid_absent — the status-list key bytes derive kid '$ASKID'" 'a status key the statement does not list leaves the status UNKNOWN (3)' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --anchor-file "$T/stmt-nostatus.json"
+mem statusrole 'd["keys"][1]["role"] = "attestation"'
+expect 3 "anchor_status_role_mismatch — the signed key statement lists kid '$ASKID' as 'attestation'" 'a status key listed as an attestation key is UNKNOWN (3)' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --anchor-file "$T/stmt-statusrole.json"
+mem statusret "d['keys'][1].update(status='retired', retired_at='$RET_AT_S'); d['keys'][1].pop('active_since')"
+expect 3 "anchor_status_retired_mismatch — the signed key statement retires kid '$ASKID' at '$RET_AT_S'" 'a status key retired in the statement only is UNKNOWN (3)' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --anchor-file "$T/stmt-statusret.json"
+expect 3 'UNKNOWN' 'the status path never turns a failed anchor check into GOOD' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --anchor-file "$T/stmt-statusret.json"
+lacks 'GOOD' 'no GOOD when the status key is not anchored'
+# The attestation key is checked in this mode too, and a failure is exit 1.
+expect 1 'anchor_kid_absent' 'in --status-list mode the attestation key must be listed too (1)' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --anchor-file "$T/stmt-nokid.json"
+# A standalone list query has no attestation key; only the status key is asked about.
+expect 0 'GOOD — not revoked' 'a standalone status query: only the status-list key must be listed' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW" --anchor-file "$T/stmt-nokid.json"
+expect 3 'anchor_status_kid_absent' 'a standalone status query: an unlisted status key is UNKNOWN (3)' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW" --anchor-file "$T/stmt-nostatus.json"
+# The status key retired in both places agrees; the list is issued before it.
+edit "$T/status-keys.json" "$T/status-keys-anchor-ret.json" "d['keys'][0]['hs_retired_at'] = '2027-01-01T00:00:00Z'"
+mem statusret2 "d['keys'][1].update(status='retired', retired_at='2027-01-01T00:00:00Z'); d['keys'][1].pop('active_since')"
+expect 0 'GOOD — not revoked' 'a status key retired in both places, with a list that predates it, is good' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys-anchor-ret.json" --check-kid "$ISSUER_KID" --now "$NOW" --anchor-file "$T/stmt-statusret2.json"
+
+export PATH="$PATH_BEFORE_STUB"
+unset COSIGN_STUB_LOG
 
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
