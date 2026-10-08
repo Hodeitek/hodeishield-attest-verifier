@@ -69,6 +69,11 @@ before it takes effect. Only the latest release is supported, as
 - The list of checks behind the reason codes lost a check made inside a
   subshell, and merged two different checks that share a code. Both are fixed;
   the text output is unchanged.
+- The tests: a `--json` check in `tests/run.sh` that could not be evaluated (it
+  raised, or it spanned several lines) was reported as passing, and so was a
+  case of `tests/vectors.sh --json` on which the checker raised. Both are now
+  failures with the traceback, and each harness checks itself first. The five
+  checks written over several lines now run, and hold.
 
 ### Changed
 - §6 item 2 of the verification document no longer says the Web PKI is the only

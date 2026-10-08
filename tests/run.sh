@@ -1145,13 +1145,16 @@ PYBIN="$(command -v python3)"
 # jexpect CODE NAME CHECK -- verifier args... — run with --json added; CODE is the
 # expected exit code and CHECK a Python expression over the object `o` (and the
 # exit code `rc`) that must be true. JTEXT, when set, is a text-mode output file.
+# The check is evaluated in parentheses, so that it may span several lines. A
+# check that cannot be evaluated (it raises, or it is not an expression) is a
+# failure with its traceback, never a pass: the Python exit status is read.
 jexpect() {
   local want="$1" name="$2" check="$3"; shift 4
-  local out="$T/jout.$((PASSED + FAILED))" got why
+  local out="$T/jout.$((PASSED + FAILED))" got why pyrc
   if [ -n "${JSON_FIRST:-}" ]; then NO_COLOR=1 bash "$VERIFIER" --json "$@" > "$out" 2> "$out.err"
   else NO_COLOR=1 bash "$VERIFIER" "$@" --json > "$out" 2> "$out.err"; fi
   got=$?
-  why="$("$PYBIN" -I - "$out" "$out.err" "$got" "$want" "$check" <<'PY'
+  why="$("$PYBIN" -I - "$out" "$out.err" "$got" "$want" "$check" 2>&1 <<'PY'
 import json, os, sys
 out, err, got, want, check = sys.argv[1:6]
 raw = open(out, "rb").read()
@@ -1165,12 +1168,35 @@ if o.get("exit_code") != rc: print("exit_code %r, process exit %d" % (o.get("exi
 if rc != int(want): print("exit %d, expected %s" % (rc, want)); sys.exit()
 env = {"o": o, "rc": rc, "text": open(os.environ["JTEXT"], encoding="utf-8").read() if os.environ.get("JTEXT") else ""}
 # eval() on the expression written in this file, never on anything from a document.
-if not eval(check, env): print("false: " + check)
+if not eval("(" + check + "\n)", env): print("false: " + check)
 PY
 )"
-  if [ -z "$why" ]; then printf 'ok - json: %s\n' "$name"; PASSED=$((PASSED + 1))
+  pyrc=$?
+  if [ "$pyrc" -ne 0 ]; then
+    printf 'not ok - json: %s (the check could not be evaluated, python exit %s)\n' "$name" "$pyrc"
+    printf '%s\n' "$why" | sed 's/^/    # /'; head -c 1500 "$out" | sed 's/^/    # /'; FAILED=$((FAILED + 1))
+  elif [ -z "$why" ]; then printf 'ok - json: %s\n' "$name"; PASSED=$((PASSED + 1))
   else printf 'not ok - json: %s (%s)\n' "$name" "$why"; head -c 1500 "$out" | sed 's/^/    # /'; FAILED=$((FAILED + 1)); fi
 }
+
+# The harness itself: a check that raises, or a false check over several lines,
+# must be "not ok", and a true one over several lines "ok". Run in a subshell, so
+# that the counters of the suite are not touched; only the verdict line is read.
+jexpect_self() {   # NAME WANT_PREFIX CHECK
+  local line
+  line="$(jexpect 0 "harness self-test" "$3" -- --attestation "$T/att.json" "${COMMON[@]}" | head -1)"
+  case "$line" in
+    "$2 - json: harness self-test"*) printf 'ok - json harness: %s\n' "$1"; PASSED=$((PASSED + 1)) ;;
+    *) printf 'not ok - json harness: %s (got: %s)\n' "$1" "$line"; FAILED=$((FAILED + 1)) ;;
+  esac
+}
+jexpect_self 'a check that raises is not ok' 'not ok' '1 / 0 == 0'
+jexpect_self 'a check that reads a missing member is not ok' 'not ok' 'o["no such member"] == 1'
+jexpect_self 'a false check over several lines is not ok' 'not ok' 'o["verdict"] == "verified"
+   and o["verdict"] == "failed"'
+jexpect_self 'a true check over several lines is ok' 'ok' 'o["verdict"] == "verified"
+   and o["exit_code"] == 0'
+jexpect_self 'a check that is not an expression is not ok' 'not ok' 'import os'
 
 # A verified document: the attested content equals the text block.
 expect 0 'ISO27001 (iso27001): substantial' 'text reference for the JSON of a verified document' -- \

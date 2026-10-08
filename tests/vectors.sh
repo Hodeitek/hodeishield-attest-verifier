@@ -65,6 +65,63 @@ sys.exit(0 if n > (3, 1, 3) or (n == (3, 1, 3) and not m.group(4)) else 1)
   esac
 }
 
+# json_why OUT ERR GOT WANT CODE — what is wrong with one --json run, or nothing.
+# A checker that cannot finish (it raises on an object of an unexpected shape) is
+# a failure with its traceback, never a pass: its exit status is read.
+json_why() {
+  local why='' rc=0
+  why="$(python3 -I -c '
+import json, sys
+out, err, got, want, code = sys.argv[1:6]
+raw = open(out, "rb").read()
+if open(err, "rb").read():
+    print("something on stderr"); sys.exit()
+if not raw.endswith(b"\n") or any(b < 0x20 or b > 0x7e for b in raw[:-1]):
+    print("stdout is not a single line of printable ASCII"); sys.exit()
+try:
+    o = json.loads(raw)
+except ValueError:
+    print("stdout is not JSON"); sys.exit()
+if not isinstance(o, dict):
+    print("stdout is not one JSON object"); sys.exit()
+if o.get("schema") != "hodeishield.verifier.result.v1": print("schema is %r" % (o.get("schema"),))
+elif o.get("exit_code") != int(got): print("exit_code %r, process exit %s" % (o.get("exit_code"), got))
+elif int(got) != int(want): print("exit %s, expected %s" % (got, want))
+elif o.get("reason") != code and not (
+        # A document that breaks several rules: the manifest names one of them, and
+        # it must at least be among the failed checks of this exit class.
+        sum(1 for c in o.get("checks", []) if c.get("result") == "fail" and c.get("exit_class") == int(got)) > 1
+        and any(c.get("code") == code and c.get("result") == "fail" and c.get("exit_class") == int(got)
+                for c in o.get("checks", []))):
+    print("reason %r, expected %r" % (o.get("reason"), code))
+elif int(got) != 0 and o.get("attested") is not None: print("attested is not null on exit %s" % got)
+elif int(got) == 0 and not isinstance(o.get("attested"), (dict, type(None))): print("attested is not an object or null")
+' "$@" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'the checker could not finish (python exit %s): %s' "$rc" "$why"
+  else
+    printf '%s' "$why"
+  fi
+}
+
+# The checker itself, before it judges any case: an object on which it raises
+# must be a failure, and a well-formed one must pass.
+if [ "$JSON_MODE" -eq 1 ]; then
+  echo '# vectors v1 --json: the checker'
+  : > "$T/self.err"
+  printf '{"schema":"hodeishield.verifier.result.v1","exit_code":1,"reason":"x","checks":5,"attested":null}\n' > "$T/self-raise.out"
+  printf '{"schema":"hodeishield.verifier.result.v1","exit_code":1,"reason":"x","checks":[],"attested":null}\n' > "$T/self-good.out"
+  self_raise="$(json_why "$T/self-raise.out" "$T/self.err" 1 1 y)"
+  self_good="$(json_why "$T/self-good.out" "$T/self.err" 1 1 x)"
+  if [ -n "$self_raise" ] && [ -z "$self_good" ]; then
+    echo 'ok - the checker fails an object it cannot read and passes a good one'
+  else
+    echo 'not ok - the checker passed an object it cannot read, or failed a good one'
+    printf '    # %s\n' "raise: ${self_raise:-<nothing>}" "good: ${self_good:-<nothing>}"
+    exit 1
+  fi
+fi
+
 echo '# vectors v1: SHA256SUMS'
 if ! python3 - "$VDIR" <<'PY'
 import hashlib, os, sys
@@ -146,33 +203,7 @@ while IFS= read -r -d '' id; do
   if [ "$JSON_MODE" -eq 1 ]; then
     NO_COLOR=1 bash "$VERIFIER" "${args[@]}" --json > "$out" 2> "$out.err" < /dev/null
     got=$?
-    why="$(python3 -I -c '
-import json, sys
-out, err, got, want, code = sys.argv[1:6]
-raw = open(out, "rb").read()
-if open(err, "rb").read():
-    print("something on stderr"); sys.exit()
-if not raw.endswith(b"\n") or any(b < 0x20 or b > 0x7e for b in raw[:-1]):
-    print("stdout is not a single line of printable ASCII"); sys.exit()
-try:
-    o = json.loads(raw)
-except ValueError:
-    print("stdout is not JSON"); sys.exit()
-if not isinstance(o, dict):
-    print("stdout is not one JSON object"); sys.exit()
-if o.get("schema") != "hodeishield.verifier.result.v1": print("schema is %r" % (o.get("schema"),))
-elif o.get("exit_code") != int(got): print("exit_code %r, process exit %s" % (o.get("exit_code"), got))
-elif int(got) != int(want): print("exit %s, expected %s" % (got, want))
-elif o.get("reason") != code and not (
-        # A document that breaks several rules: the manifest names one of them, and
-        # it must at least be among the failed checks of this exit class.
-        sum(1 for c in o.get("checks", []) if c.get("result") == "fail" and c.get("exit_class") == int(got)) > 1
-        and any(c.get("code") == code and c.get("result") == "fail" and c.get("exit_class") == int(got)
-                for c in o.get("checks", []))):
-    print("reason %r, expected %r" % (o.get("reason"), code))
-elif int(got) != 0 and o.get("attested") is not None: print("attested is not null on exit %s" % got)
-elif int(got) == 0 and not isinstance(o.get("attested"), (dict, type(None))): print("attested is not an object or null")
-' "$out" "$out.err" "$got" "$want" "$code")"
+    why="$(json_why "$out" "$out.err" "$got" "$want" "$code")"
   else
     NO_COLOR=1 bash "$VERIFIER" "${args[@]}" > "$out" 2>&1 < /dev/null
     got=$?
