@@ -1597,6 +1597,27 @@ jexpect 0 'a check recorded in a subshell appears, in order, and two same-code c
   --attestation "$T/att.json" "${COMMON[@]}"
 VERIFIER="$VERIFIER_REAL"
 
+# The writer used without python3 (json_emit_bash) relies on json_str(), the JSON
+# string encoder. Section 2 used to define a second json_str() (a header reader)
+# that replaced it for the rest of the run. A copy of the script writes the
+# object with json_emit_bash right after section 2, from a verified run's state.
+PROBE2="$T/probe-header-verifier.sh"
+"$PYBIN" -I - "$VERIFIER" "$PROBE2" "$T/probe-header.json" <<'PY'
+import sys
+t = open(sys.argv[1]).read()
+anchor = 'TYP="$(header_field "$WORKDIR/header.json" typ)"\n'
+assert t.count(anchor) == 1
+open(sys.argv[2], "w").write(t.replace(anchor, anchor + 'json_emit_bash 0 attestation verified > "%s"\n' % sys.argv[3]))
+PY
+NO_COLOR=1 bash "$PROBE2" --attestation "$T/att.json" "${COMMON[@]}" > /dev/null 2>&1
+if [ "$("$PYBIN" -I -c 'import json,sys; o = json.load(open(sys.argv[1])); print(o["schema"], o["verdict"], o["reason"])' "$T/probe-header.json" 2>/dev/null)" \
+     = 'hodeishield.verifier.result.v1 verified verified' ]; then
+  printf 'ok - json: the writer without python3 still writes JSON after the header section ran\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - json: the writer without python3 is broken after the header section ran\n'
+  head -c 600 "$T/probe-header.json" 2>/dev/null | sed 's/^/    # /'; FAILED=$((FAILED + 1))
+fi
+
 # Without python3 a smaller, still valid object is written (nothing attested).
 NOPY="$T/nopy"; mkdir -p "$NOPY"
 for tool in bash env openssl jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
@@ -1763,6 +1784,16 @@ else
   printf 'not ok - output refers to a non-public design document:\n'
   grep -nE 'docs/architecture|design doc' "${leaks[@]}" | sed 's/^/    # /'
   FAILED=$((FAILED + 1))
+fi
+
+# --- one definition per function (static) ---------------------------------------
+# A second definition of a function silently replaces the first from the point
+# where it runs, for every caller (json_str() was defined twice).
+mapfile -t dup_fns < <(grep -oE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*\(\)' "$VERIFIER" | tr -d ' \t' | sort | uniq -d)
+if [ "${#dup_fns[@]}" -eq 0 ]; then
+  printf 'ok - every function of the script is defined once\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - functions defined more than once: %s\n' "${dup_fns[*]}"; FAILED=$((FAILED + 1))
 fi
 
 # --- reason codes (static) ----------------------------------------------------

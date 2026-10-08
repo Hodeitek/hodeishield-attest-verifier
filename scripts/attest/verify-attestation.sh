@@ -1782,10 +1782,10 @@ fi
 
 # --- 2. Header ---------------------------------------------------------------
 printf '\n%s[2] Header%s\n' "$BOLD" "$RESET"
-json_str() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1; }
-ALG="$(json_str "$WORKDIR/header.json" alg)"
-KID="$(json_str "$WORKDIR/header.json" kid)"
-TYP="$(json_str "$WORKDIR/header.json" typ)"
+header_field() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1; }
+ALG="$(header_field "$WORKDIR/header.json" alg)"
+KID="$(header_field "$WORKDIR/header.json" kid)"
+TYP="$(header_field "$WORKDIR/header.json" typ)"
 printf '        %s\n' "$(esc "$(cat "$WORKDIR/header.json")")"
 
 # Never dispatch on `alg` — compare it as a constant. The verification primitive
@@ -2045,7 +2045,7 @@ fi
 printf '\n%s[6] Freshness%s\n' "$BOLD" "$RESET"
 NOW="${NOW_OVERRIDE:-$(date -u +%s)}"
 if [ -n "$POSTURE_FILE" ]; then
-  # Read as JSON, by TOP-LEVEL member — never with json_str(). json_str() takes
+  # Read as JSON, by TOP-LEVEL member — never with header_field(). header_field() takes
   # the FIRST line anywhere in the file that looks like `"slug": "..."`, nested
   # objects included, and the canonical encoder ignores members it does not
   # read. Before 2026-09-29 that meant an unsigned nested member could decide

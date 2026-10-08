@@ -113,6 +113,11 @@ before it takes effect. Only the latest release is supported, as
   `--anchor-file` skipped its issuer check for it. It is now a failed check,
   `iss_empty` (exit 1), and the anchor's issuer check is never skipped
   (`anchor_issuer_mismatch`). The first part also affected earlier releases.
+- `--json`: the script defined `json_str()` twice, and the header reader of
+  section 2 replaced the JSON string encoder that the object written without
+  python3 relies on. The header reader is now `header_field()`; a test checks
+  that no function is defined twice. No run reached the broken writer (python3
+  is required before section 2 on every path), so no output changes.
 - `--json`: `anchor.verified` was true when the run stopped after the key
   statement verified and before the membership or issuer check ran (an unknown
   kid, a document that could not be canonicalised, a status list that failed
