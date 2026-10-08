@@ -138,8 +138,53 @@ docker run --rm -v "$PWD":/work:ro -w /work \
 The image is the upstream Debian 13 image, pinned by digest: the same one CI
 tests on, so a rebuilt tag cannot change what you run. The digest pins the
 base image; `openssl`, `python3` and `jq` come from Debian 13's archive when the
-command runs, so they carry Debian's current security updates. An official signed image
-is tracked in [#22](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/22).
+command runs, so they carry Debian's current security updates.
+
+### A signed image
+
+From v1.4.0 on, each release also publishes a ready-made image,
+`ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
+(`:v1.4.0`). There is no `latest` tag, and releases before v1.4.0 have no
+image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
+and its entrypoint is the verifier, so it needs no network to run. Take its
+digest from the release page, and pin that digest, not the tag. Check the
+signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
+
+```bash
+cosign verify ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/image.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Replace `<digest>` and `<TAG>` with the image digest and the release tag. Then
+run it like the commands above, without the script and the `bash -c` wrapper:
+
+```bash
+docker run --rm -v "$PWD":/work:ro \
+  ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
+  --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
+```
+
+To check that the script inside is the one the release signed, compare its
+sha256 with the one in the release's `SHA256SUMS` (see
+[Verifying a release](#verifying-a-release)):
+
+```bash
+docker run --rm --entrypoint sha256sum \
+  ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
+  /usr/local/bin/verify-attestation.sh
+```
+
+The image label `com.hodeitek.verifier.script-sha256` records the same value
+(`docker inspect`). Treat the label as information: the signed digest and this
+command are the evidence. The release workflow also checks the script against
+the release's signed `SHA256SUMS` before it builds the image, and again inside
+the build. The image carries a signed SBOM; fetch and check it with
+`gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier`.
+The signature proves which workflow built the image and when, not that the
+image can be rebuilt bit for bit: the Debian packages are taken from the
+archive on the day of the build.
 
 ## Exit codes — the distinction matters
 
@@ -426,6 +471,9 @@ the reason it is a short, single, readable script.
 - `bash tests/container.sh` extracts both container commands from this README
   and runs them as written (live example, plus offline rejection and revocation
   cases); the "Container route" workflow does so with Docker and Podman.
+- A pull request that changes the Dockerfile builds the signed-image
+  candidate without pushing it and runs `tests/image-smoke.sh` in it
+  (`--help`, a non-root user, and the published `valid-detached` vector).
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document

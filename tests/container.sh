@@ -73,14 +73,14 @@ run_block() { ( cd "$1" && NO_COLOR=1 bash "${3:-$BLOCK}" ) > "$2" 2>&1; }
 stage() { mkdir -p "$1" && cp -R "$ROOT/scripts" "$1/"; }
 
 # --- a. digest consistency ---------------------------------------------------
-FILES=(README.md .github/workflows/ci.yml .github/workflows/live.yml .github/workflows/container.yml)
+FILES=(README.md .github/workflows/ci.yml .github/workflows/live.yml .github/workflows/container.yml .github/workflows/release.yml .github/workflows/image.yml container/Dockerfile)
 for f in "${FILES[@]}"; do
   grep -Eq "$DIGEST_RE" "$ROOT/$f" || fail "no pinned debian:trixie-slim digest in $f"
 done
 n="$(cd "$ROOT" && grep -Eho "$DIGEST_RE" "${FILES[@]}" | sort -u | wc -l)"
-[ "$n" -eq 1 ] || fail "the pinned image digest differs between README.md and the workflows ($n distinct); change them in the same commit"
+[ "$n" -eq 1 ] || fail "the pinned image digest differs between README.md, the workflows and the Dockerfile ($n distinct); change them in the same commit"
 IMAGE="$(grep -Eho "$DIGEST_RE" "$ROOT/README.md" | sort -u)"
-ok "one image digest in README.md and the workflows"
+ok "one image digest in README.md, the workflows and the Dockerfile"
 
 # --- b. live -----------------------------------------------------------------
 fetch() {

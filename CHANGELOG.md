@@ -25,6 +25,11 @@ before it takes effect. Only the latest release is supported, as
   could not be checked" as exit 2. The option is not in the script yet.
 - A daily check that the live key sets contain no key, and no retirement time,
   that `keys.json` does not list.
+- A signed container image, from v1.4.0: `ghcr.io/hodeitek/hodeishield-attest-verifier`,
+  tagged with the version, amd64, published when a release is published and
+  signed by digest with Sigstore keyless signing, with an SBOM attestation.
+  README.md, "A signed image", has the commands to verify and run it. Earlier
+  releases have no image.
 
 ### Changed
 - §6 item 2 of the verification document no longer says the Web PKI is the only
