@@ -1117,12 +1117,14 @@ if [ -n "$ANCHOR_FILE" ]; then
     die anchor_cosign_unavailable "anchor could not be checked: --anchor-file needs cosign ${ANCHOR_MIN_COSIGN} or later, and ${anchor_found}.
        cosign is needed for this option only. This is a tooling limit, not evidence against the attestation."
   fi
-  [ -r "$ANCHOR_FILE" ] && [ -f "$ANCHOR_FILE" ] \
-    || die anchor_unverified "anchor could not be checked: the statement $(esc "$anchor_sn") cannot be read.
+  if [ ! -r "$ANCHOR_FILE" ] || [ ! -f "$ANCHOR_FILE" ]; then
+    die anchor_unverified "anchor could not be checked: the statement $(esc "$anchor_sn") cannot be read.
        This is not evidence against the attestation."
-  [ -r "$ANCHOR_BUNDLE" ] && [ -f "$ANCHOR_BUNDLE" ] \
-    || die anchor_unverified "anchor could not be checked: the bundle $(esc "$anchor_bn") cannot be read (pass it with --anchor-bundle).
+  fi
+  if [ ! -r "$ANCHOR_BUNDLE" ] || [ ! -f "$ANCHOR_BUNDLE" ]; then
+    die anchor_unverified "anchor could not be checked: the bundle $(esc "$anchor_bn") cannot be read (pass it with --anchor-bundle).
        This is not evidence against the attestation."
+  fi
   # cosign checks, and this script reads, one private copy of the statement: the
   # file cannot change between the two. Names that are not plain are replaced.
   case "$anchor_sn" in

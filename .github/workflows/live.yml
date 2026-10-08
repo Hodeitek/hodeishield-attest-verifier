@@ -35,7 +35,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install openssl, python3, jq, curl
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base
       # cosign, as in release.yml, for the last step of tests/live.sh: the
       # production example against the latest release's key statement
       # (--anchor-file). It is skipped, with a warning, while the latest release
