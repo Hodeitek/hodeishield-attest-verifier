@@ -117,11 +117,17 @@ No third-party bot with write access runs on this repository.
   in `release.yml`) are bumped by hand, in the periodic dependency reviews:
   - Take a new digest or release only once it is at least 7 days old.
   - The digest is pinned in the workflows (`ci.yml`, `live.yml`,
-    `release.yml`, and a comment in `container.yml`) and in the two container
-    commands in `README.md`. Change all of them in the same commit;
+    `release.yml`, `image.yml`, and a comment in `container.yml`), in
+    `container/Dockerfile`, and in the two container commands in `README.md`.
+    Change all of them in the same commit;
     `tests/container.sh` fails if they differ.
   - `bash tests/container.sh` must pass before the pull request is opened.
   - To read the current multi-architecture digest of the tag:
     `docker buildx imagetools inspect debian:trixie-slim` (the `Digest:` line).
+- **The cosign version** is also used by `image.yml`, which signs the container
+  image: bump it there in the same commit as in `release.yml`. `image.yml` also
+  pins `anchore/sbom-action` and `actions/attest` by commit SHA; Dependabot
+  moves both with the other actions. The SBOM tool (Syft) is the version the
+  pinned `anchore/sbom-action` runs.
 - **The `alpine:3.22` digest** in `ci.yml` (the LibreSSL job) follows the same
   rules: bumped by hand, at least 7 days old.
