@@ -806,6 +806,39 @@ else
   FAILED=$((FAILED + 1))
 fi
 
+# --- reason codes (static) ----------------------------------------------------
+# Every check carries a machine reason code (docs/security/reason-codes.md). This
+# reads the script, the document and the vectors manifest as text and runs no
+# document: each code the script uses is documented, each documented code is
+# one the script can emit, and each expect.code the manifest asserts is one the
+# script can emit.
+RC_DOC="$ROOT/docs/security/reason-codes.md"
+RC_SCRIPT="$T/rc.script"; RC_DOCS="$T/rc.docs"; RC_MANIFEST="$T/rc.manifest"
+{
+  grep -oE '(^|[^A-Za-z_])(ok|warn|warn_unknown|bad|stale|stat_bad|die) [a-z][a-z0-9_]* "' "$VERIFIER" \
+    | sed -E 's/^[^a-z]*[a-z_]+ ([a-z0-9_]+) "$/\1/'
+  grep -oE 'record [a-z][a-z0-9_]* (pass|warn|fail) [0-3]' "$VERIFIER" | awk '{print $2}'
+  grep -oE '[A-Z_]+_CODE=[a-z][a-z0-9_]*' "$VERIFIER" | sed 's/^.*=//'
+} | sort -u > "$RC_SCRIPT"
+# A table row starts with the code between two backticks (any character below).
+sed -nE 's/^\| [^A-Za-z0-9 ]([a-z][a-z0-9_]*)[^A-Za-z0-9 ] \|.*/\1/p' "$RC_DOC" | sort -u > "$RC_DOCS"
+python3 -c 'import json,sys
+for c in json.load(open(sys.argv[1]))["cases"]: print(c["expect"]["code"])' \
+  "$ROOT/tests/vectors/v1/vectors.json" | sort -u > "$RC_MANIFEST"
+rc_missing="$(comm -23 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"
+rc_stale="$(comm -13 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"
+rc_unknown="$(comm -13 "$RC_SCRIPT" "$RC_MANIFEST" | tr '\n' ' ')"
+if [ -s "$RC_SCRIPT" ] && [ -z "$rc_missing" ] && [ -z "$rc_stale" ] && [ -z "$rc_unknown" ]; then
+  printf 'ok - reason codes: %d in the script, all documented; every vectors expect.code is emitted\n' "$(wc -l < "$RC_SCRIPT")"
+  PASSED=$((PASSED + 1))
+else
+  printf 'not ok - reason codes\n'
+  [ -z "$rc_missing" ] || printf '    # used by the script, not in reason-codes.md: %s\n' "$rc_missing"
+  [ -z "$rc_stale" ]   || printf '    # in reason-codes.md, never emitted by the script: %s\n' "$rc_stale"
+  [ -z "$rc_unknown" ] || printf '    # expect.code in vectors.json that the script cannot emit: %s\n' "$rc_unknown"
+  FAILED=$((FAILED + 1))
+fi
+
 echo
 printf '# %d passed, %d failed\n' "$PASSED" "$FAILED"
 

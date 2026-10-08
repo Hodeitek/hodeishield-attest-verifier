@@ -30,6 +30,9 @@ before it takes effect. Only the latest release is supported, as
   signed by digest with Sigstore keyless signing, with an SBOM attestation.
   README.md, "A signed image", has the commands to verify and run it. Earlier
   releases have no image.
+- Machine reason codes for every check, listed in
+  [docs/security/reason-codes.md](docs/security/reason-codes.md). The text
+  output is unchanged.
 
 ### Changed
 - §6 item 2 of the verification document no longer says the Web PKI is the only
