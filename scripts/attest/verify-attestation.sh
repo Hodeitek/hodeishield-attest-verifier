@@ -452,8 +452,19 @@ if kv.get("anchor") == "1":
         ran = [c for c in checks if c["code"] in codes]
         if ran:
             kids.append({"kid": val(kidkey), "role": role, "listed": any(c["code"] == listed_code for c in ran)})
+    # Verified only when every anchor check that applies RAN and held: the
+    # statement itself, then, with a document, the membership of its key and the
+    # issuer; in --status-list mode, the membership of the status-list key. A run
+    # that stopped before one of them (an unknown kid, a document that cannot be
+    # canonicalised, a status list that failed first) is not verified.
+    required = set()
+    if kv.get("anchor_doc") == "1":
+        required |= {"anchor_kid_listed", "anchor_issuer_matches"}
+    if kv["mode"] == "status-list":
+        required.add("anchor_status_kid_listed")
+    passed = {c["code"] for c in checks if c["result"] == "pass"}
     anchor = {
-        "verified": kv.get("anchor_ready") == "1" and not any(
+        "verified": kv.get("anchor_ready") == "1" and "anchor_verified" in passed and required <= passed and not any(
             c["code"].startswith("anchor_") and c["result"] == "fail" for c in checks),
         "release_tag": val("anchor_tag"),
         "kids": kids,
@@ -555,8 +566,8 @@ json_emit() {
       if [ "$SHOW_RAW" -eq 1 ]; then printf 'raw_posture_file\0%s\0' "$POSTURE_FILE"; fi
     fi
     if [ -n "$ANCHOR_FILE" ]; then
-      printf 'anchor\0%s\0anchor_ready\0%s\0anchor_kid_att\0%s\0anchor_kid_stat\0%s\0' 1 "$ANCHOR_READY" \
-        "${DERIVED_KID:-}" "${STATUS_DERIVED_KID:-}"
+      printf 'anchor\0%s\0anchor_ready\0%s\0anchor_kid_att\0%s\0anchor_kid_stat\0%s\0anchor_doc\0%s\0' 1 "$ANCHOR_READY" \
+        "${DERIVED_KID:-}" "${STATUS_DERIVED_KID:-}" "${HAVE_ATTESTATION:-0}"
       if [ "${anchor_tag_ok:-0}" -eq 1 ]; then printf 'anchor_tag\0%s\0' "$anchor_tag"; fi
     fi
   } | python3 -I -c "$JSON_PY"

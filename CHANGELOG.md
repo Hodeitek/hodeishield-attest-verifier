@@ -100,6 +100,10 @@ before it takes effect. Only the latest release is supported, as
 - The list of checks behind the reason codes lost a check made inside a
   subshell, and merged two different checks that share a code. Both are fixed;
   the text output is unchanged.
+- `--json`: `anchor.verified` was true when the run stopped after the key
+  statement verified and before the membership or issuer check ran (an unknown
+  kid, a document that could not be canonicalised, a status list that failed
+  first). It is now true only when every anchor check that applies ran and held.
 - The tests: a `--json` check in `tests/run.sh` that could not be evaluated (it
   raised, or it spanned several lines) was reported as passing, and so was a
   case of `tests/vectors.sh --json` on which the checker raised. Both are now

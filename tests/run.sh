@@ -1485,6 +1485,26 @@ jexpect 1 'a key the statement does not list: anchor not verified, kid not liste
 COSIGN_STUB_RC=1 COSIGN_STUB_ERR='Error: something nobody has seen' jexpect 2 'cosign says no: could not check, anchor not verified' \
   'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None and o["anchor"]["kids"] == []' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+# anchor.verified is true only when every anchor check that applies ran and held.
+# A run that stops after the statement verified, before a membership or issuer
+# check, is not verified, whatever the statement said.
+jexpect 2 'the statement verified but the kid is unknown to the key set: anchor not verified, no kid asked about' \
+  'o["reason"] == "unknown_kid" and o["anchor"]["verified"] is False and o["anchor"]["kids"] == []
+   and "anchor_verified" in [c["code"] for c in o["checks"]]' -- \
+  --attestation "$T/att.json" --jwks "$T/other-jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" "${A[@]}"
+edit "$T/att.json" "$T/att-bad-docversion.json" 'd["attestation"]["claims"]["docVersion"] = "attest.attestation.v0"'
+jexpect 2 'the kid is listed but the issuer check never ran (canonicalise_failed): anchor not verified' \
+  'o["reason"] == "canonicalise_failed" and o["anchor"]["verified"] is False
+   and o["anchor"]["kids"] == [{"kid": "'"$ISSUER_KID"'", "role": "attestation", "listed": True}]
+   and "anchor_issuer_matches" not in [c["code"] for c in o["checks"]]' -- \
+  --attestation "$T/att-bad-docversion.json" "${COMMON[@]}" "${A[@]}"
+jexpect 3 'a status list that fails before its key is asked about: anchor not verified' \
+  'o["verdict"] == "unknown" and o["anchor"]["verified"] is False
+   and [k["role"] for k in o["anchor"]["kids"]] == ["attestation"]' -- \
+  "${SL[@]}" --status "$T/list-wrong-key.json" "${A[@]}"
+jexpect 0 'a standalone status query: the status-list key listed is enough' \
+  'o["anchor"]["verified"] is True and o["anchor"]["kids"] == [{"kid": "'"$ASKID"'", "role": "status-list", "listed": True}]' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW" "${A[@]}"
 COSIGN_STUB_RC_IDENTITY=1 jexpect 2 'the exact identity does not verify: could not check, and the tag read is not reported' \
   'o["reason"] == "anchor_unverified" and o["anchor"]["verified"] is False and o["anchor"]["release_tag"] is None' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
