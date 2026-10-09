@@ -229,6 +229,9 @@ before it takes effect. Only the latest release is supported, as
   verification document run as `python3 -I`, as the verifier's own do: they
   read downloaded files from the current directory, where a planted `json.py`
   would otherwise be imported.
+- The reference `canon.py` of the verification document reads the claims as
+  UTF-8 (`encoding="utf-8"`) and is run as `python3 -I -X utf8`, so under a
+  locale that is not UTF-8 it re-derives the signed bytes, as the verifier does.
 - [An evaluation of Rust ML-DSA-65 implementations](docs/security/rust-mldsa-evaluation.md)
   for a port of the verifier: version, stability, verification API, audits,
   FIPS 140-3, C or pure Rust, and WebAssembly for each candidate, with a

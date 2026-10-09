@@ -626,20 +626,23 @@ def envelope_bytes(c):                           # E1..E7 — THIS is what is si
                      opt(c.get("jti")), opt(c.get("nonce")), opt(c.get("overallBand")),
                      bs(nested)])
 
-claims = json.load(open(sys.argv[1]))
+claims = json.load(open(sys.argv[1], encoding="utf-8"))
 what = sys.argv[2] if len(sys.argv) > 2 else "envelope"
 sys.stdout.buffer.write(envelope_bytes(claims) if what == "envelope"
                         else posture_bytes(claims["posture"]))
 ```
 
 Run it against the claims and compare the digest with what the platform
-computed and published in the same response:
+computed and published in the same response. The claims are UTF-8 whatever your
+locale: `encoding="utf-8"` and `-X utf8` keep a non-ASCII label from being
+decoded in another encoding and re-encoded into bytes nobody signed (`-I` keeps
+a `json.py` in the current directory from being imported):
 
 ```bash
 jq '.attestation.claims' att.json > claims.json
 
-python3 -I canon.py claims.json > canon.bin              # the signed envelope
-python3 -I canon.py claims.json posture > nested.bin     # just E7's contents
+python3 -I -X utf8 canon.py claims.json > canon.bin              # the signed envelope
+python3 -I -X utf8 canon.py claims.json posture > nested.bin     # just E7's contents
 wc -c < canon.bin
 wc -c < nested.bin
 openssl dgst -sha256 canon.bin
@@ -743,7 +746,7 @@ ML-DSA-65 Public-Key:
 #           ks = [k for k, _ in p]
 #           if len(set(ks)) != len(ks): print("duplicate member:", ks)
 #           return dict(p)
-#       json.load(open(sys.argv[1]), object_pairs_hook=h)' att.json
+#       json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=h)' att.json
 jq -r '
     (keys - ["docVersion","iss","kid","jti","nonce","overallBand","posture"]
        | map("claims." + .)),
@@ -762,7 +765,7 @@ jq -r '
 #    The protected segment goes in EXACTLY as received — never re-serialise it
 #    from the parsed header, or a sender could reorder the header JSON and have
 #    you verify over bytes that differ from the ones signed.
-python3 -I canon.py claims.json > canon.bin
+python3 -I -X utf8 canon.py claims.json > canon.bin
 wc -c < canon.bin                                   # 750 for the document above
 printf '%s.%s' "$H" "$(b64url_encode canon.bin)" > signing_input.bin
 b64url_decode "$S" > sig.bin
@@ -1064,7 +1067,7 @@ jq '{posture: (.attestation.claims.posture
       | .generatedAt = "1970-01-01T00:00:00.000Z" | .expiresAt = null)}' \
   att.json > timeless.json
 
-{ printf 'hodei-shield.trust-center.badge-ref.v1'; python3 -I canon.py timeless.json posture; } \
+{ printf 'hodei-shield.trust-center.badge-ref.v1'; python3 -I -X utf8 canon.py timeless.json posture; } \
   | openssl dgst -sha256 -r | cut -c1-8
 ```
 
