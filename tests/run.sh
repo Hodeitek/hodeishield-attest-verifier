@@ -1562,7 +1562,7 @@ jexpect() {
   if [ -n "${JSON_FIRST:-}" ]; then NO_COLOR=1 bash "$VERIFIER" --json "$@" > "$out" 2> "$out.err"
   else NO_COLOR=1 bash "$VERIFIER" "$@" --json > "$out" 2> "$out.err"; fi
   got=$?
-  why="$("$PYBIN" -I - "$out" "$out.err" "$got" "$want" "$check" 2>&1 <<'PY'
+  why="$("$PYBIN" -I -X utf8 - "$out" "$out.err" "$got" "$want" "$check" 2>&1 <<'PY'
 import json, os, sys
 out, err, got, want, check = sys.argv[1:6]
 raw = open(out, "rb").read()
@@ -1615,8 +1615,12 @@ jexpect_self 'a check that is not an expression is not ok, as could not be evalu
 # differ from what the checks read. Needs the locale en_US.ISO-8859-1, which the
 # CI container generates with localedef; skipped, never passed, where it is
 # absent, and a failure where VERIFIER_REQUIRE_LATIN1=1 (CI) says it must exist.
-# The Python checks spell the label with an escape: their own arguments are
-# decoded in the locale too.
+# The checks spell the label as an escape, and also compare its code points, so
+# that they do not depend on how their own text is decoded: a literal em dash in
+# a check was decoded as Latin-1 by the harness, which ran without -X utf8 and so
+# read its arguments in the locale. The harness now runs with -X utf8 as well.
+# The guard honours LOCPATH, so a locale built with localedef into a directory of
+# one's own runs these cases too.
 LATIN1=en_US.ISO-8859-1
 if [ "$(LC_ALL="$LATIN1" locale charmap 2>/dev/null)" = ISO-8859-1 ]; then
   LC_ALL="$LATIN1" expect 0 'VERIFIED — this document was signed' 'a non-ASCII framework label verifies under a Latin-1 locale (0)' -- \
@@ -1624,12 +1628,14 @@ if [ "$(LC_ALL="$LATIN1" locale charmap 2>/dev/null)" = ISO-8859-1 ]; then
   LC_ALL="$LATIN1" expect 0 'VERIFIED — this document was signed' 'a raw UTF-8 --claims verifies under a Latin-1 locale (0)' -- \
     --jws "$T/label.jws" --claims "$T/label-claims.json" "${COMMON[@]}"
   LC_ALL="$LATIN1" jexpect 0 'a raw UTF-8 --claims under a Latin-1 locale: the attested label is the text' \
-    'o["verdict"] == "verified" and "ENS—ALTO" in [f["label"] for f in o["attested"]["frameworks"]]' -- \
+    'o["verdict"] == "verified" and "ENS\u2014ALTO" in [f["label"] for f in o["attested"]["frameworks"]]
+     and any([ord(c) for c in f["label"]] == [69, 78, 83, 0x2014, 65, 76, 84, 79] for f in o["attested"]["frameworks"])' -- \
     --jws "$T/label.jws" --claims "$T/label-claims.json" "${COMMON[@]}"
   LC_ALL="$LATIN1" expect 0 'ENS—ALTO (ens—alto): basic' 'under a Latin-1 locale the label is shown as UTF-8, as written' -- \
     --attestation "$T/label.json" "${COMMON[@]}"
   JTEXT="$LAST_OUT" LC_ALL="$LATIN1" jexpect 0 'under a Latin-1 locale the attested label is the text, and the one the text mode shows' \
-    'o["verdict"] == "verified" and "ENS—ALTO" in [f["label"] for f in o["attested"]["frameworks"]]
+    'o["verdict"] == "verified" and "ENS\u2014ALTO" in [f["label"] for f in o["attested"]["frameworks"]]
+     and any([ord(c) for c in f["label"]] == [69, 78, 83, 0x2014, 65, 76, 84, 79] for f in o["attested"]["frameworks"])
      and ["%s (%s): %s" % (f["label"], f["code"], f["band"]) for f in o["attested"]["frameworks"]]
          == [l.strip() for l in text.splitlines() if "): " in l and l.startswith("          ")]' -- \
     --attestation "$T/label.json" "${COMMON[@]}"
