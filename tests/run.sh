@@ -497,6 +497,35 @@ expect 1 'REVOKED — via subject' 'a document minted before its subject was wit
 expect 0 'GOOD — not revoked, per a verified status list' 'a document minted after the withdrawal notBefore is good' -- \
   "${SL[@]}" --status "$T/list-subj-before.json"
 
+# --check-subject and --check-generated-at add a subject to Rule B; they never
+# replace the document's own signed slug at its own signed generatedAt.
+expect 1 'REVOKED — via subject' 'a withdrawn subject is REVOKED even with --check-subject naming another organisation' -- \
+  "${SL[@]}" --status "$T/list-subj-after.json" --check-subject other-org
+lacks 'GOOD' 'a withdrawn subject is never GOOD under another --check-subject'
+expect 1 'REVOKED — via subject' 'a later --check-generated-at does not lift the withdrawal of the document' -- \
+  "${SL[@]}" --status "$T/list-subj-after.json" --check-generated-at 2026-01-01T00:20:00.000Z
+lacks 'GOOD' 'a withdrawn subject is never GOOD under a later --check-generated-at'
+expect 1 'REVOKED — via subject' 'another subject at a later time does not lift the withdrawal either' -- \
+  "${SL[@]}" --status "$T/list-subj-after.json" --check-subject other-org --check-generated-at 2026-01-01T00:20:00.000Z
+mint_status --out "$T/list-subj-other.json" --seq 8 --revoke-subject "other-org@2026-01-01T00:10:00.000Z"
+expect 1 'REVOKED — via subject' 'a withdrawn --check-subject is REVOKED beside a document whose subject is not' -- \
+  "${SL[@]}" --status "$T/list-subj-other.json" --check-subject other-org
+expect 1 'REVOKED — via subject' 'an earlier --check-generated-at is checked as well' -- \
+  "${SL[@]}" --status "$T/list-subj-before.json" --check-generated-at 2025-12-31T22:00:00.000Z
+expect 0 'subjects fixture-org, other-org carry no earlier withdrawal' 'the document subject and a --check-subject are both reported as checked' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --check-subject other-org
+expect 0 'subject fixture-org carries no earlier withdrawal' 'without --check-subject, the document subject alone (unchanged output)' -- \
+  "${SL[@]}" --status "$T/list-subj-other.json"
+# A standalone query (no document) still checks the --check-subject given.
+expect 1 'REVOKED — via subject' 'a standalone --check-subject query still finds a withdrawn subject' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
+  --check-subject "$SLUG" --check-generated-at "$GEN" --now "$NOW"
+expect 0 'GOOD — not revoked' 'a standalone --check-subject query after the withdrawal notBefore is good' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
+  --check-subject "$SLUG" --check-generated-at 2026-01-01T00:20:00.000Z --now "$NOW"
+expect 3 'IS listed, but no generatedAt was given' 'a standalone --check-subject query without a time is UNKNOWN' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" --check-subject "$SLUG" --now "$NOW"
+
 expect 0 'one of the kids you pinned with --expect-kid' '--expect-kid works beside --status-list on the attestation key' -- \
   "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$ISSUER_KID"
 expect 1 'unexpected_kid' '--expect-kid does not look at the status list, only at the attestation key' -- \
@@ -1570,6 +1599,9 @@ jexpect 1 'status-list revoked (the key): attested null even with --raw' \
   "${SL[@]}" --status "$T/list-key.json" --raw
 jexpect 1 'status-list revoked (the subject)' 'o["verdict"] == "revoked" and o["reason"] == "revoked_subject"' -- \
   "${SL[@]}" --status "$T/list-subj-after.json"
+jexpect 1 'status-list revoked (the subject), --check-subject naming another organisation does not replace it' \
+  'o["verdict"] == "revoked" and o["reason"] == "revoked_subject" and o["attested"] is None' -- \
+  "${SL[@]}" --status "$T/list-subj-after.json" --check-subject other-org --check-generated-at 2026-01-01T00:20:00.000Z
 jexpect 3 'status-list unknown: the list does not verify' \
   'o["verdict"] == "unknown" and o["reason"] == "status_unknown_bad_signature" and o["attested"] is None' -- \
   "${SL[@]}" --status "$T/list-key-stripped.json" --raw

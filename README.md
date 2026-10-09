@@ -247,7 +247,9 @@ bash scripts/attest/verify-attestation.sh --status-list \
 `--jwks` and `--status-keys` are different key sets and are never
 interchangeable. With a document, the list is always applied to the document's
 own kid; `--check-kid KID` (a kid, or a usage error) adds a kid to look up and
-never replaces it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
+never replaces it. In the same way the list is always applied to the document's
+own slug at its own `generatedAt`; `--check-subject` and `--check-generated-at`
+add a subject to look up and never replace it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
 `--check-generated-at` and `--min-seq` need `--status-list`: without it they are
 a usage error, exit 2. What the list can and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).

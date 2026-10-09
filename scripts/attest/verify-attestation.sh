@@ -155,6 +155,9 @@
 #                        compromised). Defaults to the verified document's slug.
 #   --check-generated-at the attestation's `generatedAt`, needed to evaluate
 #                        Rule B. Defaults to the verified document's generatedAt.
+#                        With a document, its own signed slug at its own signed
+#                        generatedAt is ALWAYS tested too: these two add a
+#                        subject to test, they never replace that one.
 #   --min-seq            reject a list whose `seq` is lower than this — the
 #                        rollback bound for a verifier with memory (§7 of the
 #                        design doc). A cold verifier omits it and relies on
@@ -2692,18 +2695,84 @@ for k in "${DERIVED_KID:-}" "${KID:-}" "$CHECK_KID"; do
   case " ${CHECK_KIDS[*]-} " in *" $k "*) ;; *) CHECK_KIDS+=("$k") ;; esac
 done
 EFFECTIVE_KID="${CHECK_KIDS[*]-}"
-EFFECTIVE_SLUG="${CHECK_SUBJECT:-${SLUG:-}}"
-EFFECTIVE_GENAT="${CHECK_GENERATED_AT:-${GENERATED:-}}"
+
+# The subjects Rule B is applied to, as (slug, generatedAt) pairs, in the same
+# way. With a document: its OWN signed slug and generatedAt, ALWAYS, and, when
+# --check-subject or --check-generated-at is given, one more pair made of them
+# (each defaulting to the document's value). They add a subject to check; they
+# never replace the document's own, so a withdrawn subject cannot be checked
+# under another name or at another time. Any one withdrawn is REVOKED. Without a
+# document: the --check-subject given, at --check-generated-at.
+SUBJ_SLUGS=(); SUBJ_GENATS=(); SUBJ_NAMES=()
+add_subject() {   # SLUG GENERATED_AT
+  local i=0
+  [ -n "$1" ] || return 0
+  for i in "${!SUBJ_SLUGS[@]}"; do
+    if [ "${SUBJ_SLUGS[i]}" = "$1" ] && [ "${SUBJ_GENATS[i]}" = "$2" ]; then return 0; fi
+  done
+  SUBJ_SLUGS+=("$1"); SUBJ_GENATS+=("$2")
+  for i in "${!SUBJ_NAMES[@]}"; do
+    if [ "${SUBJ_NAMES[i]}" = "$1" ]; then return 0; fi
+  done
+  SUBJ_NAMES+=("$1")
+}
+add_subject "${SLUG:-}" "${GENERATED:-}"
+if [ -n "$CHECK_SUBJECT" ] || [ -n "$CHECK_GENERATED_AT" ]; then
+  add_subject "${CHECK_SUBJECT:-${SLUG:-}}" "${CHECK_GENERATED_AT:-${GENERATED:-}}"
+fi
 
 REVOCATION_STATUS=''
 REVOCATION_REASON=''
 REVOCATION_VIA=''
 REVOCATION_UNKNOWN_BECAUSE=''
 
+# Rule B for one subject: sets SUBJ_OUTCOME to revoked, unknown or good, and
+# SUBJ_REASON (revoked) or SUBJ_BECAUSE (unknown). The hash is printed once per slug.
+SUBJ_HASHED=' '
+subject_rule() {   # SLUG GENERATED_AT
+  local slug="$1" genat="$2" entry='' notbefore='' sgen='' snb='' truncated='' hash=''
+  SUBJ_OUTCOME=good; SUBJ_REASON=''; SUBJ_BECAUSE=''
+  { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$slug"; } \
+    | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
+  hash="$(b64url_encode "$WORKDIR/subject_hash.bin")"
+  case "$SUBJ_HASHED" in
+    *" $hash "*) ;;
+    *) printf '        subjectHash(%s) = %s\n' "$(esc "$slug")" "$hash"; SUBJ_HASHED+="$hash " ;;
+  esac
+  entry="$(jq -c --arg h "$hash" \
+    '.subjects[]? | select(.subjectHash==$h)' "$WORKDIR/list.json" | head -1)"
+  if [ -n "$entry" ]; then
+    notbefore="$(printf '%s' "$entry" | jq -r '.notBefore')"
+    if [ -z "$genat" ]; then
+      SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+      warn_unknown status_unknown_generated_at_missing "subject '$(esc "${slug}")' IS listed, but no generatedAt was given \
+(--check-generated-at, or --attestation/--claims) to compare against notBefore='$(esc "${notbefore}")' \
+— cannot \
+decide, so UNKNOWN, never 'good'"
+      return 0
+    fi
+    sgen="$(epoch_of "$genat")"
+    snb="$(epoch_of "$notbefore")"
+    if [ -z "$sgen" ] || [ -z "$snb" ]; then
+      SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+      warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'"
+    elif [ "$sgen" -lt "$snb" ]; then
+      SUBJ_OUTCOME=revoked; SUBJ_REASON="$(printf '%s' "$entry" | jq -r '.reason')"
+    fi
+  else
+    truncated="$(jq -r '.truncated' "$WORKDIR/list.json")"
+    if [ "$truncated" = 'true' ]; then
+      SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='truncated'
+      warn_unknown status_unknown_truncated "subject not found, but truncated=true: entries were dropped for the cap, so \
+'not found' does not mean 'not listed' — UNKNOWN on the subject dimension, fail-safe"
+    fi
+  fi
+}
+
 if [ "$STATUS_LIST_VALID" -ne 1 ]; then
   REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
   warn_unknown status_unknown_list_unverified "cannot apply an unverified list — status is UNKNOWN, never 'good'"
-elif [ -z "$EFFECTIVE_KID" ] && [ -z "$EFFECTIVE_SLUG" ]; then
+elif [ -z "$EFFECTIVE_KID" ] && [ "${#SUBJ_SLUGS[@]}" -eq 0 ]; then
   REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='no_subject'
   warn_unknown status_unknown_no_subject "nothing to check (no kid or subject given) — list contents printed above only"
 else
@@ -2720,40 +2789,20 @@ else
 
   # Rule B — reads the timestamp; legitimate only because this branch presumes
   # the key is NOT compromised (Rule K above would already have fired if it were).
-  if [ "$REVOCATION_STATUS" != 'revoked' ] && [ -n "$EFFECTIVE_SLUG" ]; then
-    { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$EFFECTIVE_SLUG"; } \
-      | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
-    SUBJECT_HASH="$(b64url_encode "$WORKDIR/subject_hash.bin")"
-    printf '        subjectHash(%s) = %s\n' "$(esc "$EFFECTIVE_SLUG")" "$SUBJECT_HASH"
-
-    SUBJ_ENTRY="$(jq -c --arg h "$SUBJECT_HASH" \
-      '.subjects[]? | select(.subjectHash==$h)' "$WORKDIR/list.json" | head -1)"
-    if [ -n "$SUBJ_ENTRY" ]; then
-      SUBJ_NOTBEFORE="$(printf '%s' "$SUBJ_ENTRY" | jq -r '.notBefore')"
-      SUBJ_REASON="$(printf '%s' "$SUBJ_ENTRY" | jq -r '.reason')"
-      if [ -z "$EFFECTIVE_GENAT" ]; then
-        REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
-        warn_unknown status_unknown_generated_at_missing "subject '$(esc "${EFFECTIVE_SLUG}")' IS listed, but no generatedAt was given \
-(--check-generated-at, or --attestation/--claims) to compare against notBefore='$(esc "${SUBJ_NOTBEFORE}")' \
-— cannot \
-decide, so UNKNOWN, never 'good'"
-      else
-        SGEN="$(epoch_of "$EFFECTIVE_GENAT")"
-        SNB="$(epoch_of "$SUBJ_NOTBEFORE")"
-        if [ -z "$SGEN" ] || [ -z "$SNB" ]; then
-          REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
-          warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'"
-        elif [ "$SGEN" -lt "$SNB" ]; then
-          REVOCATION_STATUS='revoked'; REVOCATION_REASON="$SUBJ_REASON"; REVOCATION_VIA='subject'
-        fi
+  # Every subject is checked; a withdrawal of any one decides, ahead of an
+  # unknown outcome for another.
+  if [ "$REVOCATION_STATUS" != 'revoked' ]; then
+    SUBJ_FIRST_UNKNOWN=''
+    for i in "${!SUBJ_SLUGS[@]}"; do
+      subject_rule "${SUBJ_SLUGS[i]}" "${SUBJ_GENATS[i]}"
+      if [ "$SUBJ_OUTCOME" = revoked ]; then
+        REVOCATION_STATUS='revoked'; REVOCATION_REASON="$SUBJ_REASON"; REVOCATION_VIA='subject'
+        break
       fi
-    else
-      SLIST_TRUNCATED="$(jq -r '.truncated' "$WORKDIR/list.json")"
-      if [ "$SLIST_TRUNCATED" = 'true' ]; then
-        REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='truncated'
-        warn_unknown status_unknown_truncated "subject not found, but truncated=true: entries were dropped for the cap, so \
-'not found' does not mean 'not listed' — UNKNOWN on the subject dimension, fail-safe"
-      fi
+      if [ "$SUBJ_OUTCOME" = unknown ] && [ -z "$SUBJ_FIRST_UNKNOWN" ]; then SUBJ_FIRST_UNKNOWN="$SUBJ_BECAUSE"; fi
+    done
+    if [ "$REVOCATION_STATUS" != 'revoked' ] && [ -n "$SUBJ_FIRST_UNKNOWN" ]; then
+      REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE="$SUBJ_FIRST_UNKNOWN"
     fi
   fi
 
@@ -2769,7 +2818,11 @@ case "$REVOCATION_STATUS" in
     elif [ -n "$EFFECTIVE_KID" ]; then
       printf ' — kid %s is not revoked' "$(esc "$EFFECTIVE_KID")"
     fi
-    [ -n "$(esc "$EFFECTIVE_SLUG")" ] && printf ', subject %s carries no earlier withdrawal' "$(esc "$EFFECTIVE_SLUG")"
+    if [ "${#SUBJ_NAMES[@]}" -eq 1 ]; then
+      printf ', subject %s carries no earlier withdrawal' "$(esc "${SUBJ_NAMES[0]}")"
+    elif [ "${#SUBJ_NAMES[@]}" -gt 1 ]; then
+      printf ', subjects %s, %s carry no earlier withdrawal' "$(esc "${SUBJ_NAMES[0]}")" "$(esc "${SUBJ_NAMES[1]}")"
+    fi
     printf ' (list seq %s).\n' "$(esc "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')")"
     ;;
   revoked)

@@ -1487,7 +1487,11 @@ script runs the full §4 posture check first and then applies the status list to
 the resulting `kid`, slug and `generatedAt` — you do not supply
 `--check-kid`/`--check-subject` yourself in this mode; they are read from the
 verified document. A `--check-kid` given anyway is looked up as well: it never
-replaces the document's own kid, which is always looked up. If the posture check fails, the run ends as a failure
+replaces the document's own kid, which is always looked up. In the same way a
+`--check-subject` or `--check-generated-at` given anyway adds a subject to look
+up (each defaults to the document's value): the document's own signed slug, at
+its own signed `generatedAt`, is always looked up, and a withdrawal of either is
+`REVOKED`. If the posture check fails, the run ends as a failure
 (exit 1) whatever the list says: an inauthentic document is not rescued by not
 being listed. Note `--jwks` and `--status-keys` are **different key sets** and the
 script never resolves one against the other; passing the attestation JWKS as
@@ -1501,14 +1505,19 @@ and the first that fires decides:
   from the key bytes that verified it and its header kid, always, and any
   `--check-kid` besides; without one, the `--check-kid` given. `--check-kid`
   must have the shape of a kid, or the run is a usage error (exit 2).
-- **Subject rule.** The slug (from the document, or `--check-subject`) is listed
-  in `subjects[]` — matched by the hash `SHA-256("hodei-shield.attest.subject.v1"
-  || slug)`, base64url — and the document's `generatedAt` is **strictly earlier**
-  than the entry's `notBefore` → revoked. A `generatedAt` equal to or later than
-  `notBefore` is not revoked by this rule: the entry withdraws attestations
-  issued *before* that instant. If the subject is listed but no `generatedAt` is
-  available, or `generatedAt` or `notBefore` cannot be parsed, the outcome is
-  `unknown`, never `good`.
+- **Subject rule.** A slug checked is listed in `subjects[]` — matched by the
+  hash `SHA-256("hodei-shield.attest.subject.v1" || slug)`, base64url — and the
+  `generatedAt` it is checked at is **strictly earlier** than the entry's
+  `notBefore` → revoked. With a document, the document's own signed slug is
+  checked at its own signed `generatedAt`, always; a `--check-subject` or
+  `--check-generated-at` given besides adds one more check, of that slug (by
+  default the document's) at that time (by default the document's), and never
+  replaces the first. Without one, the `--check-subject` given is checked at
+  `--check-generated-at`. A withdrawal found by any of them decides. A
+  `generatedAt` equal to or later than `notBefore` is not revoked by this rule:
+  the entry withdraws attestations issued *before* that instant. If the subject
+  is listed but no `generatedAt` is available, or `generatedAt` or `notBefore`
+  cannot be parsed, the outcome is `unknown`, never `good`.
 - If the list is marked `truncated` (entries were dropped to fit a cap) and the
   subject is not found, the outcome is `unknown` on the subject dimension:
   "not found" does not mean "not listed".

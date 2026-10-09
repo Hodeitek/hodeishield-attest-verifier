@@ -90,6 +90,14 @@ before it takes effect. Only the latest release is supported, as
   `--min-seq` given without `--status-list` were silently ignored and the run
   could end `VERIFIED`; each is now a usage error, exit 2 ("--status requires
   --status-list"). This also affected earlier releases.
+- `--check-subject` and `--check-generated-at` replaced the document's own slug
+  and `generatedAt` in the subject rule. With `--status-list` and a document
+  whose subject was withdrawn, `--check-subject OTHER` or a later
+  `--check-generated-at` made the run end `GOOD`, exit 0. Now the document's own
+  signed slug is always checked at its own signed `generatedAt`, and a
+  `--check-subject` or `--check-generated-at` adds one more check (each defaults
+  to the document's value); a withdrawal found by either is `REVOKED`. A query
+  without a document is unchanged. This also affected earlier releases.
 - Every `python3` the verifier runs (the canonical encoders, the document,
   key-set and statement readers, the `--json` writer) ran without `-I`, so the
   directory the verifier was run from came first on Python's module path: a
