@@ -211,6 +211,7 @@ JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
 EXPECT_SLUG=''; EXPECT_NONCE_SET=0; EXPECT_NONCE=''
 MAX_AGE_SECONDS=3600; NOW_OVERRIDE=''
+NOW_MAX=253402300799   # 9999-12-31T23:59:59Z, the last time an RFC 3339 year can write
 SHOW_RAW=0
 # --anchor-file / --anchor-bundle (see the header). The identity and the issuer
 # below are FIXED: nothing the caller passes can change who may sign the statement.
@@ -660,6 +661,10 @@ while [ $# -gt 0 ]; do
       MAX_AGE_SECONDS=$(( 10#$2 * 86400 )); shift 2 ;;
     --now)
       is_digits 12 "$2" || arg_die 'error: --now must be a Unix time in seconds (digits only, at most 12)'
+      # Every time is compared as RFC 3339, whose year has four digits: a later
+      # "now" could not be written as one, and the run would blame the document.
+      [ $(( 10#$2 )) -le "$NOW_MAX" ] \
+        || arg_die "error: --now is out of range: at most $NOW_MAX (9999-12-31T23:59:59Z)"
       NOW_OVERRIDE=$(( 10#$2 )); shift 2 ;;
     --raw)          SHOW_RAW=1; shift ;;
     # Repeatable, so that two kids can be pinned through a key rotation overlap.

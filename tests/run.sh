@@ -1783,6 +1783,16 @@ expect 2 'error: --max-age-seconds must be a whole number of seconds' '--max-age
 lacks 'VERIFIED' '--max-age-seconds 60s never ends VERIFIED'
 expect 2 'error: --now must be a Unix time in seconds' '--now 12x is a usage error (2)' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --now 12x
+# A "now" after 9999-12-31T23:59:59Z cannot be written as an RFC 3339 time, so
+# the comparator could not read it and the run blamed the document's dates.
+expect 2 'error: --now is out of range' '--now 999999999999 (after the year 9999) is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now 999999999999
+lacks 'could not parse' '--now out of range never blames the document'
+expect 2 'error: --now is out of range' '--now one second after 9999-12-31T23:59:59Z is a usage error (2)' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now 253402300800
+expect 1 'EXPIRED' '--now at 9999-12-31T23:59:59Z is accepted, and the document is reported expired' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now 253402300799
+lacks 'could not parse' '--now at the last RFC 3339 second is read, and the document is not blamed'
 expect 2 'error: --max-age-days must be a whole number of days' "--max-age-days 'a[1]' is a usage error (2)" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 'a[1]'
 expect 2 'error: --now must be a Unix time in seconds' "--now 'NOW+1' is a usage error (2), not arithmetic" -- \

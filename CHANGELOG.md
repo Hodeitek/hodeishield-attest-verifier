@@ -119,7 +119,10 @@ before it takes effect. Only the latest release is supported, as
   arithmetic: `--max-age-seconds` and `--max-age-days` take 1 to 9 digits,
   `--now` 1 to 12 (Unix seconds), `--min-seq` 1 to 18, and anything else is a
   usage error, exit 2 (`error: --now must be a Unix time in seconds ...`). A
-  leading zero is decimal, not octal. This also affected earlier releases.
+  leading zero is decimal, not octal. `--now` must also be no later than
+  9999-12-31T23:59:59Z (`error: --now is out of range`): a later time cannot be
+  written as an RFC 3339 time, and the run then reported the document's dates
+  as unparseable. This also affected earlier releases.
 - The subject rule compared `generatedAt` with `notBefore` in whole seconds, so
   a document generated less than a second before a fractional `notBefore`
   (00:00:00.000 against 00:00:00.900) was `GOOD` instead of `REVOKED`. The TTL
