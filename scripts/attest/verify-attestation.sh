@@ -2372,6 +2372,13 @@ if [ -n "$CLAIMS_FILE" ]; then
     bad iss_empty "iss_empty — iss (E2) is empty: the document names no issuer, so nothing says whose key set
           should verify it. Every genuine HodeiShield attestation names its issuer origin."
   fi
+  # The same for the subject. An EMPTY slug names no organisation, and the
+  # subject rule of a status list has nothing to look up for it, so a withdrawal
+  # could never apply. A failed check, whether or not --expect-slug is given.
+  if [ "$POSTURE_READ" -eq 1 ] && [ -z "$SLUG" ]; then
+    bad slug_empty "slug_empty — the posture's slug (F2) is empty: the document names no organisation, so no
+          withdrawal of a subject can apply to it. Every genuine HodeiShield attestation names its organisation."
+  fi
   if [ -n "$EXPECT_ISSUER" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
       ok issuer_match "iss (E2) is '$(esc "${CLAIMS_ISS}")', as expected"
@@ -2825,11 +2832,13 @@ EFFECTIVE_KID="${CHECK_KIDS[*]-}"
 # (each defaulting to the document's value). They add a subject to check; they
 # never replace the document's own, so a withdrawn subject cannot be checked
 # under another name or at another time. Any one withdrawn is REVOKED. Without a
-# document: the --check-subject given, at --check-generated-at.
+# document: the --check-subject given, at --check-generated-at. The document's
+# slug is checked even when it is empty (it is also slug_empty, a failed
+# check): a withdrawal of the empty subject applies to it like any other.
 SUBJ_SLUGS=(); SUBJ_GENATS=(); SUBJ_NAMES=()
-add_subject() {   # SLUG GENERATED_AT
+add_subject() {   # SLUG GENERATED_AT [doc: the slug is the document's]
   local i=0
-  [ -n "$1" ] || return 0
+  if [ -z "$1" ] && [ "${3:-}" != doc ]; then return 0; fi
   for i in "${!SUBJ_SLUGS[@]}"; do
     if [ "${SUBJ_SLUGS[i]}" = "$1" ] && [ "${SUBJ_GENATS[i]}" = "$2" ]; then return 0; fi
   done
@@ -2839,9 +2848,11 @@ add_subject() {   # SLUG GENERATED_AT
   done
   SUBJ_NAMES+=("$1")
 }
-add_subject "${SLUG:-}" "${GENERATED:-}"
-if [ -n "$CHECK_SUBJECT" ] || [ -n "$CHECK_GENERATED_AT" ]; then
-  add_subject "${CHECK_SUBJECT:-${SLUG:-}}" "${CHECK_GENERATED_AT:-${GENERATED:-}}"
+if [ "$POSTURE_READ" -eq 1 ]; then add_subject "$SLUG" "$GENERATED" doc; fi
+if [ -n "$CHECK_SUBJECT" ]; then
+  add_subject "$CHECK_SUBJECT" "${CHECK_GENERATED_AT:-$GENERATED}"
+elif [ -n "$CHECK_GENERATED_AT" ] && [ "$POSTURE_READ" -eq 1 ]; then
+  add_subject "$SLUG" "$CHECK_GENERATED_AT" doc
 fi
 
 REVOCATION_STATUS=''

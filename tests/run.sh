@@ -832,6 +832,24 @@ mint_status --out "$T/list-nl-iss.json" --seq 8 --iss "$ISS"$'\n'
 expect 3 "issuer_mismatch — iss is 'https://issuer.test\\x0a'" 'a status list whose iss has a trailing newline does not satisfy --expect-issuer (3)' -- \
   "${SL[@]}" --status "$T/list-nl-iss.json"
 lacks 'GOOD' 'a status list with another iss is never GOOD under --expect-issuer'
+# A signed but empty slug names no organisation: a failed check (slug_empty), as
+# an empty iss is. The subject rule skipped it, so a withdrawal of "" never applied.
+mint_attest --out "$T/empty-slug.json" --slug ''
+expect 1 "slug_empty — the posture's slug (F2) is empty" 'a signed but empty slug is a failed check (1)' -- \
+  --attestation "$T/empty-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+lacks 'VERIFIED —' 'a document with an empty slug never ends VERIFIED'
+mint_status --out "$T/list-subj-empty.json" --seq 8 --revoke-subject '@2026-01-01T00:10:00.000Z'
+expect 1 'slug_empty' 'a document with an empty slug fails under a list that withdraws the empty subject (1)' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-empty.json" \
+  --attestation "$T/empty-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+lacks 'GOOD' 'a document with an empty slug is never GOOD'
+expect 1 'REVOKED — via subject' 'the subject rule runs on the empty slug of the document: the withdrawal of "" applies' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-empty.json" \
+  --attestation "$T/empty-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+expect 1 'slug_empty' 'a document with an empty slug fails under a list that withdraws nothing (1)' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" \
+  --attestation "$T/empty-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+lacks 'GOOD — not revoked' 'a document with an empty slug is never GOOD, whatever the list'
 mint_status --out "$T/list-nul-iss.json" --seq 8 --escapes --iss 'https://issuer.test\x00'
 expect 3 'nul_byte — .iss holds a NUL byte' 'a status list whose iss holds a NUL byte is UNKNOWN (3)' -- \
   "${SL[@]}" --status "$T/list-nul-iss.json"

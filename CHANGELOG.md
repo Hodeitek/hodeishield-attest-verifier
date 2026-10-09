@@ -167,6 +167,11 @@ before it takes effect. Only the latest release is supported, as
 - The list of checks behind the reason codes lost a check made inside a
   subshell, and merged two different checks that share a code. Both are fixed;
   the text output is unchanged.
+- A signed but empty `slug` (`""`) was accepted, and the subject rule of
+  `--status-list` skipped an empty slug, so it never checked the document's own
+  subject. It is now a failed check, `slug_empty` (exit 1), as an empty `iss`
+  is, and the subject rule checks the document's slug even when it is empty.
+  This also affected earlier releases.
 - A signed but empty `iss` (`""`) was not a failed check: without
   `--expect-issuer` the document could end `VERIFIED` naming no issuer, and
   `--anchor-file` skipped its issuer check for it. It is now a failed check,
