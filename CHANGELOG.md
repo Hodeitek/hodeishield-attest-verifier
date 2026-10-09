@@ -189,6 +189,13 @@ before it takes effect. Only the latest release is supported, as
   as a pattern that matches everything; it always passed. The helpers now read
   the output of the run they follow, refuse such a string, and the check is
   written as line-anchored patterns. It holds.
+- The tests: the real-cosign test of a legacy-format bundle is refused by the
+  bundle shape check before cosign runs, so it shows the shape check, not
+  cosign's legacy fallback, which no bundle can now reach; its comment says so,
+  and what each layer of the anchor covers. Two real-cosign tests (CI) are
+  added for the second, exact-identity cosign call: the genuine v1.3.0 bundle
+  passes it and its tag is read, and an identity that is not the verified
+  certificate's is rejected by cosign, with no tag reported.
 
 ### Changed
 - §6 item 2 of the verification document no longer says the Web PKI is the only

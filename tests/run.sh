@@ -1942,6 +1942,23 @@ unset COSIGN_STUB_LOG
 # this repository's release workflow at v99.0.0. Reading the tag from the decoy
 # would pass the anti-rollback check and go on to read the statement (an old
 # SHA256SUMS, so anchor_malformed). It must stop before: exit 2, not malformed.
+#
+# What each layer covers, and what no test here can show:
+#  1. The shape check (ANCHOR_BUNDLE_PY shape) runs BEFORE cosign. The legacy
+#     bundle above is refused by it (anchor_bundle_unsupported), so cosign never
+#     sees it: the case proves the shape check on a real legacy bundle, not
+#     cosign's legacy fallback. With the shape check first, no bundle that cosign
+#     would read in its legacy format gets to cosign, so there is no meaningful
+#     real-cosign test of that fallback any more.
+#  2. The second cosign call, for the EXACT identity read from the certificate,
+#     binds the tag to the certificate cosign verified. With real certificates it
+#     cannot be made to fail by a bundle (see the cases below), so real cosign is
+#     shown to accept the exact identity of a genuine certificate and, through a
+#     recording wrapper that replaces it, to reject another one. The path of the
+#     script when that call fails is covered by the cosign test double above
+#     (COSIGN_STUB_RC_IDENTITY), with the arguments of both calls recorded.
+#  3. The repository ID and the anti-rollback check read that same certificate:
+#     the genuine v1.3.0 bundle reaches anchor_statement_older, with its tag.
 echo '# anchor, real cosign'
 real_cosign_ok=0
 if command -v cosign >/dev/null 2>&1; then
@@ -1981,9 +1998,44 @@ PY
     'o["exit_code"] == 2 and o["reason"] == "anchor_bundle_unsupported"
      and all(c["code"] != "anchor_malformed" for c in o["checks"]) and o["anchor"]["release_tag"] is None' -- \
     --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$RELB/SHA256SUMS" --anchor-bundle "$T/legacy.sigstore.json"
+
+  # The second, exact-identity cosign call, against real cosign. A real v0.3
+  # bundle has one certificate, the one cosign verifies and the tag is read
+  # from, so no bundle with real certificates can make that call fail on its
+  # own. Instead a wrapper first on PATH records each call and runs the real
+  # cosign, and for one case replaces the identity of the second call, as a
+  # script that read the identity from another certificate would pass it.
+  REALWRAP="$T/realwrap"; mkdir -p "$REALWRAP"
+  REAL_COSIGN="$(command -v cosign)"
+  cat > "$REALWRAP/cosign" <<WRAP
+#!/usr/bin/env bash
+args=("\$@")
+case " \$* " in
+  *' --certificate-identity '*)
+    printf '%s\n' "\$@" > "$T/realwrap.identity.argv"
+    if [ -n "\${COSIGN_WRAP_IDENTITY:-}" ]; then
+      for i in "\${!args[@]}"; do
+        if [ "\${args[i]}" = --certificate-identity ]; then args[i + 1]="\$COSIGN_WRAP_IDENTITY"; fi
+      done
+    fi ;;
+esac
+exec "$REAL_COSIGN" "\${args[@]}"
+WRAP
+  chmod +x "$REALWRAP/cosign"
+  rm -f "$T/realwrap.identity.argv"
+  PATH="$REALWRAP:$PATH" jexpect 2 'real cosign: the genuine v1.3.0 bundle passes both cosign calls, and its tag is read (older than this verifier)' \
+    'o["reason"] == "anchor_statement_older" and o["anchor"]["release_tag"] == "v1.3.0"' -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$RELB/SHA256SUMS" --anchor-bundle "$RELB/SHA256SUMS.sigstore.json"
+  argv_has "${ANCHOR_WF}v1.3.0" 'the exact identity of the genuine certificate, the second time (real cosign)' "$T/realwrap.identity.argv"
+  COSIGN_WRAP_IDENTITY="${ANCHOR_WF}v1.3.1" PATH="$REALWRAP:$PATH" jexpect 2 \
+    'real cosign: an exact identity that is not the verified certificate'"'"'s is rejected, and no tag is reported' \
+    'o["reason"] == "anchor_unverified" and o["anchor"]["release_tag"] is None
+     and "cosign did not verify the certificate the release tag is read from" in o["message"]' -- \
+    --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$RELB/SHA256SUMS" --anchor-bundle "$RELB/SHA256SUMS.sigstore.json"
 else
   printf 'skipped - real cosign: a legacy bundle with a decoy certificate (needs cosign 3.1.3 or later, not available here)\n'
-  SKIPPED=$((SKIPPED + 1))
+  printf 'skipped - real cosign: the second, exact-identity call (needs cosign 3.1.3 or later, not available here)\n'
+  SKIPPED=$((SKIPPED + 2))
 fi
 
 # --- version consistency (tests/version-consistency.sh) --------------------------
