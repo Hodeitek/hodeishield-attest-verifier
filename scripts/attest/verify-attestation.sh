@@ -970,8 +970,9 @@ b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }
 # BSD/macOS `date -u -j -f` last. Returning '' on a bad string is the contract,
 # and EVERY caller must treat '' as "could not check" — never as "check passed".
 # See section 6: an unparseable expiresAt is a FAIL there, not a silent pass.
-# It truncates to whole seconds, so it is used only against "now" (a whole
-# second); two instants from documents are compared exactly, by RETIRED_PY cmp.
+# It truncates to whole seconds, so it is used only for the age checks against
+# "now" (a whole second), where that is exact; every other comparison of times is
+# made exactly, by RETIRED_PY cmp.
 epoch_of() {
   local out
   out="$(date -u -d "$1" +%s 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return; }
@@ -988,6 +989,13 @@ except Exception:
   out="$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "${1%%.*}" +%s 2>/dev/null)" \
     && [ -n "$out" ] && { printf '%s' "$out"; return; }
   printf ''
+}
+
+# rfc3339_of EPOCH — a Unix time (whole seconds) as an RFC 3339 UTC time, so that
+# "now" goes through the instant comparator (RETIRED_PY cmp) like any other time.
+# Empty when it cannot be formed, which the comparator reads as unparseable.
+rfc3339_of() {
+  python3 -I -X utf8 -c 'import sys, time; sys.stdout.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' "$1" 2>/dev/null || true
 }
 
 # Fetch (http(s):// URL, via curl) or read (anything else, as a file path) SRC
@@ -2220,14 +2228,26 @@ if [ -n "$POSTURE_FILE" ]; then
     if [ -n "$G" ]; then
       AGE=$(( NOW - G ))
       printf '        generatedAt: %s  (age %ss)\n' "$(esc "$GENERATED")" "$AGE"
-      if [ $(( G - POSTURE_CLOCK_SKEW_SECONDS )) -gt "$NOW" ]; then
-        bad not_yet_valid "not_yet_valid — generatedAt is $(( G - NOW ))s in the future, beyond the
-          ${POSTURE_CLOCK_SKEW_SECONDS}s clock-skew allowance"
-      elif [ "$AGE" -gt "$MAX_AGE_SECONDS" ]; then
-        stale too_old "posture is ${AGE}s old, beyond --max-age-seconds ${MAX_AGE_SECONDS}"
-      else
-        ok fresh "within the ${MAX_AGE_SECONDS}s freshness window"
-      fi
+      # In the future beyond the skew: exact instants, through the comparator
+      # (with "now" as an RFC 3339 time). G is whole seconds, rounded down, so
+      # G - skew > NOW let a generatedAt up to a second beyond the skew pass. The
+      # age checks below are exact as they are: NOW is a whole second, and for a
+      # whole second N, floor(G) < N exactly when G < N.
+      NOW_RFC="$(rfc3339_of "$NOW")"
+      case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$GENERATED" "$NOW_RFC" "$POSTURE_CLOCK_SKEW_SECONDS" 2>/dev/null)" in
+        after)
+          bad not_yet_valid "not_yet_valid — generatedAt is $(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" span "$GENERATED" "$NOW_RFC" 2>/dev/null || true)s in the future, beyond the
+          ${POSTURE_CLOCK_SKEW_SECONDS}s clock-skew allowance" ;;
+        before|equal)
+          if [ "$AGE" -gt "$MAX_AGE_SECONDS" ]; then
+            stale too_old "posture is ${AGE}s old, beyond --max-age-seconds ${MAX_AGE_SECONDS}"
+          else
+            ok fresh "within the ${MAX_AGE_SECONDS}s freshness window"
+          fi ;;
+        *)
+          bad date_unparseable "could not parse generatedAt '$(esc "${GENERATED}")' as an RFC 3339 time — freshness was NOT checked.
+          Do not read this as 'fresh'." ;;
+      esac
     else
       # A FAIL, as posture.ts rejects it (`malformed_document`): a document whose
       # age cannot be read has not had its age checked, and until 2026-09-29 this
@@ -2735,11 +2755,15 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   if [ -z "$SIAT" ] || [ -z "$SNUP" ]; then
     stat_bad status_unknown_date_unparseable "malformed_document — could not parse issuedAt/nextUpdate as RFC 3339"
   else
-    if [ $(( SIAT - STATUS_CLOCK_SKEW_SECONDS )) -gt "$SNOW" ]; then
-      stat_bad status_unknown_not_yet_valid "not_yet_valid — issuedAt is in the future beyond the ${STATUS_CLOCK_SKEW_SECONDS}s skew allowance"
-    else
-      ok status_not_future "issuedAt is not in the future (beyond skew)"
-    fi
+    # Exact instants, as for a document's generatedAt (section 6).
+    case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$SISSUEDAT" "$(rfc3339_of "$SNOW")" "$STATUS_CLOCK_SKEW_SECONDS" 2>/dev/null)" in
+      after)
+        stat_bad status_unknown_not_yet_valid "not_yet_valid — issuedAt is in the future beyond the ${STATUS_CLOCK_SKEW_SECONDS}s skew allowance" ;;
+      before|equal)
+        ok status_not_future "issuedAt is not in the future (beyond skew)" ;;
+      *)
+        stat_bad status_unknown_date_unparseable "malformed_document — could not parse issuedAt/nextUpdate as RFC 3339" ;;
+    esac
     # No skew here: both instants are inside the signed bytes, so no clock is
     # involved — exactly as posture.ts checks ttl_exceeded above. Compared as
     # exact instants, as the TTL ceiling is.

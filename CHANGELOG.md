@@ -147,6 +147,12 @@ before it takes effect. Only the latest release is supported, as
   the test runners'. This also affected earlier releases.
 
 ### Fixed
+- `not_yet_valid` (a document's `generatedAt`, or a status list's `issuedAt`,
+  more than 300 s ahead of now) compared whole seconds, so a time up to a
+  second beyond the allowance passed. Both now compare exact instants through
+  the same comparator as the other time checks, with "now" as an RFC 3339
+  time; the message gives the exact distance (`300.5s`). The age, expiry and
+  staleness checks were already exact, "now" being a whole second.
 - The `alg`, `kid` and `typ` of the protected header were read with `sed` in the
   caller's locale: under a UTF-8 locale a header kid holding a byte that is not
   valid UTF-8 was read as empty, so the run named another kid than under the C

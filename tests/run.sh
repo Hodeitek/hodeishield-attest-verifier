@@ -202,6 +202,14 @@ expect 0 "validity window 3600s is within the issuer's 3600s ceiling" 'a validit
 
 expect 1 'not_yet_valid' 'a document dated beyond the 5 min clock-skew allowance is rejected' -- \
   --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now 1767225000
+# The skew is compared as exact instants: in whole seconds, a generatedAt up to a
+# second beyond it passed. NOW is 00:05:00, so 00:10:00.000 is exactly the skew.
+mint_attest --out "$T/ahead-frac.json" --generated-at '2026-01-01T00:10:00.500Z' --expires-at '2026-01-01T00:25:00.500Z'
+expect 1 'not_yet_valid — generatedAt is 300.5s in the future' 'a generatedAt 0.5 s beyond the clock-skew allowance is rejected' -- \
+  --attestation "$T/ahead-frac.json" "${COMMON[@]}"
+mint_attest --out "$T/ahead-exact.json" --generated-at '2026-01-01T00:10:00.000Z' --expires-at '2026-01-01T00:25:00.000Z'
+expect 0 'VERIFIED — this document was signed' 'a generatedAt exactly at the clock-skew allowance passes' -- \
+  --attestation "$T/ahead-exact.json" "${COMMON[@]}"
 
 mint_attest --out "$T/bad-date.json" --generated-at 'the first of january'
 expect 1 "could not parse generatedAt" 'a signed but unparseable generatedAt is rejected, not skipped' -- \
@@ -573,6 +581,15 @@ expect 3 'validity_exceeded — nextUpdate - issuedAt is 86400.5s, above the' 'a
   --next-update '2026-01-02T00:00:00.000Z' --seq 8 --out "$T/list-validity-exact.json"
 expect 0 'GOOD — not revoked' 'a status list valid for exactly the ceiling is good' -- \
   "${SL[@]}" --status "$T/list-validity-exact.json"
+# And its issuedAt against the clock-skew allowance: NOW is 00:05:00.
+"${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" --issued-at '2026-01-01T00:10:00.500Z' \
+  --next-update '2026-01-01T02:00:00.000Z' --seq 8 --out "$T/list-ahead-frac.json"
+expect 3 'not_yet_valid — issuedAt is in the future' 'a status list issued 0.5 s beyond the clock-skew allowance is UNKNOWN' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-ahead-frac.json" --check-kid "$ISSUER_KID" --now "$NOW"
+"${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" --issued-at '2026-01-01T00:10:00.000Z' \
+  --next-update '2026-01-01T02:00:00.000Z' --seq 8 --out "$T/list-ahead-exact.json"
+expect 0 'GOOD — not revoked' 'a status list issued exactly at the clock-skew allowance is good' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-ahead-exact.json" --check-kid "$ISSUER_KID" --now "$NOW"
 
 expect 0 'one of the kids you pinned with --expect-kid' '--expect-kid works beside --status-list on the attestation key' -- \
   "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$ISSUER_KID"
