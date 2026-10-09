@@ -224,6 +224,11 @@ before it takes effect. Only the latest release is supported, as
   as a pattern that matches everything; it always passed. The helpers now read
   the output of the run they follow, refuse such a string, and the check is
   written as line-anchored patterns. It holds.
+- The tests: the check that no global is read from the environment missed
+  array reads with a default (`${ANCHOR_E[0]:-absent}`) and `:=`, and exempted
+  a name declared `local` in any function. It reads those forms now, exempts a
+  local only inside its own function, and checks itself on each; the two
+  arrays it found are set when the script starts.
 - The tests: the check that no function is defined twice read only the form
   `name()`, and missed `name ()`, `function name` and `function name()`. It
   reads every form now, and checks itself on each.

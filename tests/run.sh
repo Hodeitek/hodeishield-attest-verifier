@@ -2300,33 +2300,73 @@ fi
 
 # --- no global is taken from the environment (static) ----------------------------
 # Bash imports every environment variable as a shell variable. A global that the
-# script reads with a default (${VAR:-}, ${VAR+x}, ...) must be set at the top
-# level before the first line that reads it, or the caller's environment decides
-# its value (an exported GENERATED did, for a standalone --status-list query).
-# Function locals and NO_COLOR (read from the environment on purpose) are exempt.
-GLOBALS_SCAN="$(python3 -I - "$VERIFIER" <<'PY'
+# script reads with a default (${VAR:-}, ${VAR+x}, ${VAR:=x}, ${ARR[0]:-x}, ...)
+# must be set at the top level before the first line that reads it, or the
+# caller's environment decides its value (an exported GENERATED did, for a
+# standalone --status-list query). A name declared `local` is exempt only inside
+# the function that declares it; NO_COLOR is read from the environment on purpose.
+cat > "$T/globals-scan.py" <<'PY'
 import re, sys
 lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
-locals_ = set()
+READ = re.compile(r"\$\{([A-Za-z_]\w*)(\[[^]]*\])?:?[-+?=]")   # a name: positional parameters are not globals
+DEF = re.compile(r"^(\s*)(?:function\s+(\w+)(?:\s*\(\))?|(\w+)\s*\(\))\s*\{(.*)$")
+SET = re.compile(r"(?:^|;\s*)(\w+)\+?=|^(?:mapfile|readarray)\s+(?:-\S+\s+)*(\w+)")
+LOCAL = re.compile(r"(?:^|[{;])\s*local\s+([^;]*)")
+cur, end, scope, locals_ = None, None, [], {}
 for ln in lines:
-    m = re.match(r"\s*local\s+(.*)", ln)
-    if m:
-        locals_ |= set(re.findall(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)(?==|\s|$)", m.group(1)))
+    fn = cur
+    if cur is None:
+        m = DEF.match(ln)
+        if m:
+            fn = m.group(2) or m.group(3)
+            if not m.group(4).rstrip().endswith("}"):   # not a one-line function
+                cur, end = fn, m.group(1) + "}"
+    elif ln.rstrip() == end:
+        cur = None
+    scope.append(fn)
+    if fn:
+        for decl in LOCAL.findall(ln):
+            locals_.setdefault(fn, set()).update(re.findall(r"(?:^|\s)(\w+)(?==|\s|$)", decl))
 first_use, first_set = {}, {}
 for n, ln in enumerate(lines, 1):
     if ln.lstrip().startswith("#"): continue   # a comment is not a read
-    for v in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?[-+?])", ln):
-        first_use.setdefault(v, n)
+    fn = scope[n - 1]
+    for v, _ in READ.findall(ln):
+        if not (fn and v in locals_.get(fn, ())):
+            first_use.setdefault(v, n)
     if not ln[:1].isspace():
-        for v in re.findall(r"(?:^|;\s*)([A-Za-z_][A-Za-z0-9_]*)=", ln):
-            first_set.setdefault(v, n)
-exempt = locals_ | {"NO_COLOR", "FUNCNAME", "BASH_LINENO"}
-bad = sorted("%s (read at line %d, set at %s)" % (v, n, first_set.get(v, "no top-level line"))
-             for v, n in first_use.items() if v not in exempt and not first_set.get(v, n + 1) < n)
+        for a, b in SET.findall(ln):
+            first_set.setdefault(a or b, n)
+exempt = {"NO_COLOR", "FUNCNAME", "BASH_LINENO"}
+bad = sorted(v for v, n in first_use.items() if v not in exempt and not first_set.get(v, n + 1) < n)
 print(len(first_use))
-for b in bad: print(b)
+for v in bad: print("%s (read at line %d, set at %s)" % (v, first_use[v], first_set.get(v, "no top-level line")))
 PY
-)"
+# The scanner itself: a local read in its own function is exempt; the same name
+# read in another function, an array read with a default, a := default, and a
+# global set only after it is read are each caught.
+cat > "$T/globals-forms.sh" <<'SH'
+A=''
+f() {
+  local x='' y
+  echo "${x:-}" "${y+set}" "${A:-}"
+}
+g() {
+  echo "${x:-}"
+  echo "${ARR[0]:-absent}" "${LIST[@]+x}"
+  : "${Z:=1}"
+}
+h() { local w; echo "${w:-}"; }
+ARR=()
+mapfile -t LIST < /dev/null
+SH
+GLOBALS_SELF="$(python3 -I "$T/globals-scan.py" "$T/globals-forms.sh" | tail -n +2 | sed 's/ .*//' | tr '\n' ' ')"
+if [ "$GLOBALS_SELF" = 'ARR LIST Z x ' ]; then
+  printf 'ok - the globals scanner catches array reads, :=, and a local read outside its own function\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - the globals scanner reported: %s (expected: ARR LIST Z x)\n' "$GLOBALS_SELF"; FAILED=$((FAILED + 1))
+fi
+GLOBALS_SCAN="$(python3 -I "$T/globals-scan.py" "$VERIFIER")"
 if [ "$(printf '%s\n' "$GLOBALS_SCAN" | wc -l)" -eq 1 ] && [ "$GLOBALS_SCAN" -ge 15 ]; then
   printf 'ok - every global read with a default (%s) is set at the top level before it is read\n' "$GLOBALS_SCAN"; PASSED=$((PASSED + 1))
 else

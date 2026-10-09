@@ -252,6 +252,7 @@ CLAIMS_DOCVERSION=''; CLAIMS_ISS=''; CLAIMS_KID=''; CLAIMS_JTI=''; CLAIMS_NONCE=
 HAVE_ATTESTATION=0; DUPLICATE_KEYS=''; REVOCATION_STATUS=''; REVOCATION_UNKNOWN_BECAUSE=''
 CHECKS_FILE=''
 anchor_tag_ok=0; anchor_tag=''
+ANCHOR_E=(); ANCHOR_SE=()   # the statement's entry for each key (mapfile, section 3 and 8)
 
 # The issuer's hard TTL ceiling (posture.ts MAX_TTL_SECONDS). `expiresAt` further
 # from `generatedAt` than this is above anything a conforming issuer can mint, so
