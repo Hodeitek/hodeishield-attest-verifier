@@ -626,20 +626,23 @@ def envelope_bytes(c):                           # E1..E7 — THIS is what is si
                      opt(c.get("jti")), opt(c.get("nonce")), opt(c.get("overallBand")),
                      bs(nested)])
 
-claims = json.load(open(sys.argv[1]))
+claims = json.load(open(sys.argv[1], encoding="utf-8"))
 what = sys.argv[2] if len(sys.argv) > 2 else "envelope"
 sys.stdout.buffer.write(envelope_bytes(claims) if what == "envelope"
                         else posture_bytes(claims["posture"]))
 ```
 
 Run it against the claims and compare the digest with what the platform
-computed and published in the same response:
+computed and published in the same response. The claims are UTF-8 whatever your
+locale: `encoding="utf-8"` and `-X utf8` keep a non-ASCII label from being
+decoded in another encoding and re-encoded into bytes nobody signed (`-I` keeps
+a `json.py` in the current directory from being imported):
 
 ```bash
 jq '.attestation.claims' att.json > claims.json
 
-python3 canon.py claims.json > canon.bin              # the signed envelope
-python3 canon.py claims.json posture > nested.bin     # just E7's contents
+python3 -I -X utf8 canon.py claims.json > canon.bin              # the signed envelope
+python3 -I -X utf8 canon.py claims.json posture > nested.bin     # just E7's contents
 wc -c < canon.bin
 wc -c < nested.bin
 openssl dgst -sha256 canon.bin
@@ -738,12 +741,12 @@ ML-DSA-65 Public-Key:
 #     reject the document (verify-attestation.sh reports `unsigned_member`).
 #     jq silently keeps the last of a duplicated member, so check the file as you
 #     received it for duplicates first (§4.0); any output means reject it too:
-#       python3 -c 'import json,sys
+#       python3 -I -c 'import json,sys
 #       def h(p):
 #           ks = [k for k, _ in p]
 #           if len(set(ks)) != len(ks): print("duplicate member:", ks)
 #           return dict(p)
-#       json.load(open(sys.argv[1]), object_pairs_hook=h)' att.json
+#       json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=h)' att.json
 jq -r '
     (keys - ["docVersion","iss","kid","jti","nonce","overallBand","posture"]
        | map("claims." + .)),
@@ -762,7 +765,7 @@ jq -r '
 #    The protected segment goes in EXACTLY as received — never re-serialise it
 #    from the parsed header, or a sender could reorder the header JSON and have
 #    you verify over bytes that differ from the ones signed.
-python3 canon.py claims.json > canon.bin
+python3 -I -X utf8 canon.py claims.json > canon.bin
 wc -c < canon.bin                                   # 750 for the document above
 printf '%s.%s' "$H" "$(b64url_encode canon.bin)" > signing_input.bin
 b64url_decode "$S" > sig.bin
@@ -801,7 +804,7 @@ check yours.
 `in_progress` to `advanced` — exactly the lie a forged attestation would tell:
 
 ```bash
-python3 - <<'EOF'
+python3 -I - <<'EOF'
 import json
 d = json.load(open('att.json'))
 for f in d['attestation']['claims']['posture']['frameworks']:
@@ -832,7 +835,7 @@ format would be fragile and every re-serialisation through a JSON library would
 be a false alarm:
 
 ```bash
-python3 -c "
+python3 -I -c "
 import json
 d = json.load(open('att.json'))
 d['attestation']['claims']['posture']['frameworks'].reverse()
@@ -858,7 +861,7 @@ posture. Rewrite `iss`, the field that decides whose key set is authoritative,
 leaving the posture untouched:
 
 ```bash
-python3 -c "
+python3 -I -c "
 import json
 d = json.load(open('att.json'))
 d['attestation']['claims']['iss'] = 'https://attacker.example'
@@ -885,7 +888,7 @@ verifies, which is exactly why a verifier must reject the document instead of
 ignoring the extra member:
 
 ```bash
-python3 -c "
+python3 -I -c "
 import json
 d = json.load(open('att.json'))
 d['attestation']['claims']['note'] = 'not signed'
@@ -920,7 +923,7 @@ does not make a document current.
 | Field           | What to do with it                                                                                                                                                                                                                                                  |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `generatedAt`   | RFC 3339 instant the posture was computed. Reject anything older than your own tolerance; the reference verifier defaults to **1 hour** (`--max-age-seconds`), matching the issuer's hard TTL ceiling. Reject anything **more than 300 seconds in the future** as well: the reference verifier fails it as `not_yet_valid`, because otherwise a document dated a year ahead would stay "fresh" for a year. **MUST be present and parseable:** a missing `generatedAt`, or one that cannot be parsed as RFC 3339, is a failure, never a skipped check — a document whose age was not read has not had its age checked. |
-| `expiresAt`     | After this, treat the document as stale by construction — re-fetch, do not accept "just this once". **MUST be present: reject a document without one.** We always set it, so a document lacking an expiry is not one of ours, and it must never be read as "never expires". Also reject `expiresAt - generatedAt > 1 hour` — that is above the ceiling we can issue, so it did not come from a conforming issuer whatever its signature says. |
+| `expiresAt`     | After this, treat the document as stale by construction — re-fetch, do not accept "just this once". **MUST be present: reject a document without one.** We always set it, so a document lacking an expiry is not one of ours, and it must never be read as "never expires". Also reject `expiresAt - generatedAt > 1 hour` — that is above the ceiling we can issue, so it did not come from a conforming issuer whatever its signature says. Compare the two as exact instants, fractions of a second included: the reference verifier does. |
 | `lastCheckedAt` | Freshest genuine monitoring heartbeat behind the posture. **Can legitimately be older than `generatedAt`** — that gap is the honest signal of how stale the underlying _data_ is, as distinct from the document. `null` means no heartbeat is being claimed at all. |
 | `slug`          | Binds the attestation to one trust center. Check it against the organisation you think you are evaluating. `--expect-slug` does this for you.                                                                                                                       |
 | `visibility`    | `gated` postures are redacted by design — see §6.                                                                                                                                                                                                                   |
@@ -1064,7 +1067,7 @@ jq '{posture: (.attestation.claims.posture
       | .generatedAt = "1970-01-01T00:00:00.000Z" | .expiresAt = null)}' \
   att.json > timeless.json
 
-{ printf 'hodei-shield.trust-center.badge-ref.v1'; python3 canon.py timeless.json posture; } \
+{ printf 'hodei-shield.trust-center.badge-ref.v1'; python3 -I -X utf8 canon.py timeless.json posture; } \
   | openssl dgst -sha256 -r | cut -c1-8
 ```
 
@@ -1486,7 +1489,12 @@ Given both `--attestation` (or `--jws`/`--claims`) and `--status-list`, the
 script runs the full §4 posture check first and then applies the status list to
 the resulting `kid`, slug and `generatedAt` — you do not supply
 `--check-kid`/`--check-subject` yourself in this mode; they are read from the
-verified document. If the posture check fails, the run ends as a failure
+verified document. A `--check-kid` given anyway is looked up as well: it never
+replaces the document's own kid, which is always looked up. In the same way a
+`--check-subject` or `--check-generated-at` given anyway adds a subject to look
+up (each defaults to the document's value): the document's own signed slug, at
+its own signed `generatedAt`, is always looked up, and a withdrawal of either is
+`REVOKED`. If the posture check fails, the run ends as a failure
 (exit 1) whatever the list says: an inauthentic document is not rescued by not
 being listed. Note `--jwks` and `--status-keys` are **different key sets** and the
 script never resolves one against the other; passing the attestation JWKS as
@@ -1495,16 +1503,25 @@ script never resolves one against the other; passing the attestation JWKS as
 **What "revoked" means exactly.** The two rules of §7 are applied in this order,
 and the first that fires decides:
 
-- **Key rule.** `kid` (the header kid of the document, or `--check-kid`) is
-  listed in `keys[]` → revoked, with no timestamp compared.
-- **Subject rule.** The slug (from the document, or `--check-subject`) is listed
-  in `subjects[]` — matched by the hash `SHA-256("hodei-shield.attest.subject.v1"
-  || slug)`, base64url — and the document's `generatedAt` is **strictly earlier**
-  than the entry's `notBefore` → revoked. A `generatedAt` equal to or later than
-  `notBefore` is not revoked by this rule: the entry withdraws attestations
-  issued *before* that instant. If the subject is listed but no `generatedAt` is
-  available, or `generatedAt` or `notBefore` cannot be parsed, the outcome is
-  `unknown`, never `good`.
+- **Key rule.** A `kid` checked is listed in `keys[]` → revoked, with no
+  timestamp compared. With a document, the kids checked are the one recomputed
+  from the key bytes that verified it and its header kid, always, and any
+  `--check-kid` besides; without one, the `--check-kid` given. `--check-kid`
+  must have the shape of a kid, or the run is a usage error (exit 2).
+- **Subject rule.** A slug checked is listed in `subjects[]` — matched by the
+  hash `SHA-256("hodei-shield.attest.subject.v1" || slug)`, base64url — and the
+  `generatedAt` it is checked at is **strictly earlier** than the entry's
+  `notBefore`, compared as exact instants (fractions of a second included, as
+  for a retired key) → revoked. With a document, the document's own signed slug is
+  checked at its own signed `generatedAt`, always; a `--check-subject` or
+  `--check-generated-at` given besides adds one more check, of that slug (by
+  default the document's) at that time (by default the document's), and never
+  replaces the first. Without one, the `--check-subject` given is checked at
+  `--check-generated-at`. A withdrawal found by any of them decides. A
+  `generatedAt` equal to or later than `notBefore` is not revoked by this rule:
+  the entry withdraws attestations issued *before* that instant. If the subject
+  is listed but no `generatedAt` is available, or `generatedAt` or `notBefore`
+  cannot be parsed, the outcome is `unknown`, never `good`.
 - If the list is marked `truncated` (entries were dropped to fit a cap) and the
   subject is not found, the outcome is `unknown` on the subject dimension:
   "not found" does not mean "not listed".

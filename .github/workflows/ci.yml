@@ -48,7 +48,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Install openssl, python3, jq
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base locales
+      # A Latin-1 locale, for the test that the verdict does not depend on the
+      # locale (tests/run.sh requires it here: VERIFIER_REQUIRE_LATIN1 below).
+      - name: Generate the en_US.ISO-8859-1 locale
+        run: |
+          # localedef exits 1 on a mere warning; whether the locale exists is what counts.
+          localedef -c -i en_US -f ISO-8859-1 en_US.ISO-8859-1 || true
+          test "$(LC_ALL=en_US.ISO-8859-1 locale charmap)" = ISO-8859-1
       - name: Toolchain
         run: |
           openssl version
@@ -70,6 +77,8 @@ jobs:
       - name: VERIFIER_VERSION agrees with CHANGELOG.md
         run: bash tests/version-consistency.sh
       - name: tests/run.sh
+        env:
+          VERIFIER_REQUIRE_LATIN1: "1"
         run: bash tests/run.sh
 
   # The README says an OpenSSL without ML-DSA is "a limit of your tooling, not

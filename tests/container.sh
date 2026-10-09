@@ -124,7 +124,7 @@ MINTER='
 set -e
 apt-get update -qq >/dev/null
 apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null
-M="python3 /repo/tests/lib/mint.py"
+M="python3 -I /repo/tests/lib/mint.py"
 $M keygen --out /tmp/k.pem --jwks /out/jwks.json >/dev/null
 GEN="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 EXP="$(date -u -d "+10 minutes" +%Y-%m-%dT%H:%M:%S.000Z)"
@@ -132,13 +132,13 @@ $M attest --key /tmp/k.pem --out /out/att.json --slug "$SLUG" --iss "$ISS" \
   --generated-at "$GEN" --expires-at "$EXP" \
   --framework iso27001=substantial --framework nis2=basic >/dev/null
 $M keygen --out /tmp/s.pem --jwks /out/status-jwks.json >/dev/null
-KID="$(python3 -c "import json; print(json.load(open(\"/out/jwks.json\"))[\"keys\"][0][\"kid\"])")"
+KID="$(python3 -I -c "import json; print(json.load(open(\"/out/jwks.json\"))[\"keys\"][0][\"kid\"])")"
 NEXT="$(date -u -d "+1 hour" +%Y-%m-%dT%H:%M:%S.000Z)"
 $M status --key /tmp/s.pem --iss "$ISS" --issued-at "$GEN" --next-update "$NEXT" \
   --seq 1 --out /out/status-empty.json >/dev/null
 $M status --key /tmp/s.pem --iss "$ISS" --issued-at "$GEN" --next-update "$NEXT" \
   --seq 2 --revoke-kid="$KID" --out /out/status-revoked.json >/dev/null
-python3 - <<PY
+python3 -I - <<PY
 import json
 d = json.load(open("/out/att.json"))
 d["attestation"]["claims"]["overallBand"] = "advanced"

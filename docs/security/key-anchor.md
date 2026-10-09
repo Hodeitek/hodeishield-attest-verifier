@@ -113,6 +113,32 @@ script from v1.4.0. It behaves as follows:
   issuer above. The reader does not choose the identity: there is no option and
   no environment variable for it. The script verifies and parses one private
   copy of the statement, so the file cannot change between the two.
+- **The bundle is exactly a Sigstore bundle v0.3**, checked before cosign sees
+  it: strict JSON with no duplicate member, `mediaType`
+  `application/vnd.dev.sigstore.bundle.v0.3+json`, the top-level members exactly
+  `mediaType`, `verificationMaterial` and `messageSignature` (no `dsseEnvelope`,
+  and none of the legacy members `base64Signature`, `cert`, `rekorBundle`,
+  `payload`), a `verificationMaterial` that is one `certificate` (exactly
+  `rawBytes`), a non-empty `tlogEntries` and optionally
+  `timestampVerificationData`, and a `messageSignature` with a `signature`.
+  Anything else is exit 2 (`anchor_bundle_unsupported`, "the bundle is not a
+  Sigstore v0.3 bundle"). The reason: when a bundle does not load as a v0.3
+  bundle, cosign 3.1.3 falls back to its legacy bundle format and verifies the
+  certificate in `cert`, which is not the certificate the script reads the
+  release tag from. A legacy bundle could therefore carry a genuine old
+  signature for cosign and a decoy certificate with a newer tag for the script.
+  The bundles the release workflow publishes are v0.3.
+- **The certificate the tag is read from is the one cosign verified.** After
+  reading the identity from the bundle's certificate, the script runs
+  `cosign verify-blob` a second time with `--certificate-identity` set to that
+  exact identity (not a pattern) and the same issuer. If cosign does not verify
+  it, the run ends with exit 2 (`anchor_unverified`), and no release tag is
+  reported.
+- **The certificate is from this repository by its numeric ID.** The same
+  certificate must carry the Source Repository Identifier extension (OID
+  `1.3.6.1.4.1.57264.1.15`) with this repository's GitHub ID, `1340684886`,
+  exactly once, as the UTF8String Fulcio writes. Anything else is exit 2
+  (`anchor_unverified`). See "Consequences".
 - cosign may contact the Sigstore TUF repository to refresh its trust root, so
   the option can need network access even though the rest of the verifier does
   not.
@@ -178,9 +204,9 @@ A reader who runs an OLD verifier can still be served a statement as old as that
 ### The reason codes
 
 The codes are in [reason-codes.md](reason-codes.md#the-anchor---anchor-file).
-`anchor_cosign_unavailable`, `anchor_unverified`, `anchor_tag_unreadable`,
-`anchor_statement_older` and `anchor_malformed` are exit
-2. `anchor_kid_absent`, `anchor_role_mismatch`, `anchor_retired_mismatch` and
+`anchor_cosign_unavailable`, `anchor_bundle_unsupported`, `anchor_unverified`,
+`anchor_tag_unreadable`, `anchor_statement_older` and `anchor_malformed` are
+exit 2. `anchor_kid_absent`, `anchor_role_mismatch`, `anchor_retired_mismatch` and
 `anchor_issuer_mismatch` are exit 1; the retirement itself is the existing
 `retired_key`. The three `anchor_status_*` failures are exit 3.
 
@@ -191,11 +217,32 @@ a key set whose key is not one the issuer published through this repository: the
 `kid` of the signing key must be in a statement signed by this repository's
 release workflow.
 
+**The anchor trusts any `v*` tag built by `release.yml` in this repository.**
+The release workflow signs the statement as soon as a `v*` tag is pushed, for
+whatever commit the tag points to, before the draft release exists and whether
+or not it is ever published. The signature and its certificate are in the public
+Rekor log from that moment, so a usable bundle exists even for a draft that is
+deleted. Publishing the draft by hand is therefore not a control on what the
+anchor accepts, and neither is signing the tags: the workflow does not check a
+tag's signature. What limits the set of statements the anchor accepts is who can
+push a `v*` tag (a tag ruleset on `v*`), and the version check above (a tag older
+than the verifier is refused).
+
+The identity names the repository by name. A name is given up when a repository
+is renamed or deleted, and another repository could take it and run its own
+`release.yml`. So the verifier also requires the verified certificate to carry
+this repository's numeric GitHub ID, `1340684886`, in the Source Repository
+Identifier extension that Fulcio writes (OID `1.3.6.1.4.1.57264.1.15`). The ID
+is never reused. A certificate without it, or with another value, is exit 2
+(`anchor_unverified`, "the certificate is not from this repository"). It is read
+from the certificate cosign verified, with `openssl asn1parse`; no new
+dependency.
+
 It does not protect against:
 
-- a compromised release pipeline or GitHub account, which can sign a statement
-  with a different key. The tags are signed and the release is published by
-  hand from a draft, which makes that harder but not impossible.
+- anyone who can push a `v*` tag to this repository, a compromised GitHub
+  account with that right, or a compromised release pipeline: each can have a
+  statement with a different key signed, as described above.
 - a compromised issuer key. That is handled by revocation (§7 and §7.1 of the
   verification document), not by this statement.
 

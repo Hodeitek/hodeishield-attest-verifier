@@ -245,7 +245,13 @@ bash scripts/attest/verify-attestation.sh --status-list \
 ```
 
 `--jwks` and `--status-keys` are different key sets and are never
-interchangeable. What the list can and cannot tell you is in
+interchangeable. With a document, the list is always applied to the document's
+own kid; `--check-kid KID` (a kid, or a usage error) adds a kid to look up and
+never replaces it. In the same way the list is always applied to the document's
+own slug at its own `generatedAt`; `--check-subject` and `--check-generated-at`
+add a subject to look up and never replace it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
+`--check-generated-at` and `--min-seq` need `--status-list`: without it they are
+a usage error, exit 2. What the list can and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 
 ## What the output shows
@@ -281,6 +287,26 @@ Every value taken from a document, key set or status list is printed with
 control characters, and any byte outside printable ASCII, as a visible `\xHH`
 escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
 
+## Machine-readable output
+
+`--json` prints one JSON object on stdout and nothing else (no text on stdout
+or stderr), with the same exit codes. Add `--json` to any other options,
+anywhere in the arguments (an argument error is reported as JSON too); `--help`
+and `--version` keep printing their text.
+
+```bash
+bash scripts/attest/verify-attestation.sh --json \
+  --attestation att.json --jwks jwks.json --expect-slug acme --expect-issuer https://issuer.example
+```
+
+The object has the `verdict` (`verified`, `expired`, `failed`,
+`could_not_check`, `good`, `revoked` or `unknown`), the `reason` code that
+decided the exit code, every check with its code and result, and, **only when
+the exit code is 0**, the `attested` content. The values it reads from a
+document that did not verify are under `unverified`, and are not established.
+Test the exit code first. The fields, their stability and examples are in
+[docs/security/json-output.md](docs/security/json-output.md).
+
 ## Convince yourself it can fail
 
 A verifier that has only ever printed `PASS` has told you nothing. Each of these
@@ -288,7 +314,7 @@ must exit 1, and you should run them before trusting a `VERIFIED`:
 
 ```bash
 # 1. Tamper with a signed field.
-python3 -c "import json;d=json.load(open('att.json'));\
+python3 -I -c "import json;d=json.load(open('att.json'));\
 d['attestation']['claims']['overallBand']='advanced';\
 json.dump(d,open('att-tampered.json','w'))"
 bash scripts/attest/verify-attestation.sh --attestation att-tampered.json \
@@ -299,7 +325,7 @@ bash scripts/attest/verify-attestation.sh --attestation att.json \
   --jwks jwks.json --expect-slug not-talmaren-payments ; echo "exit=$?" # 1
 
 # 3. Add a member the signature does not cover.
-python3 -c "import json;d=json.load(open('att.json'));\
+python3 -I -c "import json;d=json.load(open('att.json'));\
 d['attestation']['claims']['note']='not signed';\
 json.dump(d,open('att-extra.json','w'))"
 bash scripts/attest/verify-attestation.sh --attestation att-extra.json \
@@ -346,7 +372,7 @@ rejects a JWKS whose `kid` does not match its key. To compute it yourself from
 a downloaded `jwks.json`, one value per key:
 
 ```bash
-python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
+python3 -I -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
 ```
 
 Compare the output with the `kid` you pinned. The current values are listed in
@@ -400,9 +426,19 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
 - The identity cosign must see is fixed in the script (this repository's release
   workflow at a tag `vN.N.N`, issued by GitHub Actions). No option or environment
   variable changes it.
-- Exit 2, "anchor could not be checked", when cosign is missing or older, or the
-  statement does not verify (wrong identity, altered statement, unreadable
-  bundle, no trust root), or is not a well-formed statement. This is by design:
+- The bundle must be exactly a Sigstore bundle v0.3, as the release publishes
+  it; any other shape, such as cosign's legacy bundle format, is refused before
+  cosign runs (exit 2). cosign is then asked a second time for the exact
+  identity read from the bundle's certificate, so the release tag below comes
+  from the certificate cosign verified. That certificate must also carry this
+  repository's numeric GitHub ID (Fulcio's Source Repository Identifier), so a
+  repository that took over the name is not accepted.
+- The anchor accepts a statement signed for any `v*` tag that `release.yml` of
+  this repository built, published or not: the workflow signs when the tag is
+  pushed. See "Consequences" in [the decision record](docs/security/key-anchor.md).
+- Exit 2, "anchor could not be checked", when cosign is missing or older, the
+  bundle is not v0.3, or the statement does not verify (wrong identity, altered
+  statement, unreadable bundle, no trust root), or is not a well-formed statement. This is by design:
   a statement that does not verify says nothing about the attestation, just as a
   wrong key document does not. The run never ends in `VERIFIED` then, and the
   message says which cause it found.
@@ -516,6 +552,8 @@ the reason it is a short, single, readable script.
   The few cases that use real Sigstore bundles need cosign ≥ 3.1.3 and the
   network; where cosign is missing they are reported as skipped, never as
   passed.
+- `bash tests/vectors.sh --json` runs every vector again with `--json` and checks
+  the object instead of the text; `tests/run.sh` runs it too.
 - `bash tests/mutants.sh` builds a copy of the verifier whose signature check
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled

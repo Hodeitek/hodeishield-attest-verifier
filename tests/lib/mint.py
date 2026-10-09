@@ -150,7 +150,18 @@ def declared_kids(a, derived):
             getattr(a, "claims_kid", None) or both)
 
 
+def unescape(a, *names):
+    """TEST-ONLY (--escapes): read these values as Python string escapes, so that a
+    test can sign a value holding a byte that argv cannot carry, such as NUL."""
+    if getattr(a, "escapes", False):
+        for n in names:
+            v = getattr(a, n)
+            if v is not None:
+                setattr(a, n, v.encode("latin-1", "backslashreplace").decode("unicode_escape"))
+
+
 def cmd_attest(a):
+    unescape(a, "slug", "iss", "nonce")
     derived = kid_of(raw_pub(a.key))
     hkid, kid = declared_kids(a, derived)
     frameworks = [{"code": c, "label": c.upper(), "band": b}
@@ -193,6 +204,7 @@ def subject_hash(slug):
 
 
 def cmd_status(a):
+    unescape(a, "iss")
     derived = kid_of(raw_pub(a.key))
     hkid, kid = declared_kids(a, derived)
     keys = [{"kid": k, "reason": "key_compromise", "revokedAt": a.issued_at} for k in a.revoke_kid]
@@ -239,6 +251,8 @@ def main():
                    help="TEST-ONLY: kid for header AND claims, instead of the signing key's own")
     t.add_argument("--header-kid", default=None, help="TEST-ONLY: header kid only")
     t.add_argument("--claims-kid", default=None, help="TEST-ONLY: claims.kid only")
+    t.add_argument("--escapes", action="store_true",
+                   help="TEST-ONLY: read --slug, --iss and --nonce as Python string escapes (\\x00)")
     t.set_defaults(fn=cmd_attest)
 
     x = sub.add_parser("attach")
@@ -261,6 +275,8 @@ def main():
     s.add_argument("--claims-kid", default=None, help="TEST-ONLY: claims.kid only")
     s.add_argument("--header", action="append", default=[],
                    help="name=value: an extra or overriding protected-header member, signed")
+    s.add_argument("--escapes", action="store_true",
+                   help="TEST-ONLY: read --iss as Python string escapes (\\x00)")
     s.set_defaults(fn=cmd_status)
 
     a = ap.parse_args()
