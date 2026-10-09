@@ -1590,21 +1590,24 @@ PY
 # The harness itself: a check that raises, or a false check over several lines,
 # must be "not ok", and a true one over several lines "ok". Run in a subshell, so
 # that the counters of the suite are not touched; only the verdict line is read.
-jexpect_self() {   # NAME WANT_PREFIX CHECK
+# WANT is the start of the verdict line jexpect must print: each case names its
+# exact outcome, so that a check that raises is not passed by any other "not ok".
+jexpect_self() {   # NAME WANT CHECK
   local line
   line="$(jexpect 0 "harness self-test" "$3" -- --attestation "$T/att.json" "${COMMON[@]}" | head -1)"
   case "$line" in
-    "$2 - json: harness self-test"*) printf 'ok - json harness: %s\n' "$1"; PASSED=$((PASSED + 1)) ;;
+    "$2"*) printf 'ok - json harness: %s\n' "$1"; PASSED=$((PASSED + 1)) ;;
     *) printf 'not ok - json harness: %s (got: %s)\n' "$1" "$line"; FAILED=$((FAILED + 1)) ;;
   esac
 }
-jexpect_self 'a check that raises is not ok' 'not ok' '1 / 0 == 0'
-jexpect_self 'a check that reads a missing member is not ok' 'not ok' 'o["no such member"] == 1'
-jexpect_self 'a false check over several lines is not ok' 'not ok' 'o["verdict"] == "verified"
+JSELF_RAISES='not ok - json: harness self-test (the check could not be evaluated, python exit '
+jexpect_self 'a check that raises is not ok, as could not be evaluated' "$JSELF_RAISES" '1 / 0 == 0'
+jexpect_self 'a check that reads a missing member is not ok, as could not be evaluated' "$JSELF_RAISES" 'o["no such member"] == 1'
+jexpect_self 'a false check over several lines is not ok, as false' 'not ok - json: harness self-test (false: ' 'o["verdict"] == "verified"
    and o["verdict"] == "failed"'
-jexpect_self 'a true check over several lines is ok' 'ok' 'o["verdict"] == "verified"
+jexpect_self 'a true check over several lines is ok' 'ok - json: harness self-test' 'o["verdict"] == "verified"
    and o["exit_code"] == 0'
-jexpect_self 'a check that is not an expression is not ok' 'not ok' 'import os'
+jexpect_self 'a check that is not an expression is not ok, as could not be evaluated' "$JSELF_RAISES" 'import os'
 
 # The verdict does not depend on the locale. Under a Latin-1 locale the embedded
 # Python used to decode the claims JSON as Latin-1, so a genuine document with a

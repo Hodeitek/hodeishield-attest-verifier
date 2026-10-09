@@ -189,6 +189,10 @@ before it takes effect. Only the latest release is supported, as
   as a pattern that matches everything; it always passed. The helpers now read
   the output of the run they follow, refuse such a string, and the check is
   written as line-anchored patterns. It holds.
+- The tests: the self-checks of the `--json` harness accepted any "not ok" for
+  a check that raises, so one of them would still pass if such a check were
+  reported as merely false. Each now requires its exact outcome ("could not be
+  evaluated", or "false").
 - The tests: the real-cosign test of a legacy-format bundle is refused by the
   bundle shape check before cosign runs, so it shows the shape check, not
   cosign's legacy fallback, which no bundle can now reach; its comment says so,
