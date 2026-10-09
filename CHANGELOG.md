@@ -101,6 +101,16 @@ before it takes effect. Only the latest release is supported, as
   (`nul_byte`, exit 1; `status_unknown_nul_byte`, exit 3, in a status list; a
   malformed statement, exit 2, in the `--anchor-file` issuer), never the string
   without it. This also affected earlier releases.
+- Globals that a run does not always set were read from the caller's
+  environment, which bash imports as shell variables. A standalone
+  `--status-list` query (no document) took an exported `GENERATED` as the
+  document's `generatedAt`, so a withdrawn `--check-subject` came out `GOOD`
+  instead of `UNKNOWN`; an exported `SLUG` was checked as the document's subject,
+  an exported `KID` or `DERIVED_KID` was looked up in the key rule, and
+  `--json` reported them under `unverified`. Every such global is now set when
+  the script starts, `--json` uses an explicit flag instead of testing whether a
+  variable is set, and a test checks statically that every global read with a
+  default is set before it is read. This also affected earlier releases.
 - The numbers given as options were not checked. `--max-age-seconds 60s` made a
   test error, which read as "within the freshness window", so the run could end
   `VERIFIED`, exit 0; `--max-age-days` and `--now` were evaluated as bash

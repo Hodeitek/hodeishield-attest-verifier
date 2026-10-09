@@ -536,6 +536,20 @@ expect 0 'GOOD — not revoked' 'a standalone --check-subject query after the wi
   --check-subject "$SLUG" --check-generated-at 2026-01-01T00:20:00.000Z --now "$NOW"
 expect 3 'IS listed, but no generatedAt was given' 'a standalone --check-subject query without a time is UNKNOWN' -- \
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" --check-subject "$SLUG" --now "$NOW"
+# Nothing is taken from the environment: a standalone query never read a
+# document, so an exported GENERATED, SLUG, KID or DERIVED_KID must not stand in
+# for one (bash imports every environment variable as a shell variable).
+GENERATED=2026-01-01T00:20:00.000Z expect 3 'IS listed, but no generatedAt was given' 'an exported GENERATED is not read as --check-generated-at' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" --check-subject "$SLUG" --now "$NOW"
+lacks 'GOOD' 'a withdrawn subject is never GOOD through the environment'
+KID="$ISSUER_KID" DERIVED_KID="$ISSUER_KID" expect 0 'GOOD — not revoked' 'an exported KID or DERIVED_KID is not looked up in Rule K' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-key.json" --check-subject other-org \
+  --check-generated-at "$GEN" --now "$NOW"
+lacks "kid $ISSUER_KID" 'no kid from the environment is reported as checked'
+SLUG="$SLUG" GENERATED="$GEN" expect 0 'subject other-org carries no earlier withdrawal' 'an exported SLUG is not added as the subject of a document' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" --check-subject other-org \
+  --check-generated-at "$GEN" --now "$NOW"
+lacks 'fixture-org' 'the exported slug is not checked'
 
 # Rule B compares exact instants, through the same comparator as the retirement
 # checks. In whole seconds, a document generated at 00:00:00.000 was not "before"
@@ -1823,6 +1837,9 @@ jexpect 3 'status-list unknown: the list does not verify' \
 jexpect 0 'a standalone status query: good, nothing attested' \
   'o["verdict"] == "good" and o["attested"] is None and o["unverified"] == {}' -- \
   --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW"
+GENERATED="$GEN" EXPIRES="$EXP" SLUG="$SLUG" POSTURE_READ=1 jexpect 0 'a standalone status query: nothing from the environment in unverified' \
+  'o["verdict"] == "good" and o["unverified"] == {}' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW"
 jexpect 1 'a tampered document under a good list: failed' 'o["verdict"] == "failed" and o["attested"] is None' -- \
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-empty.json" --attestation "$T/tampered-field.json" "${COMMON[@]}"
 
@@ -2185,6 +2202,41 @@ if [ "${#all_fns[@]}" -ge 30 ] && [ "${#dup_fns[@]}" -eq 0 ]; then
   printf 'ok - every function of the script is defined once (%d functions)\n' "${#all_fns[@]}"; PASSED=$((PASSED + 1))
 else
   printf 'not ok - functions defined more than once: %s (%d read)\n' "${dup_fns[*]}" "${#all_fns[@]}"; FAILED=$((FAILED + 1))
+fi
+
+# --- no global is taken from the environment (static) ----------------------------
+# Bash imports every environment variable as a shell variable. A global that the
+# script reads with a default (${VAR:-}, ${VAR+x}, ...) must be set at the top
+# level before the first line that reads it, or the caller's environment decides
+# its value (an exported GENERATED did, for a standalone --status-list query).
+# Function locals and NO_COLOR (read from the environment on purpose) are exempt.
+GLOBALS_SCAN="$(python3 -I - "$VERIFIER" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+locals_ = set()
+for ln in lines:
+    m = re.match(r"\s*local\s+(.*)", ln)
+    if m:
+        locals_ |= set(re.findall(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)(?==|\s|$)", m.group(1)))
+first_use, first_set = {}, {}
+for n, ln in enumerate(lines, 1):
+    if ln.lstrip().startswith("#"): continue   # a comment is not a read
+    for v in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?[-+?])", ln):
+        first_use.setdefault(v, n)
+    if not ln[:1].isspace():
+        for v in re.findall(r"(?:^|;\s*)([A-Za-z_][A-Za-z0-9_]*)=", ln):
+            first_set.setdefault(v, n)
+exempt = locals_ | {"NO_COLOR", "FUNCNAME", "BASH_LINENO"}
+bad = sorted("%s (read at line %d, set at %s)" % (v, n, first_set.get(v, "no top-level line"))
+             for v, n in first_use.items() if v not in exempt and not first_set.get(v, n + 1) < n)
+print(len(first_use))
+for b in bad: print(b)
+PY
+)"
+if [ "$(printf '%s\n' "$GLOBALS_SCAN" | wc -l)" -eq 1 ] && [ "$GLOBALS_SCAN" -ge 15 ]; then
+  printf 'ok - every global read with a default (%s) is set at the top level before it is read\n' "$GLOBALS_SCAN"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - globals that the environment can set:\n'; printf '%s\n' "$GLOBALS_SCAN" | sed 's/^/    # /'; FAILED=$((FAILED + 1))
 fi
 
 # --- reason codes (static) ----------------------------------------------------

@@ -237,6 +237,21 @@ CHECK_KID=''; CHECK_SUBJECT=''; CHECK_GENERATED_AT=''
 MIN_SEQ=''; EXPECT_ISSUER=''
 STATUS_OPT=''   # the first status-list option given, for the usage error without --status-list
 
+# EVERY global that is read before the step that sets it, or read with a
+# default (${VAR:-}), is set here. Bash imports each environment variable as a
+# shell variable, so a global left unset is the caller's environment: an
+# exported GENERATED was read as the document's generatedAt by a standalone
+# --status-list query (a withdrawn --check-subject came out GOOD, not UNKNOWN),
+# and an exported KID was looked up in Rule K. tests/run.sh checks statically
+# that each global read with a default is set before its first use.
+SLUG=''; GENERATED=''; EXPIRES=''
+POSTURE_READ=0   # 1 once section 6 has read slug, generatedAt and expiresAt (for --json)
+KID=''; DERIVED_KID=''; STATUS_DERIVED_KID=''; STATUS_DOC_VERSION=''
+CLAIMS_DOCVERSION=''; CLAIMS_ISS=''; CLAIMS_KID=''; CLAIMS_JTI=''; CLAIMS_NONCE=''; CLAIMS_NONCE_PRESENT=0
+HAVE_ATTESTATION=0; DUPLICATE_KEYS=''; REVOCATION_STATUS=''; REVOCATION_UNKNOWN_BECAUSE=''
+CHECKS_FILE=''
+anchor_tag_ok=0; anchor_tag=''
+
 # The issuer's hard TTL ceiling (posture.ts MAX_TTL_SECONDS). `expiresAt` further
 # from `generatedAt` than this is above anything a conforming issuer can mint, so
 # it is a rejection regardless of how good the signature is.
@@ -578,9 +593,9 @@ json_emit() {
         "${CLAIMS_DOCVERSION:-}" "${CLAIMS_ISS:-}" "${CLAIMS_KID:-}" "${CLAIMS_JTI:-}"
       printf 'u_nonce_present\0%s\0u_nonce\0%s\0' "${CLAIMS_NONCE_PRESENT:-0}" "${CLAIMS_NONCE:-}"
     fi
-    if [ -n "${GENERATED+x}" ]; then printf 'u_generatedAt\0%s\0' "$GENERATED"; fi
-    if [ -n "${EXPIRES+x}" ]; then printf 'u_expiresAt\0%s\0' "$EXPIRES"; fi
-    if [ -n "${SLUG+x}" ]; then printf 'u_slug\0%s\0' "$SLUG"; fi
+    if [ "$POSTURE_READ" -eq 1 ]; then
+      printf 'u_generatedAt\0%s\0u_expiresAt\0%s\0u_slug\0%s\0' "$GENERATED" "$EXPIRES" "$SLUG"
+    fi
     if [ "$ATTESTED_OK" -eq 1 ]; then
       printf 'attested\0%s\0claims_file\0%s\0' 1 "$CLAIMS_FILE"
       if [ "$SHOW_RAW" -eq 1 ]; then printf 'raw_posture_file\0%s\0' "$POSTURE_FILE"; fi
@@ -2191,6 +2206,7 @@ if [ -n "$POSTURE_FILE" ]; then
   claims_field GENERATED "$POSTURE_FILE" generatedAt
   claims_field EXPIRES "$POSTURE_FILE" expiresAt
   claims_field SLUG "$POSTURE_FILE" slug
+  POSTURE_READ=1
 
   # epoch_of() is defined globally (near b64url_encode) so --status-list mode
   # can use it too without a --jws having run.
