@@ -107,6 +107,17 @@ before it takes effect. Only the latest release is supported, as
   the test runners'. This also affected earlier releases.
 
 ### Fixed
+- The verdict depended on the locale. The embedded Python read the claims, the
+  key sets and the status list in the locale's encoding, while other readers
+  used UTF-8: under a locale such as `en_US.ISO-8859-1`, a genuine document
+  carrying a non-ASCII character as raw UTF-8 (a framework label such as
+  `ens—alto`) failed its signature, exit 1, and the `--claims` checks and the
+  attested content could read different values. Every file is now opened as
+  bytes or as UTF-8, every output that holds document text is UTF-8 or escaped,
+  and every `python3` runs as `python3 -I -X utf8`, so its arguments and
+  streams are UTF-8 too. A test that set `PYTHONIOENCODING`, which `-I`
+  ignores, is replaced by one under a Latin-1 locale (in CI). This also affected
+  earlier releases.
 - An option given without its value exited 1, as if a check had failed. It is now
   a usage error, exit 2, with `error: --jws needs a value` (and likewise for
   every option that takes a value). For a file, URL, slug, number or time the

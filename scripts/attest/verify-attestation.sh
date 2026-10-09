@@ -383,7 +383,7 @@ seen = None
 lines = []
 if not usage and kv.get("checks_file"):
     try:
-        lines = open(kv["checks_file"], encoding="utf-8", errors="replace").read().split("\n")
+        lines = open(kv["checks_file"], "rb").read().decode("utf-8", "replace").split("\n")
     except OSError:
         lines = []
 for ln in lines:
@@ -580,7 +580,7 @@ json_emit() {
         "${DERIVED_KID:-}" "${STATUS_DERIVED_KID:-}" "${HAVE_ATTESTATION:-0}"
       if [ "${anchor_tag_ok:-0}" -eq 1 ]; then printf 'anchor_tag\0%s\0' "$anchor_tag"; fi
     fi
-  } | python3 -I -c "$JSON_PY"
+  } | python3 -I -X utf8 -c "$JSON_PY"
 }
 
 # The work directory and what happens when the run ends, however it ends.
@@ -898,7 +898,7 @@ hex_to_bin() {
   if command -v xxd >/dev/null 2>&1; then
     xxd -r -p
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -I -c 'import sys,binascii;sys.stdout.buffer.write(binascii.unhexlify(sys.stdin.read().strip()))'
+    python3 -I -X utf8 -c 'import sys,binascii;sys.stdout.buffer.write(binascii.unhexlify(sys.stdin.buffer.read().strip()))'
   else
     die spki_tool_missing "need either xxd or python3 to build the SPKI header (22 constant bytes of the algorithm)."
   fi
@@ -940,11 +940,11 @@ epoch_of() {
   local out
   out="$(date -u -d "$1" +%s 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return; }
   if command -v python3 >/dev/null 2>&1; then
-    out="$(printf '%s' "$1" | python3 -I -c '
+    out="$(printf '%s' "$1" | python3 -I -X utf8 -c '
 import sys, datetime
-s = sys.stdin.read().strip().replace("Z", "+00:00")
 try:
-    print(int(datetime.datetime.fromisoformat(s).timestamp()))
+    s = sys.stdin.buffer.read().decode("utf-8").strip().replace("Z", "+00:00")
+    sys.stdout.write("%d" % int(datetime.datetime.fromisoformat(s).timestamp()))
 except Exception:
     pass
 ' 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return; }
@@ -1028,6 +1028,17 @@ fetch_or_read() {
   esac
 }
 
+# PYTHON AND THE LOCALE. Every python3 in this script runs as
+# `python3 -I -X utf8`: -I so that nothing from the working directory or from
+# the PYTHON* environment variables is imported or read, and -X utf8 so that its
+# arguments, its standard streams and its default file encoding are UTF-8
+# whatever the locale. Beyond that, each file the embedded Python opens is opened
+# as bytes or with encoding="utf-8", and what it writes that holds document text
+# is UTF-8 bytes or escaped. Before, under a Latin-1 locale a genuine document
+# with a non-ASCII label failed its signature (the claims JSON was decoded as
+# Latin-1 and re-encoded differently). tests/run.sh checks every file the
+# embedded Python opens, and every python3 call of this file, statically.
+#
 # The canonical ATTESTATION encoder, reimplemented from the two published wire
 # formats — `hodei-shield.attest.attestation.v1` (the ENVELOPE, fields E1..E7;
 # app/src/lib/attest/posture.ts) wrapping `hodei-shield.attest.posture.v1` (the
@@ -1088,7 +1099,7 @@ def envelope_bytes(c):
                      opt(c.get("overallBand"), "overallBand"),
                      bs(nested)])
 
-claims = json.load(open(sys.argv[1]))
+claims = json.load(open(sys.argv[1], encoding="utf-8"))
 what = sys.argv[2] if len(sys.argv) > 2 else "envelope"
 if   what == "envelope": sys.stdout.buffer.write(envelope_bytes(claims))
 elif what == "posture":  sys.stdout.buffer.write(posture_bytes(claims.get("posture")))
@@ -1182,7 +1193,7 @@ if isinstance(doc, Obj):
 def vis(t):
     return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
 # Member names come from the document; they are shown, so they are escaped here.
-sys.stdout.write("\n".join(sorted(set(vis(x) for x in out))))
+sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-8", "backslashreplace"))
 '
 
 # Key selection and retirement of a signing key (the JWK member
@@ -1312,7 +1323,7 @@ else:
 #                       (they are different assertions for `nonce`).
 DOCX_PY='
 import json, sys
-doc = json.load(open(sys.argv[1]))
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
 mode = sys.argv[2]
 def claims_of(d):
     if not isinstance(d, dict): raise SystemExit("document: expected a JSON object")
@@ -1328,15 +1339,15 @@ elif mode == "split":
     c = d.get("claims", d)
     sig = d.get("signature")
     if not isinstance(c, dict): raise SystemExit("document: no claims object found")
-    json.dump(c, open(sys.argv[3], "w"), indent=2)
-    if isinstance(sig, str): sys.stdout.write(sig)
+    json.dump(c, open(sys.argv[3], "w", encoding="utf-8"), indent=2)
+    if isinstance(sig, str): sys.stdout.buffer.write(sig.encode("utf-8", "surrogatepass"))
 elif mode == "posture":
     # The SAME member the canonical encoder reads (claims["posture"]), never a
     # "claims"/"attestation" wrapper found inside the claims: those are not
     # what the signature covers.
     p = doc.get("posture") if isinstance(doc, dict) else None
     if not isinstance(p, dict): raise SystemExit("document: claims.posture is missing")
-    json.dump(p, open(sys.argv[3], "w"), indent=2)
+    json.dump(p, open(sys.argv[3], "w", encoding="utf-8"), indent=2)
 elif mode == "field":
     v = doc.get(sys.argv[3])
     # Bytes, not text: a non-UTF-8 stdout (PYTHONIOENCODING) must not make a
@@ -1362,7 +1373,7 @@ elif mode == "unsigned":
                 extra += ["posture.frameworks[%d].%s" % (i, k) for k in f if k not in SIGNED_FRAMEWORK]
     def vis(t):
         return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
-    sys.stdout.write("\n".join(vis(x) for x in extra))
+    sys.stdout.buffer.write("\n".join(vis(x) for x in extra).encode("utf-8", "backslashreplace"))
 elif mode == "summary":
     # What the signature covers, for a human: only members the canonical encoders
     # read. Control characters are shown as ? so a value cannot drive the terminal.
@@ -1406,7 +1417,7 @@ def rs(s):
     if s not in REASONS: raise SystemExit("canonical: unknown reason: %s" % s)   # S7
     return st(s)
 
-L = json.load(open(sys.argv[1]))
+L = json.load(open(sys.argv[1], encoding="utf-8"))
 if L.get("docVersion") != "attest.statuslist.v1": raise SystemExit("canonical: unsupported docVersion")
 # Typed strictly, because sections 8-9 read these with jq and bash: a truncated
 # flag that is truthy but not true would skip the truncated => unknown rule, and
@@ -1576,12 +1587,12 @@ if [ -n "$ANCHOR_FILE" ]; then
   # read strictly, BEFORE cosign sees it: a bundle cosign reads in its legacy
   # format carries a certificate other than the one this script reads the tag from.
   anchor_bundle_bad=''
-  if ! anchor_bdups="$(python3 -I -c "$DUPKEY_PY" "$WORKDIR/anchor/b/$anchor_fb" 2>/dev/null)"; then
+  if ! anchor_bdups="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$WORKDIR/anchor/b/$anchor_fb" 2>/dev/null)"; then
     anchor_bundle_bad='it is not strict JSON (UTF-8, no BOM, one value)'
   elif [ -n "$anchor_bdups" ]; then
     anchor_bundle_bad="it repeats members ($(printf '%s' "$anchor_bdups" | tr '\n' ' '))"
   else
-    anchor_bshape="$(python3 -I -c "$ANCHOR_BUNDLE_PY" shape "$WORKDIR/anchor/b/$anchor_fb" 2>/dev/null || printf 'bad\nit could not be read')"
+    anchor_bshape="$(python3 -I -X utf8 -c "$ANCHOR_BUNDLE_PY" shape "$WORKDIR/anchor/b/$anchor_fb" 2>/dev/null || printf 'bad\nit could not be read')"
     if [ "${anchor_bshape%%$'\n'*}" != ok ]; then anchor_bundle_bad="${anchor_bshape#*$'\n'}"; fi
   fi
   if [ -n "$anchor_bundle_bad" ]; then
@@ -1619,7 +1630,7 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign.out")"
   # accepted, so a statement from a release older than this script is refused,
   # BEFORE its content is read. An unreadable or unusual tag is refused too.
   anchor_id=''; anchor_tag=''
-  python3 -I -c "$ANCHOR_BUNDLE_PY" cert "$WORKDIR/anchor/b/$anchor_fb" "$WORKDIR/anchor/cert.der" 2>/dev/null \
+  python3 -I -X utf8 -c "$ANCHOR_BUNDLE_PY" cert "$WORKDIR/anchor/b/$anchor_fb" "$WORKDIR/anchor/cert.der" 2>/dev/null \
     || : > "$WORKDIR/anchor/cert.der"
   anchor_san="$(openssl x509 -inform DER -in "$WORKDIR/anchor/cert.der" -noout -ext subjectAltName 2>/dev/null || true)"
   mapfile -t anchor_san_lines <<< "$anchor_san"
@@ -1673,11 +1684,11 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign-identity.out")"
   done
   # The statement, strictly: UTF-8, no BOM, one value, no duplicate member; then
   # the schema, the documented members only, the grammar of retired_at.
-  anchor_dups="$(python3 -I -c "$DUPKEY_PY" "$ANCHOR_STMT" 2>/dev/null)" \
+  anchor_dups="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$ANCHOR_STMT" 2>/dev/null)" \
     || die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") is not strict JSON (UTF-8, no BOM, one value)."
   [ -z "$anchor_dups" ] \
     || die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") repeats members ($(esc "$(printf '%s' "$anchor_dups" | tr '\n' ' ')"))."
-  anchor_st="$(LC_ALL=C python3 -I -c "$RETIRED_PY" statement "$ANCHOR_STMT" 2>/dev/null || printf 'bad\nit could not be read\n')"
+  anchor_st="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" statement "$ANCHOR_STMT" 2>/dev/null || printf 'bad\nit could not be read\n')"
   if [ "${anchor_st%%$'\n'*}" != ok ]; then
     die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") is malformed: $(esc "${anchor_st#*$'\n'}")."
   fi
@@ -1691,7 +1702,7 @@ fi
 # (b) a file holding the CLAIMS object — the signed document — and (c) a file
 # holding just the nested posture, which sections 6 and 7 read.
 if [ -n "$ATTESTATION_FILE" ]; then
-  python3 -I -c "$DOCX_PY" "$ATTESTATION_FILE" split "$WORKDIR/claims.json" > "$WORKDIR/att.jws" \
+  python3 -I -X utf8 -c "$DOCX_PY" "$ATTESTATION_FILE" split "$WORKDIR/claims.json" > "$WORKDIR/att.jws" \
     || die attestation_unparseable "could not read $(esc "$ATTESTATION_NAME") as an attestation document.
        Expected what GET /api/public/attest/<slug> serves:
        {\"attestation\": {\"claims\": {...}, \"signature\": \"...\"}}"
@@ -1711,7 +1722,7 @@ fi
 # posture is REFUSED — with a usage error, never a FAIL, because "you gave me
 # one field of the document" is not evidence against the document.
 if [ -n "$POSTURE_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
-  case "$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" shape 2>/dev/null || printf 'unknown')" in
+  case "$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" shape 2>/dev/null || printf 'unknown')" in
     claims)
       CLAIMS_FILE="$POSTURE_FILE"; CLAIMS_NAME="$POSTURE_NAME"
       ;;
@@ -1748,7 +1759,7 @@ if [ -n "$JWS_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
     command -v python3 >/dev/null 2>&1 \
       || die python3_missing "python3 is needed to decode the attached payload into the claims it signs."
     if b64url_decode "$ATT_PAYLOAD" > "$WORKDIR/attached-payload.bin" 2>/dev/null \
-       && python3 -I -c "$DECODE_PY" "$WORKDIR/attached-payload.bin" > "$WORKDIR/claims.json" \
+       && python3 -I -X utf8 -c "$DECODE_PY" "$WORKDIR/attached-payload.bin" > "$WORKDIR/claims.json" \
             2>"$WORKDIR/decode_err"; then
       CLAIMS_FILE="$WORKDIR/claims.json"; CLAIMS_NAME="the claims decoded from $JWS_NAME"
     else
@@ -1765,7 +1776,7 @@ for dup_which in attestation claims; do
   if [ "$dup_which" = attestation ]; then dup_src="$ATTESTATION_FILE"; dup_name="$ATTESTATION_NAME"
   else dup_src="$CLAIMS_FILE"; dup_name="$CLAIMS_NAME"; fi
   [ -n "$dup_src" ] || continue
-  dup_found="$(python3 -I -c "$DUPKEY_PY" "$dup_src" 2>/dev/null)" \
+  dup_found="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$dup_src" 2>/dev/null)" \
     || dup_found="(the file could not be parsed strictly: $(esc "$dup_name"))"
   [ -z "$dup_found" ] || DUPLICATE_KEYS="${DUPLICATE_KEYS:+$DUPLICATE_KEYS
 }$dup_found"
@@ -1776,7 +1787,7 @@ done
 # from the one inside the signature.
 POSTURE_FILE=''
 if [ -n "$CLAIMS_FILE" ]; then
-  python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" posture "$WORKDIR/posture.json" \
+  python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" posture "$WORKDIR/posture.json" \
     || die claims_posture_missing "claims JSON has no usable \`posture\` object: $(esc "$CLAIMS_NAME")"
   POSTURE_FILE="$WORKDIR/posture.json"
 fi
@@ -1849,13 +1860,13 @@ fi
 # section 8 below enforce: a member nothing examines must not be able to carry
 # meaning. Not a JSON object at all counts as a mismatch too.
 command -v python3 >/dev/null 2>&1 || die python3_missing "python3 is needed to check the protected header's member set."
-HEADER_MEMBERS="$(python3 -I -c '
+HEADER_MEMBERS="$(python3 -I -X utf8 -c '
 import json, sys
 pairs = []
-h = json.load(open(sys.argv[1]), object_pairs_hook=lambda p: (pairs.append([k for k, _ in p]), dict(p))[1])
+h = json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=lambda p: (pairs.append([k for k, _ in p]), dict(p))[1])
 dups = sorted({k for ks in pairs for k in ks if ks.count(k) > 1})
-if dups: print("duplicated: " + ",".join(dups))
-else: print(",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)")
+out = "duplicated: " + ",".join(dups) if dups else ",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)"
+sys.stdout.buffer.write((out + "\n").encode("utf-8", "backslashreplace"))
 ' "$WORKDIR/header.json" 2>/dev/null || printf '(not JSON)')"
 if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
   ok header_members_valid "header is the closed set {alg, kid, typ}"
@@ -1870,7 +1881,7 @@ if [ -z "$PUB_B64URL" ]; then
   # A key document with a duplicated member is malformed: which `pub` or `kid`
   # counts would depend on the parser. Not evidence against the attestation,
   # so exit 2, like the unknown-kid stop below.
-  JWKS_DUPS="$(python3 -I -c "$DUPKEY_PY" "$JWKS_FILE" 2>/dev/null)" \
+  JWKS_DUPS="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$JWKS_FILE" 2>/dev/null)" \
     || die not_strict_json "the key document $(esc "$JWKS_NAME") is not strict JSON (UTF-8, no BOM, one value).
        Re-fetch it; do not edit it by hand."
   [ -z "$JWKS_DUPS" ] || die jwks_duplicate_key "the key document $(esc "$JWKS_NAME") repeats members ($(printf '%s' "$JWKS_DUPS" | tr '\n' ' ')).
@@ -1880,7 +1891,7 @@ if [ -z "$PUB_B64URL" ]; then
   # gives the retirement marker of that entry. `|| true` is load-bearing under
   # `set -euo pipefail`: a reader that fails must not abort the script (a
   # silent exit 1, indistinguishable from a failed signature).
-  RETIRED_OUT="$(LC_ALL=C python3 -I -c "$RETIRED_PY" key "$JWKS_FILE" "$KID" "$WORKDIR/jwks-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
+  RETIRED_OUT="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" key "$JWKS_FILE" "$KID" "$WORKDIR/jwks-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
   RETIRED_OUT="${RETIRED_OUT%x}"
   case "${RETIRED_OUT%%$'\n'*}" in
     invalid) die jwks_keys_not_array "the key document $(esc "$JWKS_NAME") is invalid: \`keys\` is not an array of objects.
@@ -1962,7 +1973,7 @@ fi
 # failed check, exit 1: the statement verified, and it does not list this key.
 if [ "$ANCHOR_READY" -eq 1 ]; then
   ANCHOR_OK=1
-  ANCHOR_ENTRY="$(LC_ALL=C python3 -I -c "$RETIRED_PY" lookup "$ANCHOR_STMT" "$DERIVED_KID" 2>/dev/null || printf 'absent')"
+  ANCHOR_ENTRY="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" lookup "$ANCHOR_STMT" "$DERIVED_KID" 2>/dev/null || printf 'absent')"
   mapfile -t ANCHOR_E <<< "$ANCHOR_ENTRY"
   if [ "${ANCHOR_E[0]:-absent}" != found ]; then
     ANCHOR_OK=0
@@ -1982,7 +1993,7 @@ if [ "$ANCHOR_READY" -eq 1 ]; then
     # none (or a later one): the earlier instant is used by the retired_key check
     # in section 6.
     if [ -n "${ANCHOR_E[2]:-}" ]; then
-      if [ -z "$RETIRED_AT" ] || [ "$(LC_ALL=C python3 -I -c "$RETIRED_PY" cmp "${ANCHOR_E[2]}" "$RETIRED_AT" 2>/dev/null)" = before ]; then
+      if [ -z "$RETIRED_AT" ] || [ "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "${ANCHOR_E[2]}" "$RETIRED_AT" 2>/dev/null)" = before ]; then
         RETIRED_AT="${ANCHOR_E[2]}"
       fi
     fi
@@ -2009,9 +2020,9 @@ CLAIMS_KID=''
 if [ -n "$CLAIMS_FILE" ]; then
   [ -r "$CLAIMS_FILE" ] || die claims_unreadable "cannot read $(esc "$CLAIMS_NAME")"
   command -v python3 >/dev/null 2>&1 || die python3_missing "python3 is needed to re-derive canonical bytes from the claims JSON."
-  python3 -I -c "$CANON_PY" "$CLAIMS_FILE" envelope > "$WORKDIR/canon.bin" \
+  python3 -I -X utf8 -c "$CANON_PY" "$CLAIMS_FILE" envelope > "$WORKDIR/canon.bin" \
     || die canonicalise_failed "could not canonicalise $(esc "$CLAIMS_NAME")"
-  python3 -I -c "$CANON_PY" "$CLAIMS_FILE" posture > "$WORKDIR/canon-posture.bin" \
+  python3 -I -X utf8 -c "$CANON_PY" "$CLAIMS_FILE" posture > "$WORKDIR/canon-posture.bin" \
     || die canonicalise_posture_failed "could not canonicalise the nested posture of $(esc "$CLAIMS_NAME")"
   CANON_LEN="$(wc -c < "$WORKDIR/canon.bin" | tr -d ' ')"
   NESTED_LEN="$(wc -c < "$WORKDIR/canon-posture.bin" | tr -d ' ')"
@@ -2035,12 +2046,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   # verifier's `kid_mismatch`, and it only became checkable here once the whole
   # envelope was in view — E3 is inside the signature, the header kid is inside
   # the signing input, and both must agree.)
-  CLAIMS_KID="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field kid)"
+  CLAIMS_KID="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field kid)"
   # --anchor-file: the statement names the issuer origin; the signed iss must be it.
   if [ "$ANCHOR_READY" -eq 1 ]; then
     # Never skipped: an empty iss is not the issuer the statement names (which is
     # never empty), so it fails here too, besides iss_empty in section 7.
-    ANCHOR_CLAIMS_ISS="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
+    ANCHOR_CLAIMS_ISS="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
     if [ "$ANCHOR_CLAIMS_ISS" = "$ANCHOR_ISSUER" ]; then
       ok anchor_issuer_matches "iss (E2) is the issuer '$(esc "$ANCHOR_CLAIMS_ISS")' the signed key statement names"
     else
@@ -2092,9 +2103,9 @@ if [ -n "$POSTURE_FILE" ]; then
   # the slug, freshness and subject-revocation checks while the signature still
   # verified over the genuine fields. Section 7 now also refuses any member the
   # signature does not cover; tests/run.sh holds the rejection cases.
-  GENERATED="$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" field generatedAt)"
-  EXPIRES="$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" field expiresAt)"
-  SLUG="$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" field slug)"
+  GENERATED="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field generatedAt)"
+  EXPIRES="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field expiresAt)"
+  SLUG="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field slug)"
 
   # epoch_of() is defined globally (near b64url_encode) so --status-list mode
   # can use it too without a --jws having run.
@@ -2129,7 +2140,7 @@ if [ -n "$POSTURE_FILE" ]; then
   # instants. Not a staleness failure: a fresh copy of the same document would
   # not help, so this is a plain FAIL (VERIFICATION FAILED, not EXPIRED).
   if [ -n "$RETIRED_AT" ] && [ -n "$GENERATED" ]; then
-    case "$(LC_ALL=C python3 -I -c "$RETIRED_PY" cmp "$GENERATED" "$RETIRED_AT" 2>/dev/null)" in
+    case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$GENERATED" "$RETIRED_AT" 2>/dev/null)" in
       at_or_after)
         bad retired_key "retired_key — this document was generated at $(esc "$GENERATED"), at or after the retirement of key $(esc "$KID") at $(esc "$RETIRED_AT")" ;;
       before)
@@ -2199,13 +2210,13 @@ fi
 # here so a third party reaches the same verdict without asking us.
 printf '\n%s[7] Attested claims%s\n' "$BOLD" "$RESET"
 if [ -n "$CLAIMS_FILE" ]; then
-  CLAIMS_DOCVERSION="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field docVersion)"
-  CLAIMS_ISS="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
-  CLAIMS_JTI="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field jti)"
-  CLAIMS_NONCE="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field nonce)"
-  CLAIMS_NONCE_PRESENT="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" has nonce)"
-  CLAIMS_BAND="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" field overallBand)"
-  CLAIMS_BAND_PRESENT="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" has overallBand)"
+  CLAIMS_DOCVERSION="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field docVersion)"
+  CLAIMS_ISS="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
+  CLAIMS_JTI="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field jti)"
+  CLAIMS_NONCE="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field nonce)"
+  CLAIMS_NONCE_PRESENT="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" has nonce)"
+  CLAIMS_BAND="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field overallBand)"
+  CLAIMS_BAND_PRESENT="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" has overallBand)"
 
   printf '        docVersion:  %s\n' "$(esc "${CLAIMS_DOCVERSION:-$MISSING_LABEL}")"
   printf '        iss:         %s\n' "$(esc "${CLAIMS_ISS:-$MISSING_LABEL}")"
@@ -2234,7 +2245,7 @@ if [ -n "$CLAIMS_FILE" ]; then
           Only one of each can be the signed value, and which one a reader sees depends on
           the reader. Reject the document."
   fi
-  UNSIGNED_MEMBERS="$(python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" unsigned)"
+  UNSIGNED_MEMBERS="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" unsigned)"
   if [ -z "$UNSIGNED_MEMBERS" ] && [ -z "$DUPLICATE_KEYS" ]; then
     ok members_signed "every member of the claims JSON is covered by the signature"
   elif [ -z "$UNSIGNED_MEMBERS" ]; then
@@ -2288,10 +2299,10 @@ if [ -n "$CLAIMS_FILE" ]; then
   # overallBand is DERIVED — the weakest attested band — so a verifier can
   # recompute it and reject a document that overclaims while agreeing with its
   # own coverage list nowhere.
-  DERIVED_BAND="$(python3 -I - "$CLAIMS_FILE" <<'PY'
+  DERIVED_BAND="$(python3 -I -X utf8 - "$CLAIMS_FILE" <<'PY'
 import json, sys
 STRENGTH = ["in_progress", "basic", "substantial", "advanced"]
-p = json.load(open(sys.argv[1])).get("posture") or {}
+p = json.load(open(sys.argv[1], encoding="utf-8")).get("posture") or {}
 ranks = [STRENGTH.index(f["band"]) for f in p.get("frameworks", []) if f.get("band") in STRENGTH]
 sys.stdout.write(STRENGTH[min(ranks)] if ranks else "")
 PY
@@ -2310,14 +2321,14 @@ PY
   # The gated-redaction contract, enforced at the RELYING PARTY: a `gated`
   # posture that still carries coverage, a heartbeat or an overall band is a
   # leak, and a signature must not make a leak look authoritative.
-  VISIBILITY="$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" field visibility)"
+  VISIBILITY="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field visibility)"
   if [ "$VISIBILITY" = 'gated' ]; then
-    FW_COUNT="$(python3 -I - "$POSTURE_FILE" <<'PY'
+    FW_COUNT="$(python3 -I -X utf8 - "$POSTURE_FILE" <<'PY'
 import json, sys
-sys.stdout.write(str(len(json.load(open(sys.argv[1])).get("frameworks", []))))
+sys.stdout.write(str(len(json.load(open(sys.argv[1], encoding="utf-8")).get("frameworks", []))))
 PY
 )"
-    CHECKED_PRESENT="$(python3 -I -c "$DOCX_PY" "$POSTURE_FILE" has lastCheckedAt)"
+    CHECKED_PRESENT="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" has lastCheckedAt)"
     if [ "$FW_COUNT" -eq 0 ] && [ "$CHECKED_PRESENT" = '0' ] && [ "$CLAIMS_BAND_PRESENT" = '0' ]; then
       ok redaction_valid "gated posture is redacted as it must be: no coverage, no heartbeat, no overall band"
     else
@@ -2351,7 +2362,7 @@ fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list' "$STATUS_NAME"
 fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set' "$STATUS_KEYS_NAME"
 
 for dup_src in status.json status-keys.json; do
-  if ! dup_found="$(python3 -I -c "$DUPKEY_PY" "$WORKDIR/$dup_src" 2>/dev/null)"; then
+  if ! dup_found="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$WORKDIR/$dup_src" 2>/dev/null)"; then
     stat_bad status_unknown_not_strict_json "malformed_document — ${dup_src} is not strict JSON (UTF-8, no BOM, one value)"
   elif [ -n "$dup_found" ]; then
     stat_bad status_unknown_duplicate_key "duplicate_key — ${dup_src} repeats members: \
@@ -2416,7 +2427,7 @@ if [ "$STATUS_FAILURES" -eq 0 ] && ! jq -e 'type=="object"' "$WORKDIR/status_hea
   stat_bad status_unknown_header_not_object "malformed_document — protected header did not decode to a JSON object"
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  if ! SHDR_DUPS="$(python3 -I -c "$DUPKEY_PY" "$WORKDIR/status_header.json" 2>/dev/null)"; then
+  if ! SHDR_DUPS="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$WORKDIR/status_header.json" 2>/dev/null)"; then
     stat_bad status_unknown_header_not_strict_json "malformed_document — protected header is not strict JSON"
   elif [ -n "$SHDR_DUPS" ]; then
     stat_bad status_unknown_header_duplicate_key "duplicate_key — protected header repeats: $(printf '%s' "$SHDR_DUPS" | tr '\n' ' ')"
@@ -2456,7 +2467,7 @@ fi
 
 # --- key resolution: against --status-keys ONLY, never --jwks ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  STATUS_RETIRED_OUT="$(LC_ALL=C python3 -I -c "$RETIRED_PY" key "$WORKDIR/status-keys.json" "$STATUS_LIST_KID" "$WORKDIR/status-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
+  STATUS_RETIRED_OUT="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" key "$WORKDIR/status-keys.json" "$STATUS_LIST_KID" "$WORKDIR/status-pub.txt" 2>/dev/null || printf 'invalid\n'; printf x)"
   STATUS_RETIRED_OUT="${STATUS_RETIRED_OUT%x}"
   STATUS_PUB_B64URL="$(cat "$WORKDIR/status-pub.txt" 2>/dev/null || true)"
   case "${STATUS_RETIRED_OUT%%$'\n'*}" in
@@ -2512,7 +2523,7 @@ fi
 # UNKNOWN (exit 3), as every failure to establish the list does.
 if [ "$ANCHOR_READY" -eq 1 ] && [ "$STATUS_FAILURES" -eq 0 ]; then
   ANCHOR_SOK=1
-  ANCHOR_SENTRY="$(LC_ALL=C python3 -I -c "$RETIRED_PY" lookup "$ANCHOR_STMT" "$STATUS_DERIVED_KID" 2>/dev/null || printf 'absent')"
+  ANCHOR_SENTRY="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" lookup "$ANCHOR_STMT" "$STATUS_DERIVED_KID" 2>/dev/null || printf 'absent')"
   mapfile -t ANCHOR_SE <<< "$ANCHOR_SENTRY"
   if [ "${ANCHOR_SE[0]:-absent}" != found ]; then
     ANCHOR_SOK=0
@@ -2527,7 +2538,7 @@ if [ "$ANCHOR_READY" -eq 1 ] && [ "$STATUS_FAILURES" -eq 0 ]; then
       stat_bad anchor_status_retired_mismatch "anchor_status_retired_mismatch — the signed key statement retires kid '${STATUS_DERIVED_KID}' at '$(esc "${ANCHOR_SE[2]:-}")' (empty: not retired), the status key set says hs_retired_at '$(esc "$STATUS_RETIRED_AT")' (empty: none)"
     fi
     if [ -n "${ANCHOR_SE[2]:-}" ]; then
-      if [ -z "$STATUS_RETIRED_AT" ] || [ "$(LC_ALL=C python3 -I -c "$RETIRED_PY" cmp "${ANCHOR_SE[2]}" "$STATUS_RETIRED_AT" 2>/dev/null)" = before ]; then
+      if [ -z "$STATUS_RETIRED_AT" ] || [ "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "${ANCHOR_SE[2]}" "$STATUS_RETIRED_AT" 2>/dev/null)" = before ]; then
         STATUS_RETIRED_AT="${ANCHOR_SE[2]}"
       fi
     fi
@@ -2551,7 +2562,7 @@ fi
 
 # --- canonical bytes (the independent §6.4 encoder) + signature ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  if python3 -I -c "$CANON_STATUS_PY" "$WORKDIR/list.json" > "$WORKDIR/status_canon.bin" \
+  if python3 -I -X utf8 -c "$CANON_STATUS_PY" "$WORKDIR/list.json" > "$WORKDIR/status_canon.bin" \
        2>"$WORKDIR/status_canon_err"; then
     SCANON_LEN="$(wc -c < "$WORKDIR/status_canon.bin" | tr -d ' ')"
     ok status_canonical_rederived "re-derived ${SCANON_LEN} canonical bytes from statusList (independent encoder)"
@@ -2631,7 +2642,7 @@ fi
 
 # --- a list issued at or after the retirement of its own key is not trusted ---
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$STATUS_RETIRED_AT" ]; then
-  case "$(LC_ALL=C python3 -I -c "$RETIRED_PY" cmp "$SISSUEDAT" "$STATUS_RETIRED_AT" 2>/dev/null)" in
+  case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$SISSUEDAT" "$STATUS_RETIRED_AT" 2>/dev/null)" in
     at_or_after)
       stat_bad status_unknown_retired_key "retired_key — this status list was issued at $(esc "$SISSUEDAT"), at or after the retirement of \
 key $(esc "$STATUS_LIST_KID") at $(esc "$STATUS_RETIRED_AT")" ;;
@@ -2850,7 +2861,7 @@ if [ -n "$JWS_FILE" ]; then
       ATTESTED_OK=1
       printf '\n%sAttested content%s (covered by the signature, and the document verified)\n' "$BOLD" "$RESET"
       # A display failure must never change the verdict.
-      python3 -I -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
+      python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
       if [ "$SHOW_RAW" -eq 1 ]; then
         printf '\n        posture (E7, the frozen v1 bytes):\n'
         if command -v jq >/dev/null 2>&1; then

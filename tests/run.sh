@@ -749,13 +749,62 @@ else
   printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
 fi
 
-# A display problem must never change a verdict (#14): the summary is written as
-# UTF-8 bytes, so a non-UTF-8 stdout does not turn a verified document into an error.
-mint_attest --out "$T/label.json" --framework 'ens—alto=basic'
-PYTHONIOENCODING=ascii expect 0 'ENS—ALTO (ens—alto): basic' 'a non-ASCII framework label under an ASCII Python stdout still verifies (0)' -- \
+# A non-ASCII label verifies and is shown. The same document under a Latin-1
+# locale is checked in the --json section below (it needs jexpect). This test used
+# to set PYTHONIOENCODING=ascii, which python3 -I ignores, so it could not fail;
+# the locale is what changed the verdict. The documents carry the label as raw
+# UTF-8 bytes, as a server may send it (mint.py writes —; jq writes it raw).
+mint_attest --out "$T/label-ascii.json" --framework 'ens—alto=basic'
+jq . "$T/label-ascii.json" > "$T/label.json"
+jq '.attestation.claims' "$T/label.json" > "$T/label-claims.json"
+jq -r '.attestation.signature' "$T/label.json" > "$T/label.jws"
+if grep -q $'\xe2\x80\x94' "$T/label.json" && grep -q $'\xe2\x80\x94' "$T/label-claims.json"; then
+  printf 'ok - the label documents carry the label as raw UTF-8\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - the label documents do not carry raw UTF-8; the locale tests would test nothing\n'; FAILED=$((FAILED + 1))
+fi
+expect 0 'ENS—ALTO (ens—alto): basic' 'a non-ASCII framework label verifies and is shown (0)' -- \
   --attestation "$T/label.json" "${COMMON[@]}"
-PYTHONIOENCODING=ascii expect 0 'VERIFIED — this document was signed' 'the same document still reaches its VERIFIED verdict' -- \
+expect 0 'VERIFIED — this document was signed' 'the same document with --raw reaches its VERIFIED verdict' -- \
   --attestation "$T/label.json" "${COMMON[@]}" --raw
+expect 0 'VERIFIED — this document was signed' 'the same document from --jws and a raw UTF-8 --claims verifies' -- \
+  --jws "$T/label.jws" --claims "$T/label-claims.json" "${COMMON[@]}"
+
+# --- python3 and the locale (static) --------------------------------------------
+# What the embedded Python reads and writes must not depend on the locale: every
+# open( in the script is binary ("rb"/"wb") or passes encoding="utf-8" (and no
+# errors= that would relax it), and every python3 call is `python3 -I -X utf8`
+# (isolated, and UTF-8 for its arguments and standard streams).
+LOCALE_SCAN="$(python3 -I - "$VERIFIER" <<'PY'
+import re, sys
+t = open(sys.argv[1], encoding="utf-8").read()
+found, bad = 0, []
+for m in re.finditer(r"(?<![A-Za-z0-9_.])open\(", t):
+    i, depth = m.end(), 1
+    while depth and i < len(t):
+        depth += {"(": 1, ")": -1}.get(t[i], 0)
+        i += 1
+    args = t[m.end():i - 1]
+    found += 1
+    mode_ok = re.search(r"[\"'](rb|wb)[\"']", args) or 'encoding="utf-8"' in args
+    if not mode_ok or "errors=" in args:
+        bad.append("line %d: open(%s)" % (t.count("\n", 0, m.start()) + 1, args))
+calls = re.findall(r"python3 -[^\n]*", t)
+for c in calls:
+    if not re.match(r"python3 -I -X utf8(\s|`)", c):
+        bad.append("a python3 call that is not python3 -I -X utf8: " + c[:60])
+print("%d %d" % (found, len(calls)))
+for b in bad: print(b)
+PY
+)"
+read -r LOCALE_OPENS LOCALE_CALLS _ <<< "$LOCALE_SCAN"
+if [ "$(printf '%s\n' "$LOCALE_SCAN" | wc -l)" -eq 1 ] && [ "${LOCALE_OPENS:-0}" -ge 15 ] && [ "${LOCALE_CALLS:-0}" -ge 40 ]; then
+  printf 'ok - every open( (%s) is binary or UTF-8, and every python3 call (%s) is python3 -I -X utf8\n' "$LOCALE_OPENS" "$LOCALE_CALLS"
+  PASSED=$((PASSED + 1))
+else
+  printf 'not ok - the embedded Python depends on the locale\n'; printf '%s\n' "$LOCALE_SCAN" | sed 's/^/    # /'
+  FAILED=$((FAILED + 1))
+fi
 
 # --expect-kid is judged in the C locale: an accented letter is not in A-Z (#13).
 # A locale with real collation rules is the one that used to accept them.
@@ -1469,6 +1518,37 @@ jexpect_self 'a false check over several lines is not ok' 'not ok' 'o["verdict"]
 jexpect_self 'a true check over several lines is ok' 'ok' 'o["verdict"] == "verified"
    and o["exit_code"] == 0'
 jexpect_self 'a check that is not an expression is not ok' 'not ok' 'import os'
+
+# The verdict does not depend on the locale. Under a Latin-1 locale the embedded
+# Python used to decode the claims JSON as Latin-1, so a genuine document with a
+# non-ASCII label failed its signature (exit 1), and the attested content could
+# differ from what the checks read. Needs the locale en_US.ISO-8859-1, which the
+# CI container generates with localedef; skipped, never passed, where it is
+# absent, and a failure where VERIFIER_REQUIRE_LATIN1=1 (CI) says it must exist.
+# The Python checks spell the label with an escape: their own arguments are
+# decoded in the locale too.
+LATIN1=en_US.ISO-8859-1
+if [ "$(LC_ALL="$LATIN1" locale charmap 2>/dev/null)" = ISO-8859-1 ]; then
+  LC_ALL="$LATIN1" expect 0 'VERIFIED — this document was signed' 'a non-ASCII framework label verifies under a Latin-1 locale (0)' -- \
+    --attestation "$T/label.json" "${COMMON[@]}"
+  LC_ALL="$LATIN1" expect 0 'VERIFIED — this document was signed' 'a raw UTF-8 --claims verifies under a Latin-1 locale (0)' -- \
+    --jws "$T/label.jws" --claims "$T/label-claims.json" "${COMMON[@]}"
+  LC_ALL="$LATIN1" jexpect 0 'a raw UTF-8 --claims under a Latin-1 locale: the attested label is the text' \
+    'o["verdict"] == "verified" and "ENS—ALTO" in [f["label"] for f in o["attested"]["frameworks"]]' -- \
+    --jws "$T/label.jws" --claims "$T/label-claims.json" "${COMMON[@]}"
+  LC_ALL="$LATIN1" expect 0 'ENS—ALTO (ens—alto): basic' 'under a Latin-1 locale the label is shown as UTF-8, as written' -- \
+    --attestation "$T/label.json" "${COMMON[@]}"
+  JTEXT="$LAST_OUT" LC_ALL="$LATIN1" jexpect 0 'under a Latin-1 locale the attested label is the text, and the one the text mode shows' \
+    'o["verdict"] == "verified" and "ENS—ALTO" in [f["label"] for f in o["attested"]["frameworks"]]
+     and ["%s (%s): %s" % (f["label"], f["code"], f["band"]) for f in o["attested"]["frameworks"]]
+         == [l.strip() for l in text.splitlines() if "): " in l and l.startswith("          ")]' -- \
+    --attestation "$T/label.json" "${COMMON[@]}"
+elif [ "${VERIFIER_REQUIRE_LATIN1:-}" = 1 ]; then
+  printf 'not ok - the locale %s is required (VERIFIER_REQUIRE_LATIN1=1) and is not available\n' "$LATIN1"; FAILED=$((FAILED + 1))
+else
+  printf 'skipped - a non-ASCII label under a Latin-1 locale (needs the locale %s, not available here)\n' "$LATIN1"
+  SKIPPED=$((SKIPPED + 1))
+fi
 
 # A verified document: the attested content equals the text block.
 expect 0 'ISO27001 (iso27001): substantial' 'text reference for the JSON of a verified document' -- \
