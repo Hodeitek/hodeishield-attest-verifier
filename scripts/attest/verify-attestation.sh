@@ -1933,7 +1933,10 @@ fi
 
 # --- 2. Header ---------------------------------------------------------------
 printf '\n%s[2] Header%s\n' "$BOLD" "$RESET"
-header_field() { sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1; }
+# In the C locale: under a UTF-8 locale, sed's . and [^"] do not match a byte
+# that is not valid UTF-8, so a header kid holding one read as empty, and what
+# the run then reported depended on the locale.
+header_field() { LC_ALL=C sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1; }
 ALG="$(header_field "$WORKDIR/header.json" alg)"
 KID="$(header_field "$WORKDIR/header.json" kid)"
 TYP="$(header_field "$WORKDIR/header.json" typ)"

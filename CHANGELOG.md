@@ -147,6 +147,10 @@ before it takes effect. Only the latest release is supported, as
   the test runners'. This also affected earlier releases.
 
 ### Fixed
+- The `alg`, `kid` and `typ` of the protected header were read with `sed` in the
+  caller's locale: under a UTF-8 locale a header kid holding a byte that is not
+  valid UTF-8 was read as empty, so the run named another kid than under the C
+  locale. The header is now read in the C locale, under any locale.
 - The verdict depended on the locale. The embedded Python read the claims, the
   key sets and the status list in the locale's encoding, while other readers
   used UTF-8: under a locale such as `en_US.ISO-8859-1`, a genuine document

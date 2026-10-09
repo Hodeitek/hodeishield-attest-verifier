@@ -921,6 +921,18 @@ LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter in --expect-kid
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'ééééééééééééééééééééé'
 LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter among valid characters is a usage error (2) under $KID_LOCALE" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAAéA'
+# The protected header is read in the C locale too: a header kid holding a byte
+# that is not valid UTF-8 is read and shown, escaped, under a UTF-8 locale as
+# under C (it used to read as an empty kid there).
+edit "$T/att.json" "$T/kid-ff.json" '
+import base64
+h, p, s = d["attestation"]["signature"].split(".")
+raw = base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)).replace(b"\"kid\":\"", b"\"kid\":\"\xff", 1)
+d["attestation"]["signature"] = ".".join([base64.urlsafe_b64encode(raw).rstrip(b"=").decode(), p, s])'
+for kid_loc in C "$KID_LOCALE"; do
+  LC_ALL="$kid_loc" expect 2 "no key in this JWKS carries kid '\\xff$ISSUER_KID'" "a header kid with a byte that is not UTF-8 is read the same under $kid_loc (2)" -- \
+    --attestation "$T/kid-ff.json" "${COMMON[@]}"
+done
 
 # Retired keys (hs_retired_at). The published vectors hold the boundary cases;
 # these are the grammar, the key-selection and the escaping cases, which need
