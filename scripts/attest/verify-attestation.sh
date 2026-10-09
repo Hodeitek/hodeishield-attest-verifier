@@ -962,6 +962,14 @@ b64url_decode() {
 }
 b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }
 
+# Whether $1 is a UTC time, YYYY-MM-DDTHH:MM:SS[.fraction]Z exactly (in the C
+# locale, as is_kid_shape). See epoch_of.
+is_utc_time() {   # VALUE — YYYY-MM-DDTHH:MM:SS[.fraction]Z exactly (C locale)
+  local LC_ALL=C
+  local shape='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?Z$'
+  [[ "$1" =~ $shape ]]
+}
+
 # RFC 3339 -> Unix seconds, or empty on a bad string. Global: needed by the
 # posture freshness check (section 6) AND the status-list freshness check
 # (section 8), and the latter can run without the former ever having run.
@@ -973,21 +981,33 @@ b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }
 # It truncates to whole seconds, so it is used only for the age checks against
 # "now" (a whole second), where that is exact; every other comparison of times is
 # made exactly, by RETIRED_PY cmp.
+#
+# THE OFFSET. GNU date applies it. The python3 fallback applies it, and refuses
+# a time without one (Python would read it as local time, not UTC). The BSD
+# fallback cannot apply it: `date -j -f` ignores whatever follows the seconds,
+# so 20:00:00+02:00 would read as 20:00 UTC. So that path takes only a UTC time
+# (Z, with or without a fraction) and refuses any other offset: empty, could
+# not check, never a time two hours off. On macOS, where date is BSD's, a time
+# with another offset is therefore read by python3 or not at all.
 epoch_of() {
-  local out
+  local out=''
   out="$(date -u -d "$1" +%s 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return; }
   if command -v python3 >/dev/null 2>&1; then
     out="$(printf '%s' "$1" | python3 -I -X utf8 -c '
-import sys, datetime
+import sys, datetime, math
 try:
     s = sys.stdin.buffer.read().decode("utf-8").strip().replace("Z", "+00:00")
-    sys.stdout.write("%d" % int(datetime.datetime.fromisoformat(s).timestamp()))
+    d = datetime.datetime.fromisoformat(s)
+    if d.tzinfo is None: raise ValueError("no offset")
+    sys.stdout.write("%d" % math.floor(d.timestamp()))
 except Exception:
     pass
 ' 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return; }
   fi
-  out="$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "${1%%.*}" +%s 2>/dev/null)" \
-    && [ -n "$out" ] && { printf '%s' "$out"; return; }
+  if is_utc_time "$1"; then
+    out="$(date -u -j -f '%Y-%m-%dT%H:%M:%S' "${1:0:19}" +%s 2>/dev/null)" \
+      && [ -n "$out" ] && { printf '%s' "$out"; return; }
+  fi
   printf ''
 }
 

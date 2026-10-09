@@ -2213,6 +2213,43 @@ else
   FAILED=$((FAILED + 1))
 fi
 
+# --- epoch_of without GNU date (a BSD date stand-in) -------------------------------
+# epoch_of() of the script, run on its own (with is_utc_time) where `date` is a
+# stand-in for BSD date(1): no -d, and -j -f prints a fixed epoch for the value
+# it is handed, which it records. The BSD path cannot apply an offset, so it must
+# take only a UTC (Z) time: before, "+02:00" was handed to it and read as UTC.
+# Without GNU date, the python3 fallback must refuse a time with no offset, which
+# Python would read as local time.
+BSDP="$T/bsd-path"; mkdir -p "$BSDP"; ln -sf "$(command -v bash)" "$BSDP/bash"
+cat > "$BSDP/date" <<'SH'
+#!/usr/bin/env bash
+case " $* " in *' -d '*) exit 1 ;; esac
+if [ "${2:-}" = -j ]; then printf '%s\n' "${5:-}" >> "$BSD_DATE_LOG"; echo 1767225600; exit 0; fi
+exit 1
+SH
+chmod +x "$BSDP/date"
+EPOCH_FNS="$(sed -n '/^is_utc_time() {/,/^}$/p; /^epoch_of() {$/,/^}$/p' "$VERIFIER")"
+bsd_epoch() {   # PATH VALUE — what epoch_of prints, with the stand-in first on PATH
+  # shellcheck disable=SC2016 # "$1" is the inner bash's argument, expanded there on purpose
+  BSD_DATE_LOG="$T/bsd-date.log" PATH="$1" "$BSDP/bash" -c "$EPOCH_FNS"'
+epoch_of "$1"' _ "$2"
+}
+rm -f "$T/bsd-date.log"
+bsd_off="$(bsd_epoch "$BSDP" '2026-01-01T02:00:00+02:00')"
+bsd_utc="$(bsd_epoch "$BSDP" '2026-01-01T00:00:00.500Z')"
+PY_DIR="$(dirname "$(command -v python3)")"
+bsd_naive="$(bsd_epoch "$BSDP:$PY_DIR" '2026-01-01T00:00:00')"
+bsd_py="$(bsd_epoch "$BSDP:$PY_DIR" '2026-01-01T02:00:00+02:00')"
+if [ "$(printf '%s' "$EPOCH_FNS" | grep -c '^[a-z_]*() {')" -eq 2 ] && [ -z "$bsd_off" ] && [ "$bsd_utc" = 1767225600 ] \
+   && [ "$(cat "$T/bsd-date.log" 2>/dev/null)" = '2026-01-01T00:00:00' ] && [ -z "$bsd_naive" ] && [ "$bsd_py" = 1767225600 ]; then
+  printf 'ok - without GNU date, epoch_of refuses an offset on the BSD path, a time without one in python3, and applies one there\n'
+  PASSED=$((PASSED + 1))
+else
+  printf 'not ok - epoch_of without GNU date (offset: %s, utc: %s, naive: %s, python3: %s, handed to date: %s)\n' \
+    "$bsd_off" "$bsd_utc" "$bsd_naive" "$bsd_py" "$(tr '\n' ' ' < "$T/bsd-date.log" 2>/dev/null)"
+  FAILED=$((FAILED + 1))
+fi
+
 # --- one definition per function (static) ---------------------------------------
 # A second definition of a function silently replaces the first from the point
 # where it runs, for every caller (json_str() was defined twice). Every form bash

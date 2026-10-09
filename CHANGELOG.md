@@ -147,6 +147,13 @@ before it takes effect. Only the latest release is supported, as
   the test runners'. This also affected earlier releases.
 
 ### Fixed
+- Without GNU date (macOS), reading a time could ignore its offset. The last
+  fallback, BSD `date -j -f`, ignores what follows the seconds, so
+  `20:00:00+02:00` read as 20:00 UTC, two hours off; and the python3 fallback
+  read a time without an offset as local time. The BSD path now takes only a
+  UTC time (`Z`) and refuses any other (could not check, never a wrong time),
+  and the python3 fallback refuses a time without an offset. GNU date was not
+  affected. This also affected earlier releases.
 - `not_yet_valid` (a document's `generatedAt`, or a status list's `issuedAt`,
   more than 300 s ahead of now) compared whole seconds, so a time up to a
   second beyond the allowance passed. Both now compare exact instants through
