@@ -101,6 +101,15 @@ before it takes effect. Only the latest release is supported, as
   (`nul_byte`, exit 1; `status_unknown_nul_byte`, exit 3, in a status list; a
   malformed statement, exit 2, in the `--anchor-file` issuer), never the string
   without it. This also affected earlier releases.
+- The numbers given as options were not checked. `--max-age-seconds 60s` made a
+  test error, which read as "within the freshness window", so the run could end
+  `VERIFIED`, exit 0; `--max-age-days` and `--now` were evaluated as bash
+  arithmetic, in which a value such as `a[$(cmd)]` runs a command, so a wrapper
+  that passed an untrusted value ran it. Each is now checked before any
+  arithmetic: `--max-age-seconds` and `--max-age-days` take 1 to 9 digits,
+  `--now` 1 to 12 (Unix seconds), `--min-seq` 1 to 18, and anything else is a
+  usage error, exit 2 (`error: --now must be a Unix time in seconds ...`). A
+  leading zero is decimal, not octal. This also affected earlier releases.
 - The subject rule compared `generatedAt` with `notBefore` in whole seconds, so
   a document generated less than a second before a fractional `notBefore`
   (00:00:00.000 against 00:00:00.900) was `GOOD` instead of `REVOKED`. The TTL

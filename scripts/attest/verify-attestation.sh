@@ -108,6 +108,7 @@
 #   --max-age-seconds  staleness tolerance on `generatedAt` (default 3600 = 1 h)
 #   --max-age-days     deprecated alias, converted to seconds
 #   --now              override "now" (Unix seconds), for reproducible testing
+#                      These three take digits only (a usage error otherwise).
 #
 # REVOCATION STATUS-LIST MODE (`--status-list`)
 #   A SEPARATE document, `hodei-shield.attest.statuslist.v1`, signed by a key
@@ -327,6 +328,15 @@ is_kid_shape() {
   local LC_ALL=C
   local shape='^[A-Za-z0-9_-]{21}[AQgw]$'
   [[ "$1" =~ $shape ]]
+}
+# Whether $2 is 1 to $1 ASCII digits (in the C locale too). Every number given
+# as an option is checked with it BEFORE it reaches $(( )) or a test such as
+# -gt: bash evaluates a value such as a[$(cmd)] inside $(( )), and a test on
+# "60s" errors, which an if reads as false.
+is_digits() {
+  local LC_ALL=C
+  local shape="^[0-9]{1,$1}\$"
+  [[ "$2" =~ $shape ]]
 }
 
 # --- --json ------------------------------------------------------------------
@@ -625,9 +635,17 @@ while [ $# -gt 0 ]; do
     --expect-nonce)
       [ $# -ge 2 ] || arg_die "error: --expect-nonce needs a value (use '' for \"no challenge\")"
       EXPECT_NONCE_SET=1; EXPECT_NONCE="$2"; shift 2 ;;
-    --max-age-seconds) MAX_AGE_SECONDS="${2:?}"; shift 2 ;;
-    --max-age-days) MAX_AGE_SECONDS=$(( ${2:?} * 86400 )); shift 2 ;;
-    --now)          NOW_OVERRIDE="${2:?}"; shift 2 ;;
+    # Numbers are checked before any arithmetic, and read as decimal (10#), so
+    # that a leading zero is not octal.
+    --max-age-seconds)
+      is_digits 9 "$2" || arg_die 'error: --max-age-seconds must be a whole number of seconds (digits only, at most 9)'
+      MAX_AGE_SECONDS=$(( 10#$2 )); shift 2 ;;
+    --max-age-days)
+      is_digits 9 "$2" || arg_die 'error: --max-age-days must be a whole number of days (digits only, at most 9)'
+      MAX_AGE_SECONDS=$(( 10#$2 * 86400 )); shift 2 ;;
+    --now)
+      is_digits 12 "$2" || arg_die 'error: --now must be a Unix time in seconds (digits only, at most 12)'
+      NOW_OVERRIDE=$(( 10#$2 )); shift 2 ;;
     --raw)          SHOW_RAW=1; shift ;;
     # Repeatable, so that two kids can be pinned through a key rotation overlap.
     # A kid is BASE64URL of 16 bytes: 21 characters of the alphabet, then one of
@@ -653,7 +671,8 @@ while [ $# -gt 0 ]; do
     --check-subject)        CHECK_SUBJECT="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
     --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
     --min-seq)              MIN_SEQ="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2
-      [[ "$MIN_SEQ" =~ ^[0-9]{1,18}$ ]] || arg_die 'error: --min-seq must be a non-negative integer' ;;
+      is_digits 18 "$MIN_SEQ" || arg_die 'error: --min-seq must be a non-negative integer'
+      MIN_SEQ=$(( 10#$MIN_SEQ )) ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
     --json)         shift ;;
     --version)      plain_output; printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;

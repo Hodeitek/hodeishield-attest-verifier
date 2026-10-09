@@ -1705,6 +1705,31 @@ jexpect 2 'an option with an empty value is a usage error' 'o["reason"] == "usag
   --attestation "$T/att.json" --jwks ''
 jexpect 2 '--min-seq that is not a number is a usage error' 'o["reason"] == "usage"' -- \
   --attestation "$T/att.json" --min-seq x
+# Every number given as an option is checked before any arithmetic. "60s" used
+# to make a test error, which read as "fresh" (exit 0), and --max-age-days and
+# --now were evaluated as bash arithmetic, where a[...] is an array reference.
+expect 2 'error: --max-age-seconds must be a whole number of seconds' '--max-age-seconds 60s is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 60s
+lacks 'VERIFIED' '--max-age-seconds 60s never ends VERIFIED'
+expect 2 'error: --now must be a Unix time in seconds' '--now 12x is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now 12x
+expect 2 'error: --max-age-days must be a whole number of days' "--max-age-days 'a[1]' is a usage error (2)" -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 'a[1]'
+expect 2 'error: --now must be a Unix time in seconds' "--now 'NOW+1' is a usage error (2), not arithmetic" -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now 'NOW+1'
+expect 2 'error: --max-age-seconds must be a whole number of seconds' '--max-age-seconds -1 is a usage error (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds -1
+expect 2 'error: --min-seq must be a non-negative integer' '--min-seq with a non-ASCII digit is a usage error (2)' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/status-keys.json" --check-kid "$ISSUER_KID" --now "$NOW" --min-seq '٣'
+JSON_FIRST=1 jexpect 2 '--now 12x is a usage error' 'o["reason"] == "usage" and o["message"].startswith("error: --now must be")' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now 12x
+# A leading zero is decimal, not octal: --now 0$NOW is the same time.
+expect 0 'VERIFIED — this document was signed' '--now with a leading zero is read as decimal' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now "0$NOW"
+expect 0 'within the 600s freshness window' '--max-age-seconds 0600 is 600 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0600
+expect 1 'EXPIRED' '--max-age-days 0 rejects a document 300 s old (genuine but too old)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 0
 jexpect 2 'a status-list option without --status-list is a usage error' \
   'o["reason"] == "usage" and o["message"] == "error: --status requires --status-list" and o["checks"] == []' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-key.json"
