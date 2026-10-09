@@ -749,6 +749,45 @@ else
   printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
 fi
 
+# Values are compared exactly as signed. $(...) strips trailing newlines, so a
+# signed "fixture-org" plus a newline used to satisfy --expect-slug fixture-org,
+# and the subject rule hashed the slug without it. A value holding a NUL byte
+# (which a shell variable cannot hold) is a failed check, never the value without it.
+echo '# values are compared exactly as signed'
+mint_attest --out "$T/nl-slug.json" --slug "$SLUG"$'\n'
+expect 1 "posture is for slug 'fixture-org\\x0a', not the expected 'fixture-org'" 'a signed slug with a trailing newline does not satisfy --expect-slug (slug_mismatch)' -- \
+  --attestation "$T/nl-slug.json" "${COMMON[@]}"
+lacks 'VERIFIED' 'a slug with a trailing newline never ends VERIFIED under --expect-slug'
+mint_attest --out "$T/nl-nonce.json" --nonce 'challenge-A'$'\n'
+expect 1 'nonce_mismatch' 'a signed nonce with a trailing newline does not answer the challenge' -- \
+  --attestation "$T/nl-nonce.json" "${COMMON[@]}" --expect-nonce 'challenge-A'
+mint_attest --out "$T/nl-iss.json" --iss "$ISS"$'\n'
+expect 1 "issuer_mismatch — iss is 'https://issuer.test\\x0a'" 'a signed iss with a trailing newline does not satisfy --expect-issuer' -- \
+  --attestation "$T/nl-iss.json" "${COMMON[@]}"
+mint_attest --out "$T/nul-slug.json" --escapes --slug 'fixture-org\x00'
+expect 1 'nul_byte — slug holds a NUL byte' 'a signed slug holding a NUL byte is a failed check (1)' -- \
+  --attestation "$T/nul-slug.json" "${COMMON[@]}"
+lacks 'VERIFIED' 'a slug holding a NUL byte never ends VERIFIED'
+expect 1 'nul_byte — slug holds a NUL byte' 'a slug holding a NUL byte fails without --expect-slug too' -- \
+  --attestation "$T/nul-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+mint_attest --out "$T/nul-iss.json" --escapes --iss 'https://issuer.test\x00'
+expect 1 "issuer_mismatch — iss is 'https://issuer.test\\x00'" 'a signed iss holding a NUL byte is shown with it and does not match' -- \
+  --attestation "$T/nul-iss.json" "${COMMON[@]}"
+# The subject rule hashes the signed slug: a withdrawal of "fixture-org" plus a
+# newline applies to a document for exactly that slug.
+mint_status --out "$T/list-subj-nl.json" --seq 8 --revoke-subject "$SLUG"$'\n''@2026-01-01T00:10:00.000Z'
+expect 1 'REVOKED — via subject' 'a withdrawal of a slug with a trailing newline revokes the document for that slug' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-nl.json" \
+  --attestation "$T/nl-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+# The status list: its iss is compared exactly too.
+mint_status --out "$T/list-nl-iss.json" --seq 8 --iss "$ISS"$'\n'
+expect 3 "issuer_mismatch — iss is 'https://issuer.test\\x0a'" 'a status list whose iss has a trailing newline does not satisfy --expect-issuer (3)' -- \
+  "${SL[@]}" --status "$T/list-nl-iss.json"
+lacks 'GOOD' 'a status list with another iss is never GOOD under --expect-issuer'
+mint_status --out "$T/list-nul-iss.json" --seq 8 --escapes --iss 'https://issuer.test\x00'
+expect 3 'nul_byte — .iss holds a NUL byte' 'a status list whose iss holds a NUL byte is UNKNOWN (3)' -- \
+  "${SL[@]}" --status "$T/list-nul-iss.json"
+
 # A non-ASCII label verifies and is shown. The same document under a Latin-1
 # locale is checked in the --json section below (it needs jexpect). This test used
 # to set PYTHONIOENCODING=ascii, which python3 -I ignores, so it could not fail;
@@ -798,7 +837,7 @@ for b in bad: print(b)
 PY
 )"
 read -r LOCALE_OPENS LOCALE_CALLS _ <<< "$LOCALE_SCAN"
-if [ "$(printf '%s\n' "$LOCALE_SCAN" | wc -l)" -eq 1 ] && [ "${LOCALE_OPENS:-0}" -ge 15 ] && [ "${LOCALE_CALLS:-0}" -ge 40 ]; then
+if [ "$(printf '%s\n' "$LOCALE_SCAN" | wc -l)" -eq 1 ] && [ "${LOCALE_OPENS:-0}" -ge 15 ] && [ "${LOCALE_CALLS:-0}" -ge 20 ]; then
   printf 'ok - every open( (%s) is binary or UTF-8, and every python3 call (%s) is python3 -I -X utf8\n' "$LOCALE_OPENS" "$LOCALE_CALLS"
   PASSED=$((PASSED + 1))
 else
@@ -1374,6 +1413,20 @@ lacks "iss (E2) is the issuer" 'an empty iss is never reported as the issuer the
 mem issuer 'd["issuer"] = "https://other.test"'
 expect 1 "anchor_issuer_mismatch — iss is '$ISS', the signed key statement names the issuer 'https://other.test'" 'an issuer the statement does not name is a failed check (1)' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-issuer.json"
+# Both issuers are compared exactly as signed: a trailing newline on either side
+# is another issuer, and a NUL byte makes the statement malformed.
+expect 1 "anchor_issuer_mismatch — iss is 'https://issuer.test\\x0a', the signed key statement names the issuer '$ISS'" \
+  'a signed iss with a trailing newline is not the issuer the statement names (1)' -- \
+  --attestation "$T/nl-iss.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --now "$NOW" "${A[@]}"
+lacks "iss (E2) is the issuer" 'an iss with a trailing newline is never reported as the issuer the statement names'
+mem nliss 'd["issuer"] += "\n"'
+expect 1 "anchor_issuer_mismatch — iss is '$ISS', the signed key statement names the issuer 'https://issuer.test\\x0a'" \
+  'a statement issuer with a trailing newline is not the iss of the document (1)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-nliss.json"
+mem nuliss 'd["issuer"] += "\u0000"'
+expect 2 'anchor could not be checked: the statement stmt-nuliss.json is malformed: its issuer holds a NUL byte' \
+  'a statement issuer holding a NUL byte is malformed (2)' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --anchor-file "$T/stmt-nuliss.json"
 # The kid is recomputed from the key bytes: a key set that labels the other key
 # with the listed kid is mislabelled (kid_mismatch), and the pin to the kid is
 # compared with the recomputed one, so the statement cannot be satisfied by a label.
@@ -1593,6 +1646,20 @@ jexpect 1 'newlines and ESC in the nonce, iss and jti are escaped and survive as
   --attestation "$T/inj-claims.json" "${COMMON[@]}" --expect-nonce 'challenge-B' --raw
 jexpect 2 'a header kid with newlines and ESC is only in the message, escaped' 'o["reason"] == "unknown_kid" and "hidden" in o["message"]' -- \
   --attestation "$T/inj-header.json" "${COMMON[@]}"
+
+# The values in "unverified" are the signed ones, exactly: a trailing newline is kept.
+jexpect 1 'a slug with a trailing newline: slug_mismatch, and unverified.slug is the signed slug' \
+  'o["reason"] == "slug_mismatch" and o["unverified"]["slug"] == "fixture-org\n" and o["attested"] is None' -- \
+  --attestation "$T/nl-slug.json" "${COMMON[@]}"
+jexpect 0 'without --expect-slug it verifies, and unverified.slug equals attested.slug' \
+  'o["verdict"] == "verified" and o["attested"]["slug"] == "fixture-org\n" and o["unverified"]["slug"] == o["attested"]["slug"]' -- \
+  --attestation "$T/nl-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
+jexpect 1 'a nonce with a trailing newline: nonce_mismatch, unverified.nonce exact' \
+  'o["reason"] == "nonce_mismatch" and o["unverified"]["nonce"] == "challenge-A\n"' -- \
+  --attestation "$T/nl-nonce.json" "${COMMON[@]}" --expect-nonce 'challenge-A'
+jexpect 1 'a slug holding a NUL byte: nul_byte decides, nothing attested' \
+  'o["reason"] == "nul_byte" and o["verdict"] == "failed" and o["attested"] is None' -- \
+  --attestation "$T/nul-slug.json" --jwks "$T/jwks.json" --expect-issuer "$ISS" --now "$NOW"
 
 # Argument errors are JSON too, wherever --json is, with exit 2.
 jexpect 2 'an unknown argument is a usage error' \

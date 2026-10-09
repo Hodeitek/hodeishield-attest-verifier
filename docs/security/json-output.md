@@ -114,7 +114,10 @@ Values the verifier read from the document, for diagnosis: `docVersion`, `iss`,
 `kid`, `jti`, `nonce`, `generatedAt`, `expiresAt` and `slug`. A member is
 present when the text mode would have read it by then (so it is empty `{}`
 for an argument error, and may lack `docVersion` and the others when the run
-stopped early); it is null when the document does not carry it.
+stopped early); it is null when the document does not carry it. Each is the
+string the document carries, exactly (a trailing newline included), and the one
+the checks compared, except that a NUL byte, which fails the run (`nul_byte`), is
+shown as the four characters `\x00`.
 
 **These values are not established by the verifier unless `exit_code` is 0.**
 On any other exit they come from a document that may have been altered, or from

@@ -1028,6 +1028,22 @@ fetch_or_read() {
   esac
 }
 
+# list_field VAR FILE FILTER — set VAR to what the jq FILTER selects in FILE, as
+# `jq -r` prints it but EXACTLY: read with a sentinel after it, removed, because
+# $(...) strips trailing newlines (see claims_field). A string holding a NUL byte
+# is a failed check that leaves the status UNKNOWN (status_unknown_nul_byte), and
+# VAR shows each NUL as \x00.
+list_field() {
+  local out='' rc=''
+  out="$(jq -j "($3) | if type == \"string\" then (explode | map(if . == 0 then (92, 120, 48, 48) else . end) | implode) else . end" "$2"; printf 'x%s' "$?")"
+  rc="${out##*x}"
+  printf -v "$1" '%s' "${out%x*}"
+  [ "$rc" -eq 0 ] || { printf -v "$1" '%s' ''; stat_bad status_unknown_malformed_document "malformed_document — $3 cannot be read"; return 0; }
+  if jq -e "($3) | strings | explode | any(. == 0)" "$2" >/dev/null 2>&1; then
+    stat_bad status_unknown_nul_byte "nul_byte — $3 holds a NUL byte (shown as \\x00): no comparison can read it exactly"
+  fi
+}
+
 # PYTHON AND THE LOCALE. Every python3 in this script runs as
 # `python3 -I -X utf8`: -I so that nothing from the working directory or from
 # the PYTHON* environment variables is imported or read, and -X utf8 so that its
@@ -1277,6 +1293,7 @@ else:
             return "its members are not exactly schema, issuer and keys"
         if d["schema"] != "hodeishield.keys.statement.v1": return "its schema is not hodeishield.keys.statement.v1"
         if not isinstance(d["issuer"], str) or not d["issuer"]: return "its issuer is not a string"
+        if "\x00" in d["issuer"]: return "its issuer holds a NUL byte"
         ks = d["keys"]
         if not isinstance(ks, list) or not ks: return "its keys are not a non-empty array"
         seen = set()
@@ -1350,9 +1367,12 @@ elif mode == "posture":
     json.dump(p, open(sys.argv[3], "w", encoding="utf-8"), indent=2)
 elif mode == "field":
     v = doc.get(sys.argv[3])
-    # Bytes, not text: a non-UTF-8 stdout (PYTHONIOENCODING) must not make a
-    # value unreadable and so change a verdict.
-    if isinstance(v, str): sys.stdout.buffer.write(v.encode("utf-8", "surrogatepass"))
+    # Bytes, not text: the value is written exactly as signed (see claims_field).
+    # A shell variable cannot hold a NUL byte, so a string with one is written
+    # with each NUL as the four characters \x00, and the exit status is 3.
+    if isinstance(v, str):
+        sys.stdout.buffer.write(v.replace("\x00", "\\x00").encode("utf-8", "surrogatepass"))
+        if "\x00" in v: sys.exit(3)
     elif v is not None: sys.stdout.write(json.dumps(v))
 elif mode == "has":
     sys.stdout.write("0" if doc.get(sys.argv[3]) is None else "1")
@@ -1393,6 +1413,26 @@ elif mode == "summary":
     sys.stdout.buffer.write(("\n".join(lines) + "\n").encode("utf-8", "backslashreplace"))
 else: raise SystemExit("document: unknown mode %r" % mode)
 '
+
+# claims_field VAR FILE MEMBER — set VAR to the top-level MEMBER of FILE (the
+# claims, or the posture sliced out of them) EXACTLY as signed. $(...) strips
+# trailing newlines, so a value read with it alone is not the signed value: a
+# signed slug "org" plus a newline satisfied --expect-slug org, and the subject
+# rule hashed the slug without it. The value is read with a sentinel after it
+# (here, x and the exit status of the reader), which is removed. A value holding
+# a NUL byte, which a shell variable cannot hold, is a failed check (nul_byte),
+# and VAR shows each NUL as \x00.
+claims_field() {
+  local out='' rc=''
+  out="$(python3 -I -X utf8 -c "$DOCX_PY" "$2" field "$3"; printf 'x%s' "$?")"
+  rc="${out##*x}"
+  printf -v "$1" '%s' "${out%x*}"
+  case "$rc" in
+    0) ;;
+    3) bad nul_byte "nul_byte — $3 holds a NUL byte (shown as \\x00): no comparison can read it exactly. Reject the document." ;;
+    *) die claims_unreadable "could not read $3 from $(esc "$CLAIMS_NAME")" ;;
+  esac
+}
 
 # The canonical STATUS-LIST encoder, reimplemented from the published wire
 # format `hodei-shield.attest.statuslist.v1`
@@ -1688,7 +1728,10 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign-identity.out")"
     || die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") is not strict JSON (UTF-8, no BOM, one value)."
   [ -z "$anchor_dups" ] \
     || die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") repeats members ($(esc "$(printf '%s' "$anchor_dups" | tr '\n' ' ')"))."
-  anchor_st="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" statement "$ANCHOR_STMT" 2>/dev/null || printf 'bad\nit could not be read\n')"
+  # The issuer is read exactly: x after it, removed, so that $(...) cannot strip
+  # a trailing newline from it.
+  anchor_st="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" statement "$ANCHOR_STMT" 2>/dev/null || printf 'bad\nit could not be read'; printf x)"
+  anchor_st="${anchor_st%x}"
   if [ "${anchor_st%%$'\n'*}" != ok ]; then
     die anchor_malformed "anchor could not be checked: the statement $(esc "$anchor_sn") is malformed: $(esc "${anchor_st#*$'\n'}")."
   fi
@@ -2046,12 +2089,12 @@ if [ -n "$CLAIMS_FILE" ]; then
   # verifier's `kid_mismatch`, and it only became checkable here once the whole
   # envelope was in view — E3 is inside the signature, the header kid is inside
   # the signing input, and both must agree.)
-  CLAIMS_KID="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field kid)"
+  claims_field CLAIMS_KID "$CLAIMS_FILE" kid
   # --anchor-file: the statement names the issuer origin; the signed iss must be it.
   if [ "$ANCHOR_READY" -eq 1 ]; then
     # Never skipped: an empty iss is not the issuer the statement names (which is
     # never empty), so it fails here too, besides iss_empty in section 7.
-    ANCHOR_CLAIMS_ISS="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
+    claims_field ANCHOR_CLAIMS_ISS "$CLAIMS_FILE" iss
     if [ "$ANCHOR_CLAIMS_ISS" = "$ANCHOR_ISSUER" ]; then
       ok anchor_issuer_matches "iss (E2) is the issuer '$(esc "$ANCHOR_CLAIMS_ISS")' the signed key statement names"
     else
@@ -2103,9 +2146,9 @@ if [ -n "$POSTURE_FILE" ]; then
   # the slug, freshness and subject-revocation checks while the signature still
   # verified over the genuine fields. Section 7 now also refuses any member the
   # signature does not cover; tests/run.sh holds the rejection cases.
-  GENERATED="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field generatedAt)"
-  EXPIRES="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field expiresAt)"
-  SLUG="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field slug)"
+  claims_field GENERATED "$POSTURE_FILE" generatedAt
+  claims_field EXPIRES "$POSTURE_FILE" expiresAt
+  claims_field SLUG "$POSTURE_FILE" slug
 
   # epoch_of() is defined globally (near b64url_encode) so --status-list mode
   # can use it too without a --jws having run.
@@ -2210,12 +2253,12 @@ fi
 # here so a third party reaches the same verdict without asking us.
 printf '\n%s[7] Attested claims%s\n' "$BOLD" "$RESET"
 if [ -n "$CLAIMS_FILE" ]; then
-  CLAIMS_DOCVERSION="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field docVersion)"
-  CLAIMS_ISS="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field iss)"
-  CLAIMS_JTI="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field jti)"
-  CLAIMS_NONCE="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field nonce)"
+  claims_field CLAIMS_DOCVERSION "$CLAIMS_FILE" docVersion
+  claims_field CLAIMS_ISS "$CLAIMS_FILE" iss
+  claims_field CLAIMS_JTI "$CLAIMS_FILE" jti
+  claims_field CLAIMS_NONCE "$CLAIMS_FILE" nonce
   CLAIMS_NONCE_PRESENT="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" has nonce)"
-  CLAIMS_BAND="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" field overallBand)"
+  claims_field CLAIMS_BAND "$CLAIMS_FILE" overallBand
   CLAIMS_BAND_PRESENT="$(python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" has overallBand)"
 
   printf '        docVersion:  %s\n' "$(esc "${CLAIMS_DOCVERSION:-$MISSING_LABEL}")"
@@ -2321,7 +2364,7 @@ PY
   # The gated-redaction contract, enforced at the RELYING PARTY: a `gated`
   # posture that still carries coverage, a heartbeat or an overall band is a
   # leak, and a signature must not make a leak look authoritative.
-  VISIBILITY="$(python3 -I -X utf8 -c "$DOCX_PY" "$POSTURE_FILE" field visibility)"
+  claims_field VISIBILITY "$POSTURE_FILE" visibility
   if [ "$VISIBILITY" = 'gated' ]; then
     FW_COUNT="$(python3 -I -X utf8 - "$POSTURE_FILE" <<'PY'
 import json, sys
@@ -2380,7 +2423,7 @@ GET /api/public/attest/status serves"
 fi
 
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  STATUS_DOC_VERSION="$(jq -r '.docVersion // empty' "$WORKDIR/list.json")"
+  list_field STATUS_DOC_VERSION "$WORKDIR/list.json" '.docVersion // empty'
   if [ "$STATUS_DOC_VERSION" = 'attest.statuslist.v1' ]; then
     ok status_doc_version_valid "docVersion is attest.statuslist.v1"
   else
@@ -2441,7 +2484,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  HEADER_MEMBERS="$(jq -r 'keys_unsorted | sort | join(",")' "$WORKDIR/status_header.json")"
+  list_field HEADER_MEMBERS "$WORKDIR/status_header.json" 'keys_unsorted | sort | join(",")'
   if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
     ok status_header_members_valid "header is the closed set {alg, kid, typ} — nothing unexamined can carry meaning"
   else
@@ -2449,9 +2492,9 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  SALG="$(jq -r '.alg' "$WORKDIR/status_header.json")"
-  STYP="$(jq -r '.typ' "$WORKDIR/status_header.json")"
-  STATUS_LIST_KID="$(jq -r '.kid' "$WORKDIR/status_header.json")"
+  list_field SALG "$WORKDIR/status_header.json" '.alg'
+  list_field STYP "$WORKDIR/status_header.json" '.typ'
+  list_field STATUS_LIST_KID "$WORKDIR/status_header.json" '.kid'
   # Never dispatch on alg — constant comparison only, exactly as jws.ts does.
   if [ "$SALG" = 'ML-DSA-65' ]; then
     ok status_header_alg_valid "alg is ML-DSA-65"
@@ -2589,7 +2632,7 @@ fi
 
 # --- claims.kid == header kid ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  LIST_KID="$(jq -r '.kid' "$WORKDIR/list.json")"
+  list_field LIST_KID "$WORKDIR/list.json" '.kid'
   if [ "$LIST_KID" = "$STATUS_LIST_KID" ]; then
     ok status_kid_matches "claims.kid equals the JWS header kid (signed twice, deliberately)"
   else
@@ -2598,7 +2641,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
 fi
 
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$EXPECT_ISSUER" ]; then
-  LIST_ISS="$(jq -r '.iss' "$WORKDIR/list.json")"
+  list_field LIST_ISS "$WORKDIR/list.json" '.iss'
   if [ "$LIST_ISS" = "$EXPECT_ISSUER" ]; then
     ok status_issuer_match "iss is '$(esc "${LIST_ISS}")', as expected"
   else
@@ -2609,8 +2652,8 @@ fi
 # --- freshness: issuedAt, nextUpdate, validity ceiling (design doc §7) ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
   SNOW="${NOW_OVERRIDE:-$(date -u +%s)}"
-  SISSUEDAT="$(jq -r '.issuedAt' "$WORKDIR/list.json")"
-  SNEXTUPDATE="$(jq -r '.nextUpdate' "$WORKDIR/list.json")"
+  list_field SISSUEDAT "$WORKDIR/list.json" '.issuedAt'
+  list_field SNEXTUPDATE "$WORKDIR/list.json" '.nextUpdate'
   SIAT="$(epoch_of "$SISSUEDAT")"
   SNUP="$(epoch_of "$SNEXTUPDATE")"
   printf '        issuedAt:   %s\n' "$(esc "$SISSUEDAT")"
@@ -2655,7 +2698,7 @@ $(esc "$STATUS_LIST_KID") at $(esc "$STATUS_RETIRED_AT")" ;;
 fi
 
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$MIN_SEQ" ]; then
-  SSEQ="$(jq -r '.seq' "$WORKDIR/list.json")"
+  list_field SSEQ "$WORKDIR/list.json" '.seq'
   if [ "$SSEQ" -lt "$MIN_SEQ" ] 2>/dev/null; then
     stat_bad status_unknown_rolled_back "rolled_back — seq $(esc "${SSEQ}") is lower than the highest previously accepted (${MIN_SEQ})"
   else
@@ -2753,7 +2796,8 @@ subject_rule() {   # SLUG GENERATED_AT
   entry="$(jq -c --arg h "$hash" \
     '.subjects[]? | select(.subjectHash==$h)' "$WORKDIR/list.json" | head -1)"
   if [ -n "$entry" ]; then
-    notbefore="$(printf '%s' "$entry" | jq -r '.notBefore')"
+    printf '%s' "$entry" > "$WORKDIR/subject_entry.json"
+    list_field notbefore "$WORKDIR/subject_entry.json" '.notBefore'
     if [ -z "$genat" ]; then
       SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
       warn_unknown status_unknown_generated_at_missing "subject '$(esc "${slug}")' IS listed, but no generatedAt was given \

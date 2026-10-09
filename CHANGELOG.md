@@ -90,6 +90,17 @@ before it takes effect. Only the latest release is supported, as
   `--min-seq` given without `--status-list` were silently ignored and the run
   could end `VERIFIED`; each is now a usage error, exit 2 ("--status requires
   --status-list"). This also affected earlier releases.
+- A value read from a document lost its trailing newlines before it was
+  compared, so the comparison was not of the signed value: a signed slug
+  `fixture-org` plus a newline satisfied `--expect-slug fixture-org`, and so for
+  `--expect-nonce`, `--expect-issuer`, the issuer `--anchor-file` compares (on
+  either side) and the `iss` and `kid` of a status list; the subject rule hashed
+  the slug without them, and `--json` `unverified.slug` differed from
+  `attested.slug`. Every such value is now read exactly as signed. A signed
+  string holding a NUL byte, which the shell cannot hold, is a failed check
+  (`nul_byte`, exit 1; `status_unknown_nul_byte`, exit 3, in a status list; a
+  malformed statement, exit 2, in the `--anchor-file` issuer), never the string
+  without it. This also affected earlier releases.
 - `--check-subject` and `--check-generated-at` replaced the document's own slug
   and `generatedAt` in the subject rule. With `--status-list` and a document
   whose subject was withdrawn, `--check-subject OTHER` or a later

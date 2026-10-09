@@ -202,6 +202,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `duplicate_key` | The document repeats a member. | fail | 1 | both | 7: `dup-posture-members`, `dup-claims-in-attestation`, `dup-claims-top-level`, ... |
 | `members_signed` | Every member is covered by the signature. | pass | 0 | both |  |
 | `unsigned_member` | The document carries a member the signature does not cover. | fail | 1 | both | 5: `decoy-slug-unsigned-member`, `decoy-timestamps-expired`, `unsigned-member-top-level`, ... |
+| `nul_byte` | A signed string the checks compare (`slug`, `generatedAt`, `expiresAt`, `iss`, `kid`, `jti`, `nonce`, `docVersion`, `overallBand`, `visibility`) holds a NUL byte, so no comparison can read it exactly; it is shown with each NUL as `\x00`. | fail | 1 | both |  |
 | `iss_empty` | `iss` is the empty string: the document names no issuer. With `--anchor-file` it is also `anchor_issuer_mismatch`. | fail | 1 | both |  |
 | `issuer_match` | `iss` is the expected issuer. | pass | 0 | both |  |
 | `issuer_mismatch` | `iss` is not the expected issuer. | fail | 1 | both | 2: `other-issuer`, `attached-issuer-mismatch` |
@@ -257,6 +258,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_public_key_loaded` | The status key loaded. | pass | 0 | status-list |  |
 | `status_unknown_public_key_rejected` | OpenSSL rejected the status public key. | fail | 3 | status-list |  |
 | `status_canonical_rederived` | The canonical bytes were re-derived from `statusList`. | pass | 0 | status-list |  |
+| `status_unknown_nul_byte` | A string of the status list or its header that the checks compare (`kid`, `iss`, `alg`, `typ`, `docVersion`, `issuedAt`, `nextUpdate`, a subject's `notBefore`) holds a NUL byte. | fail | 3 | status-list |  |
 | `status_unknown_encoding_failed` | The canonical encoder refused the list. | fail | 3 | status-list |  |
 | `status_unknown_truncated_invalid` | `truncated` is not a boolean. | fail | 3 | status-list | 1: `status-truncated-not-boolean` |
 | `status_signature_valid` | The status list signature verifies. | pass | 0 | status-list |  |
