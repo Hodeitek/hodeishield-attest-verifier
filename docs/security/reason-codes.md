@@ -204,7 +204,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `members_signed` | Every member is covered by the signature. | pass | 0 | both |  |
 | `unsigned_member` | The document carries a member the signature does not cover. | fail | 1 | both | 5: `decoy-slug-unsigned-member`, `decoy-timestamps-expired`, `unsigned-member-top-level`, ... |
 | `nul_byte` | A signed string the checks compare (`slug`, `generatedAt`, `expiresAt`, `iss`, `kid`, `jti`, `nonce`, `docVersion`, `overallBand`, `visibility`) holds a NUL byte, so no comparison can read it exactly; it is shown with each NUL as `\x00`. | fail | 1 | both |  |
-| `slug_empty` | The posture's `slug` is the empty string: the document names no organisation, so the subject rule of a status list could never apply to it. | fail | 1 | both |  |
+| `slug_empty` | The posture's `slug` is the empty string: the document names no organisation. A failed check whatever else holds; with `--status-list` the subject rule is still applied to it, so a withdrawal of `""` is `REVOKED` as well. | fail | 1 | both |  |
 | `iss_empty` | `iss` is the empty string: the document names no issuer. With `--anchor-file` it is also `anchor_issuer_mismatch`. | fail | 1 | both |  |
 | `issuer_match` | `iss` is the expected issuer. | pass | 0 | both |  |
 | `issuer_mismatch` | `iss` is not the expected issuer. | fail | 1 | both | 2: `other-issuer`, `attached-issuer-mismatch` |

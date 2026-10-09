@@ -2415,12 +2415,12 @@ if [ -n "$CLAIMS_FILE" ]; then
     bad iss_empty "iss_empty — iss (E2) is empty: the document names no issuer, so nothing says whose key set
           should verify it. Every genuine HodeiShield attestation names its issuer origin."
   fi
-  # The same for the subject. An EMPTY slug names no organisation, and the
-  # subject rule of a status list has nothing to look up for it, so a withdrawal
-  # could never apply. A failed check, whether or not --expect-slug is given.
+  # The same for the subject. An EMPTY slug names no organisation: a failed
+  # check, whether or not --expect-slug is given. In --status-list mode the
+  # subject rule is still applied to it, so a withdrawal of "" is REVOKED too.
   if [ "$POSTURE_READ" -eq 1 ] && [ -z "$SLUG" ]; then
-    bad slug_empty "slug_empty — the posture's slug (F2) is empty: the document names no organisation, so no
-          withdrawal of a subject can apply to it. Every genuine HodeiShield attestation names its organisation."
+    bad slug_empty "slug_empty — the posture's slug (F2) is empty: the document names no organisation.
+          Every genuine HodeiShield attestation names its organisation. Reject the document."
   fi
   if [ -n "$EXPECT_ISSUER" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
