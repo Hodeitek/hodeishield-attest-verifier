@@ -314,7 +314,7 @@ must exit 1, and you should run them before trusting a `VERIFIED`:
 
 ```bash
 # 1. Tamper with a signed field.
-python3 -c "import json;d=json.load(open('att.json'));\
+python3 -I -c "import json;d=json.load(open('att.json'));\
 d['attestation']['claims']['overallBand']='advanced';\
 json.dump(d,open('att-tampered.json','w'))"
 bash scripts/attest/verify-attestation.sh --attestation att-tampered.json \
@@ -325,7 +325,7 @@ bash scripts/attest/verify-attestation.sh --attestation att.json \
   --jwks jwks.json --expect-slug not-talmaren-payments ; echo "exit=$?" # 1
 
 # 3. Add a member the signature does not cover.
-python3 -c "import json;d=json.load(open('att.json'));\
+python3 -I -c "import json;d=json.load(open('att.json'));\
 d['attestation']['claims']['note']='not signed';\
 json.dump(d,open('att-extra.json','w'))"
 bash scripts/attest/verify-attestation.sh --attestation att-extra.json \
@@ -372,7 +372,7 @@ rejects a JWKS whose `kid` does not match its key. To compute it yourself from
 a downloaded `jwks.json`, one value per key:
 
 ```bash
-python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
+python3 -I -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
 ```
 
 Compare the output with the `kid` you pinned. The current values are listed in

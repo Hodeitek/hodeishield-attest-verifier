@@ -203,6 +203,10 @@ before it takes effect. Only the latest release is supported, as
   statement there is a second one, signed by this repository's release workflow.
 
 ### Documentation
+- The `python3` commands shown in README.md, `docs/security/keys.md` and the
+  verification document run as `python3 -I`, as the verifier's own do: they
+  read downloaded files from the current directory, where a planted `json.py`
+  would otherwise be imported.
 - [An evaluation of Rust ML-DSA-65 implementations](docs/security/rust-mldsa-evaluation.md)
   for a port of the verifier: version, stability, verification API, audits,
   FIPS 140-3, C or pure Rust, and WebAssembly for each candidate, with a

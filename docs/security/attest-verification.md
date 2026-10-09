@@ -638,8 +638,8 @@ computed and published in the same response:
 ```bash
 jq '.attestation.claims' att.json > claims.json
 
-python3 canon.py claims.json > canon.bin              # the signed envelope
-python3 canon.py claims.json posture > nested.bin     # just E7's contents
+python3 -I canon.py claims.json > canon.bin              # the signed envelope
+python3 -I canon.py claims.json posture > nested.bin     # just E7's contents
 wc -c < canon.bin
 wc -c < nested.bin
 openssl dgst -sha256 canon.bin
@@ -738,7 +738,7 @@ ML-DSA-65 Public-Key:
 #     reject the document (verify-attestation.sh reports `unsigned_member`).
 #     jq silently keeps the last of a duplicated member, so check the file as you
 #     received it for duplicates first (§4.0); any output means reject it too:
-#       python3 -c 'import json,sys
+#       python3 -I -c 'import json,sys
 #       def h(p):
 #           ks = [k for k, _ in p]
 #           if len(set(ks)) != len(ks): print("duplicate member:", ks)
@@ -762,7 +762,7 @@ jq -r '
 #    The protected segment goes in EXACTLY as received — never re-serialise it
 #    from the parsed header, or a sender could reorder the header JSON and have
 #    you verify over bytes that differ from the ones signed.
-python3 canon.py claims.json > canon.bin
+python3 -I canon.py claims.json > canon.bin
 wc -c < canon.bin                                   # 750 for the document above
 printf '%s.%s' "$H" "$(b64url_encode canon.bin)" > signing_input.bin
 b64url_decode "$S" > sig.bin
@@ -801,7 +801,7 @@ check yours.
 `in_progress` to `advanced` — exactly the lie a forged attestation would tell:
 
 ```bash
-python3 - <<'EOF'
+python3 -I - <<'EOF'
 import json
 d = json.load(open('att.json'))
 for f in d['attestation']['claims']['posture']['frameworks']:
@@ -832,7 +832,7 @@ format would be fragile and every re-serialisation through a JSON library would
 be a false alarm:
 
 ```bash
-python3 -c "
+python3 -I -c "
 import json
 d = json.load(open('att.json'))
 d['attestation']['claims']['posture']['frameworks'].reverse()
@@ -858,7 +858,7 @@ posture. Rewrite `iss`, the field that decides whose key set is authoritative,
 leaving the posture untouched:
 
 ```bash
-python3 -c "
+python3 -I -c "
 import json
 d = json.load(open('att.json'))
 d['attestation']['claims']['iss'] = 'https://attacker.example'
@@ -885,7 +885,7 @@ verifies, which is exactly why a verifier must reject the document instead of
 ignoring the extra member:
 
 ```bash
-python3 -c "
+python3 -I -c "
 import json
 d = json.load(open('att.json'))
 d['attestation']['claims']['note'] = 'not signed'
@@ -1064,7 +1064,7 @@ jq '{posture: (.attestation.claims.posture
       | .generatedAt = "1970-01-01T00:00:00.000Z" | .expiresAt = null)}' \
   att.json > timeless.json
 
-{ printf 'hodei-shield.trust-center.badge-ref.v1'; python3 canon.py timeless.json posture; } \
+{ printf 'hodei-shield.trust-center.badge-ref.v1'; python3 -I canon.py timeless.json posture; } \
   | openssl dgst -sha256 -r | cut -c1-8
 ```
 
