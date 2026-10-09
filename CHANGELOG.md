@@ -101,6 +101,16 @@ before it takes effect. Only the latest release is supported, as
   (`nul_byte`, exit 1; `status_unknown_nul_byte`, exit 3, in a status list; a
   malformed statement, exit 2, in the `--anchor-file` issuer), never the string
   without it. This also affected earlier releases.
+- The subject rule compared `generatedAt` with `notBefore` in whole seconds, so
+  a document generated less than a second before a fractional `notBefore`
+  (00:00:00.000 against 00:00:00.900) was `GOOD` instead of `REVOKED`. The TTL
+  ceiling (`expiresAt - generatedAt`) and the validity ceiling of a status list
+  (`nextUpdate - issuedAt`) were truncated the same way, so a window less than a
+  second over either passed. All three now compare exact instants through the
+  comparator the retirement checks use (one comparator for the script), and the
+  messages give the exact window (`3600.5s`). A `notBefore` or `--check-generated-at`
+  that is not an RFC 3339 time leaves the subject unknown, as the documentation
+  says. This also affected earlier releases.
 - `--check-subject` and `--check-generated-at` replaced the document's own slug
   and `generatedAt` in the subject rule. With `--status-list` and a document
   whose subject was withdrawn, `--check-subject OTHER` or a later

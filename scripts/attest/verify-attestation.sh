@@ -936,6 +936,8 @@ b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }
 # BSD/macOS `date -u -j -f` last. Returning '' on a bad string is the contract,
 # and EVERY caller must treat '' as "could not check" — never as "check passed".
 # See section 6: an unparseable expiresAt is a FAIL there, not a silent pass.
+# It truncates to whole seconds, so it is used only against "now" (a whole
+# second); two instants from documents are compared exactly, by RETIRED_PY cmp.
 epoch_of() {
   local out
   out="$(date -u -d "$1" +%s 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return; }
@@ -1224,8 +1226,14 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 #       bad one); then the member's value. A string is written raw (the caller
 #       escapes it before it is shown); any other JSON value as JSON text. The
 #       selected entry's `pub` is written to argv[4].
-#   argv[1] = "cmp"  argv[2] = instant of the document  argv[3] = hs_retired_at
-#       at_or_after | before | unparseable
+#   argv[1] = "cmp"  argv[2] = instant A  argv[3] = instant B  [argv[4] = N]
+#       before | equal | after | unparseable: A compared with B plus N seconds
+#       (an integer, 0 when absent). THE instant comparator of this script: the
+#       retirement checks, the subject rule (Rule B), the TTL ceiling and the
+#       status-list validity ceiling all compare through it, exactly.
+#   argv[1] = "span" argv[2] = instant A  argv[3] = instant B
+#       A minus B in seconds, exactly (a decimal), for the messages
+#       (empty when either is unparseable).
 #
 # The grammar is exactly YYYY-MM-DDTHH:MM:SSZ with a real calendar date and
 # time: no fraction, no offset, no lowercase t or z, no leap second. Instants
@@ -1274,7 +1282,22 @@ if sys.argv[1] == "key":
     out.write(status.encode() + b"\n" + val)
 elif sys.argv[1] == "cmp":
     a, b = instant(sys.argv[2]), instant(sys.argv[3])
-    out.write(b"unparseable" if a is None or b is None else b"at_or_after" if a >= b else b"before")
+    if a is None or b is None:
+        out.write(b"unparseable")
+    else:
+        b += int(sys.argv[4]) if len(sys.argv) > 4 else 0
+        out.write(b"after" if a > b else b"equal" if a == b else b"before")
+elif sys.argv[1] == "span":
+    a, b = instant(sys.argv[2]), instant(sys.argv[3])
+    if a is not None and b is not None:
+        f = a - b
+        sign, f = ("-" if f < 0 else ""), abs(f)
+        whole, frac = divmod(f, 1)
+        digits = ""
+        while frac:   # a decimal fraction (milliseconds, say) ends
+            d, frac = divmod(frac * 10, 1)
+            digits += str(int(d))
+        out.write((sign + str(int(whole)) + ("." + digits if digits else "")).encode())
 else:
     # The key statement (--anchor-file). The file has already been read strictly
     # (UTF-8, one value, no duplicate member) by the caller.
@@ -2184,7 +2207,7 @@ if [ -n "$POSTURE_FILE" ]; then
   # not help, so this is a plain FAIL (VERIFICATION FAILED, not EXPIRED).
   if [ -n "$RETIRED_AT" ] && [ -n "$GENERATED" ]; then
     case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$GENERATED" "$RETIRED_AT" 2>/dev/null)" in
-      at_or_after)
+      equal|after)
         bad retired_key "retired_key — this document was generated at $(esc "$GENERATED"), at or after the retirement of key $(esc "$KID") at $(esc "$RETIRED_AT")" ;;
       before)
         ok retired_key_document_predates "key $(esc "$KID") is retired (at $(esc "$RETIRED_AT")), but this document was generated at $(esc "$GENERATED"), before the retirement" ;;
@@ -2214,14 +2237,20 @@ if [ -n "$POSTURE_FILE" ]; then
     # The TTL CEILING. A window wider than the issuer can mint means the document
     # did not come from a conforming issuer, however well it verifies. The
     # platform's own verifier rejects this as `ttl_exceeded`; so does this one.
+    # Compared as exact instants, through the one comparator (RETIRED_PY cmp):
+    # in whole seconds, a window up to a second over the ceiling passed.
     if [ -n "$E" ] && [ -n "$G" ]; then
-      TTL=$(( E - G ))
-      if [ "$TTL" -gt "$MAX_TTL_SECONDS" ]; then
-        bad ttl_exceeded "validity window is ${TTL}s (expiresAt - generatedAt), above the issuer's
-          ${MAX_TTL_SECONDS}s ceiling — no conforming issuer can mint this"
-      else
-        ok ttl_within_ceiling "validity window ${TTL}s is within the issuer's ${MAX_TTL_SECONDS}s ceiling"
-      fi
+      TTL="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" span "$EXPIRES" "$GENERATED" 2>/dev/null || true)"
+      case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$EXPIRES" "$GENERATED" "$MAX_TTL_SECONDS" 2>/dev/null)" in
+        after)
+          bad ttl_exceeded "validity window is ${TTL}s (expiresAt - generatedAt), above the issuer's
+          ${MAX_TTL_SECONDS}s ceiling — no conforming issuer can mint this" ;;
+        before|equal)
+          ok ttl_within_ceiling "validity window ${TTL}s is within the issuer's ${MAX_TTL_SECONDS}s ceiling" ;;
+        *)
+          bad date_unparseable "date_unparseable — generatedAt '$(esc "$GENERATED")' or expiresAt '$(esc "$EXPIRES")' is not an
+          RFC 3339 time, so the validity window was NOT checked" ;;
+      esac
     fi
   else
     # NOT a warning. We always set expiresAt, so a document without one is not
@@ -2667,13 +2696,18 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
       ok status_not_future "issuedAt is not in the future (beyond skew)"
     fi
     # No skew here: both instants are inside the signed bytes, so no clock is
-    # involved — exactly as posture.ts checks ttl_exceeded above.
-    if [ $(( SNUP - SIAT )) -gt "$MAX_STATUS_LIST_VALIDITY_SECONDS" ]; then
-      stat_bad status_unknown_validity_exceeded "validity_exceeded — nextUpdate - issuedAt is $(( SNUP - SIAT ))s, above the \
-${MAX_STATUS_LIST_VALIDITY_SECONDS}s ceiling any conforming issuer can produce"
-    else
-      ok status_validity_within_ceiling "nextUpdate - issuedAt is within the ${MAX_STATUS_LIST_VALIDITY_SECONDS}s ceiling"
-    fi
+    # involved — exactly as posture.ts checks ttl_exceeded above. Compared as
+    # exact instants, as the TTL ceiling is.
+    SVALIDITY="$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" span "$SNEXTUPDATE" "$SISSUEDAT" 2>/dev/null || true)"
+    case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$SNEXTUPDATE" "$SISSUEDAT" "$MAX_STATUS_LIST_VALIDITY_SECONDS" 2>/dev/null)" in
+      after)
+        stat_bad status_unknown_validity_exceeded "validity_exceeded — nextUpdate - issuedAt is ${SVALIDITY}s, above the \
+${MAX_STATUS_LIST_VALIDITY_SECONDS}s ceiling any conforming issuer can produce" ;;
+      before|equal)
+        ok status_validity_within_ceiling "nextUpdate - issuedAt is within the ${MAX_STATUS_LIST_VALIDITY_SECONDS}s ceiling" ;;
+      *)
+        stat_bad status_unknown_date_unparseable "malformed_document — could not parse issuedAt/nextUpdate as RFC 3339" ;;
+    esac
     if [ $(( SNUP + STATUS_CLOCK_SKEW_SECONDS )) -lt "$SNOW" ]; then
       stat_bad status_unknown_stale "stale — nextUpdate is $(( SNOW - SNUP ))s in the past, beyond the \
 ${STATUS_CLOCK_SKEW_SECONDS}s skew allowance. Re-fetch — do not rely on this list."
@@ -2686,7 +2720,7 @@ fi
 # --- a list issued at or after the retirement of its own key is not trusted ---
 if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$STATUS_RETIRED_AT" ]; then
   case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$SISSUEDAT" "$STATUS_RETIRED_AT" 2>/dev/null)" in
-    at_or_after)
+    equal|after)
       stat_bad status_unknown_retired_key "retired_key — this status list was issued at $(esc "$SISSUEDAT"), at or after the retirement of \
 key $(esc "$STATUS_LIST_KID") at $(esc "$STATUS_RETIRED_AT")" ;;
     before)
@@ -2784,7 +2818,7 @@ REVOCATION_UNKNOWN_BECAUSE=''
 # SUBJ_REASON (revoked) or SUBJ_BECAUSE (unknown). The hash is printed once per slug.
 SUBJ_HASHED=' '
 subject_rule() {   # SLUG GENERATED_AT
-  local slug="$1" genat="$2" entry='' notbefore='' sgen='' snb='' truncated='' hash=''
+  local slug="$1" genat="$2" entry='' notbefore='' truncated='' hash=''
   SUBJ_OUTCOME=good; SUBJ_REASON=''; SUBJ_BECAUSE=''
   { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$slug"; } \
     | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
@@ -2806,14 +2840,17 @@ subject_rule() {   # SLUG GENERATED_AT
 decide, so UNKNOWN, never 'good'"
       return 0
     fi
-    sgen="$(epoch_of "$genat")"
-    snb="$(epoch_of "$notbefore")"
-    if [ -z "$sgen" ] || [ -z "$snb" ]; then
-      SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
-      warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'"
-    elif [ "$sgen" -lt "$snb" ]; then
-      SUBJ_OUTCOME=revoked; SUBJ_REASON="$(printf '%s' "$entry" | jq -r '.reason')"
-    fi
+    # Exact instants, through the one comparator (RETIRED_PY cmp), as the
+    # retirement checks are: in whole seconds, a document generated less than a
+    # second before a fractional notBefore was not revoked.
+    case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$genat" "$notbefore" 2>/dev/null)" in
+      before)
+        SUBJ_OUTCOME=revoked; SUBJ_REASON="$(printf '%s' "$entry" | jq -r '.reason')" ;;
+      equal|after) ;;
+      *)
+        SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+        warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'" ;;
+    esac
   else
     truncated="$(jq -r '.truncated' "$WORKDIR/list.json")"
     if [ "$truncated" = 'true' ]; then

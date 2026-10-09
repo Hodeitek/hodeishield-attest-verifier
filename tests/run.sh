@@ -188,6 +188,17 @@ lacks 'VERIFICATION FAILED' 'a genuine document that is only too old is not repo
 mint_attest --out "$T/long-ttl.json" --expires-at '2026-01-01T02:00:00.000Z'
 expect 1 "above the issuer's" 'a validity window above the 1 h issuer ceiling is rejected' -- \
   --attestation "$T/long-ttl.json" "${COMMON[@]}"
+# The ceiling is compared as exact instants: in whole seconds, a window under a
+# second over it passed.
+mint_attest --out "$T/ttl-frac.json" --expires-at '2026-01-01T01:00:00.500Z'
+expect 1 "validity window is 3600.5s (expiresAt - generatedAt), above the issuer's" 'a validity window 0.5 s over the ceiling is rejected' -- \
+  --attestation "$T/ttl-frac.json" "${COMMON[@]}"
+mint_attest --out "$T/ttl-frac2.json" --generated-at '2026-01-01T00:00:00.900Z' --expires-at '2026-01-01T01:00:00.950Z'
+expect 1 "validity window is 3600.05s (expiresAt - generatedAt), above the issuer's" 'a validity window 0.05 s over the ceiling, with a fractional generatedAt, is rejected' -- \
+  --attestation "$T/ttl-frac2.json" "${COMMON[@]}"
+mint_attest --out "$T/ttl-exact.json" --generated-at '2026-01-01T00:00:00.900Z' --expires-at '2026-01-01T01:00:00.900Z'
+expect 0 "validity window 3600s is within the issuer's 3600s ceiling" 'a validity window of exactly the ceiling passes' -- \
+  --attestation "$T/ttl-exact.json" "${COMMON[@]}"
 
 expect 1 'not_yet_valid' 'a document dated beyond the 5 min clock-skew allowance is rejected' -- \
   --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now 1767225000
@@ -525,6 +536,29 @@ expect 0 'GOOD — not revoked' 'a standalone --check-subject query after the wi
   --check-subject "$SLUG" --check-generated-at 2026-01-01T00:20:00.000Z --now "$NOW"
 expect 3 'IS listed, but no generatedAt was given' 'a standalone --check-subject query without a time is UNKNOWN' -- \
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" --check-subject "$SLUG" --now "$NOW"
+
+# Rule B compares exact instants, through the same comparator as the retirement
+# checks. In whole seconds, a document generated at 00:00:00.000 was not "before"
+# a notBefore of 00:00:00.900.
+mint_status --out "$T/list-subj-frac.json" --seq 8 --revoke-subject "$SLUG@2026-01-01T00:00:00.900Z"
+expect 1 'REVOKED — via subject' 'a document generated 0.9 s before a fractional notBefore is REVOKED' -- \
+  "${SL[@]}" --status "$T/list-subj-frac.json"
+lacks 'GOOD' 'a document generated under a second before notBefore is never GOOD'
+mint_status --out "$T/list-subj-same.json" --seq 8 --revoke-subject "$SLUG@2026-01-01T01:00:00+01:00"
+expect 0 'GOOD — not revoked' 'a document generated at notBefore itself (another form of the same instant) is good' -- \
+  "${SL[@]}" --status "$T/list-subj-same.json"
+mint_status --out "$T/list-subj-bad.json" --seq 8 --revoke-subject "$SLUG@2026-01-01 00:10:00"
+expect 3 'could not parse generatedAt/notBefore as RFC 3339' 'a notBefore that is not RFC 3339 leaves the subject UNKNOWN' -- \
+  "${SL[@]}" --status "$T/list-subj-bad.json"
+# The validity ceiling of a status list is compared exactly too.
+"${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" --issued-at "$LIST_AT" \
+  --next-update '2026-01-02T00:00:00.500Z' --seq 8 --out "$T/list-validity-frac.json"
+expect 3 'validity_exceeded — nextUpdate - issuedAt is 86400.5s, above the' 'a status list valid 0.5 s longer than the ceiling is UNKNOWN' -- \
+  "${SL[@]}" --status "$T/list-validity-frac.json"
+"${MINT[@]}" status --key "$T/status.pem" --iss "$ISS" --issued-at "$LIST_AT" \
+  --next-update '2026-01-02T00:00:00.000Z' --seq 8 --out "$T/list-validity-exact.json"
+expect 0 'GOOD — not revoked' 'a status list valid for exactly the ceiling is good' -- \
+  "${SL[@]}" --status "$T/list-validity-exact.json"
 
 expect 0 'one of the kids you pinned with --expect-kid' '--expect-kid works beside --status-list on the attestation key' -- \
   "${SL[@]}" --status "$T/list-empty.json" --expect-kid "$ISSUER_KID"
