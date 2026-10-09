@@ -2145,12 +2145,40 @@ fi
 
 # --- one definition per function (static) ---------------------------------------
 # A second definition of a function silently replaces the first from the point
-# where it runs, for every caller (json_str() was defined twice).
-mapfile -t dup_fns < <(grep -oE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*\(\)' "$VERIFIER" | tr -d ' \t' | sort | uniq -d)
-if [ "${#dup_fns[@]}" -eq 0 ]; then
-  printf 'ok - every function of the script is defined once\n'; PASSED=$((PASSED + 1))
+# where it runs, for every caller (json_str() was defined twice). Every form bash
+# accepts is read: name(), name (), function name, function name() and
+# function name ().
+fn_names() {   # FILE — the name of each function definition, one per line, in order
+  sed -nE 's/^[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)([[:space:]]*\(\))?([[:space:]]|\{|$).*/\1/p; t
+           s/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)([[:space:]]|\{|$).*/\1/p' "$1"
+}
+# The reader itself, on every form, a call and a duplicate of each kind.
+cat > "$T/fn-forms.sh" <<'FNS'
+a() { :; }
+b () { :; }
+function c { :; }
+function d() { :; }
+  function  e  () {
+    x="$(g)"; h a
+  }
+  f()   {
+    :
+  }
+a () { :; }
+function b { :; }
+FNS
+if [ "$(fn_names "$T/fn-forms.sh" | tr '\n' ' ')" = 'a b c d e f a b ' ] \
+   && [ "$(fn_names "$T/fn-forms.sh" | sort | uniq -d | tr '\n' ' ')" = 'a b ' ]; then
+  printf 'ok - the duplicate-function reader finds every form of definition, and a duplicate of each\n'; PASSED=$((PASSED + 1))
 else
-  printf 'not ok - functions defined more than once: %s\n' "${dup_fns[*]}"; FAILED=$((FAILED + 1))
+  printf 'not ok - the duplicate-function reader misses a form: %s\n' "$(fn_names "$T/fn-forms.sh" | tr '\n' ' ')"; FAILED=$((FAILED + 1))
+fi
+mapfile -t all_fns < <(fn_names "$VERIFIER")
+mapfile -t dup_fns < <(printf '%s\n' "${all_fns[@]}" | sort | uniq -d)
+if [ "${#all_fns[@]}" -ge 30 ] && [ "${#dup_fns[@]}" -eq 0 ]; then
+  printf 'ok - every function of the script is defined once (%d functions)\n' "${#all_fns[@]}"; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - functions defined more than once: %s (%d read)\n' "${dup_fns[*]}" "${#all_fns[@]}"; FAILED=$((FAILED + 1))
 fi
 
 # --- reason codes (static) ----------------------------------------------------

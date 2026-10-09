@@ -189,6 +189,9 @@ before it takes effect. Only the latest release is supported, as
   as a pattern that matches everything; it always passed. The helpers now read
   the output of the run they follow, refuse such a string, and the check is
   written as line-anchored patterns. It holds.
+- The tests: the check that no function is defined twice read only the form
+  `name()`, and missed `name ()`, `function name` and `function name()`. It
+  reads every form now, and checks itself on each.
 - The tests: the self-checks of the `--json` harness accepted any "not ok" for
   a check that raises, so one of them would still pass if such a check were
   reported as merely false. Each now requires its exact outcome ("could not be
