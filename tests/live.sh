@@ -69,10 +69,10 @@ fetch jwks.json         "$BASE/keys"
 fetch status.json       "$BASE/status"
 fetch status-keys.json  "$BASE/status-keys"
 
-# run LABEL WANT_EXIT -- verifier args...
+# run LABEL WANT_EXIT -- verifier args... (RUN_VERIFIER, when set, is the script run)
 run() {
   local label="$1" want="$2" got; shift 3
-  NO_COLOR=1 bash "$VERIFIER" "$@" > "$T/out" 2>&1
+  NO_COLOR=1 bash "${RUN_VERIFIER:-$VERIFIER}" "$@" > "$T/out" 2>&1
   got=$?
   cat "$T/out"
   if [ "$got" -ne "$want" ]; then
@@ -118,17 +118,72 @@ if "keys-statement.json" in a and "keys-statement.json.sigstore.json" in a:
     print(a["keys-statement.json"]); print(a["keys-statement.json.sigstore.json"])
 ' "$T/release.json" 2>/dev/null || true)"
 [ -n "$STMT_URLS" ] || anchor_skip 'the latest release has no keys-statement.json yet'
-mkdir -p "$T/anchor"
-n_assets=0
-while IFS= read -r url; do
-  case "$url" in
-    https://github.com/Hodeitek/hodeishield-attest-verifier/releases/download/*) ;;
-    *) fail "the latest release names an asset outside this repository's releases: $url" ;;
-  esac
-  curl -fsSL --max-time 30 --retry 3 --retry-delay 5 -o "$T/anchor/$(basename "$url")" "$url" \
-    || anchor_skip "could not download $(basename "$url")"
-  n_assets=$((n_assets + 1))
-done <<< "$STMT_URLS"
-[ "$n_assets" -eq 2 ] || fail "expected the statement and its bundle, got $n_assets assets"
-run "the production key is listed in the latest release's key statement" 0 -- "${COMMON[@]}" \
+# Anti-rollback: --anchor-file refuses a statement from a release older than the
+# verifier itself. Between a version bump and its release (a pull request, dev),
+# the verifier under test is newer than the latest release, so it must refuse that
+# release's statement; the live coverage then comes from the latest release's own
+# verifier. Equal (the released state): the verifier under test does it directly.
+TAG="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("tag_name", ""))' "$T/release.json" 2>/dev/null || true)"
+REL_VERSION="${TAG#v}"
+[[ "$REL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "the latest release has an unreadable tag: '$TAG'"
+SCRIPT_VERSION="$(sed -n 's/^VERIFIER_VERSION="\(.*\)"$/\1/p' "$VERIFIER")"
+[[ "$SCRIPT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "VERIFIER_VERSION of the script under test is unreadable: '$SCRIPT_VERSION'"
+if [ "$SCRIPT_VERSION" = "$REL_VERSION" ]; then
+  ANCHOR_MODE=equal
+elif [ "$(printf '%s\n%s\n' "$SCRIPT_VERSION" "$REL_VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$SCRIPT_VERSION" ]; then
+  ANCHOR_MODE=newer
+else
+  # A branch older than the latest release: nothing it can check here would say
+  # anything about the release, so it fails and says to update the branch.
+  fail "the script under test is v$SCRIPT_VERSION, older than the latest release $TAG: update this branch"
+fi
+
+# download_assets DIR URL... — only from this repository's releases.
+download_assets() {
+  local dir="$1" url; shift
+  mkdir -p "$dir"
+  for url in "$@"; do
+    case "$url" in
+      https://github.com/Hodeitek/hodeishield-attest-verifier/releases/download/*) ;;
+      *) fail "the latest release names an asset outside this repository's releases: $url" ;;
+    esac
+    curl -fsSL --max-time 30 --retry 3 --retry-delay 5 -o "$dir/$(basename "$url")" "$url" \
+      || anchor_skip "could not download $(basename "$url")"
+  done
+}
+mapfile -t stmt_urls <<< "$STMT_URLS"
+[ "${#stmt_urls[@]}" -eq 2 ] || fail "expected the statement and its bundle, got ${#stmt_urls[@]} assets"
+download_assets "$T/anchor" "${stmt_urls[@]}"
+
+if [ "$ANCHOR_MODE" = equal ]; then
+  run "the production key is listed in the latest release's key statement" 0 -- "${COMMON[@]}" \
+    --anchor-file "$T/anchor/keys-statement.json"
+  exit 0
+fi
+
+# (a) The verifier under test refuses a statement older than itself.
+NO_COLOR=1 bash "$VERIFIER" "${COMMON[@]}" --anchor-file "$T/anchor/keys-statement.json" --json > "$T/out" 2>&1
+got=$?
+cat "$T/out"
+reason="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("reason", ""))' "$T/out" 2>/dev/null || true)"
+if [ "$got" -ne 2 ] || [ "$reason" != anchor_statement_older ]; then
+  fail "the verifier refuses a key statement older than itself (anti-rollback): exit $got, reason '$reason', expected exit 2 and anchor_statement_older"
+fi
+printf 'ok    the verifier refuses a key statement older than itself (anti-rollback) (exit 2, anchor_statement_older)\n\n'
+
+# (b) The latest release's verifier, from its assets, with the statement.
+mapfile -t release_urls < <(python3 -I -c '
+import json, sys
+a = {x["name"]: x["browser_download_url"] for x in json.load(open(sys.argv[1])).get("assets", [])}
+if "verify-attestation.sh" in a and "SHA256SUMS" in a:
+    print(a["verify-attestation.sh"]); print(a["SHA256SUMS"])
+' "$T/release.json" 2>/dev/null || true)
+[ "${#release_urls[@]}" -eq 2 ] || fail "the latest release $TAG has no verify-attestation.sh and SHA256SUMS assets"
+download_assets "$T/released" "${release_urls[@]}"
+want_sum="$(awk '$2 == "verify-attestation.sh" { print $1 }' "$T/released/SHA256SUMS")"
+have_sum="$(sha256sum "$T/released/verify-attestation.sh" | awk '{ print $1 }')"
+[ -n "$want_sum" ] && [ "$want_sum" = "$have_sum" ] \
+  || fail "the released verify-attestation.sh ($have_sum) does not match SHA256SUMS ($want_sum)"
+RUN_VERIFIER="$T/released/verify-attestation.sh" \
+  run "the production key is listed in the latest release's key statement (checked with the $TAG verifier)" 0 -- "${COMMON[@]}" \
   --anchor-file "$T/anchor/keys-statement.json"
