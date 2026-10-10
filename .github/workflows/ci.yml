@@ -41,23 +41,22 @@ jobs:
   # Semgrep's bash parser is stricter than bash: one construct it does not read
   # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
   # file, and a scan that parsed nothing reports no finding. This fails the
-  # build if the script is not parsed completely. Semgrep is pinned to an exact
-  # version, in a venv; nothing is sent to Semgrep (no login, no metrics).
+  # build if the script is not parsed completely. Semgrep is the official image,
+  # pinned by version and digest (1.163.0), run with no network and the file
+  # mounted read-only; it is not logged in, sends no metrics and does not check
+  # for a newer version.
   semgrep-parse:
     name: Semgrep parses the script
     runs-on: ubuntu-latest
+    env:
+      SEMGREP_IMAGE: semgrep/semgrep:1.163.0@sha256:7cad2bc2d1e44f87f0bf4be6d1fa23aa90fb72015bebc89fb91385d813987a03
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install semgrep 1.163.0
-        run: |
-          python3 -m venv "$RUNNER_TEMP/semgrep-venv"
-          "$RUNNER_TEMP/semgrep-venv/bin/pip" install --quiet --disable-pip-version-check semgrep==1.163.0
-          echo "$RUNNER_TEMP/semgrep-venv/bin" >> "$GITHUB_PATH"
-      - name: semgrep version
-        run: semgrep --version
+      - name: Pull the Semgrep image
+        run: docker pull "$SEMGREP_IMAGE"
       - name: semgrep --lang bash parses verify-attestation.sh
         run: bash .github/scripts/semgrep-parses.sh scripts/attest/verify-attestation.sh
 
