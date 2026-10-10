@@ -182,8 +182,9 @@ if "verify-attestation.sh" in a and "SHA256SUMS" in a:
 download_assets "$T/released" "${release_urls[@]}"
 want_sum="$(awk '$2 == "verify-attestation.sh" { print $1 }' "$T/released/SHA256SUMS")"
 have_sum="$(sha256sum "$T/released/verify-attestation.sh" | awk '{ print $1 }')"
-[ -n "$want_sum" ] && [ "$want_sum" = "$have_sum" ] \
-  || fail "the released verify-attestation.sh ($have_sum) does not match SHA256SUMS ($want_sum)"
+if [ -z "$want_sum" ] || [ "$want_sum" != "$have_sum" ]; then
+  fail "the released verify-attestation.sh ($have_sum) does not match SHA256SUMS ($want_sum)"
+fi
 RUN_VERIFIER="$T/released/verify-attestation.sh" \
   run "the production key is listed in the latest release's key statement (checked with the $TAG verifier)" 0 -- "${COMMON[@]}" \
   --anchor-file "$T/anchor/keys-statement.json"
