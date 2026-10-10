@@ -537,7 +537,7 @@ sys.stdout.write(json.dumps(obj, ensure_ascii=True, sort_keys=False) + "\n")
 # no attested content, no unverified values, no anchor. A byte outside printable
 # ASCII becomes \u00XX (so a non-ASCII message is not exact, but it is safe).
 json_str() {
-  local LC_ALL=C s="$1" out='' c='' i=0 n=${#1} bs=$'\\'
+  local LC_ALL=C s="$1" out='' c='' i=0 n=${#1} bs="\\"
   for (( i = 0; i < n; i++ )); do
     c="${s:i:1}"
     case "$c" in
@@ -2888,7 +2888,10 @@ printf '\n%s[9] Revocation check%s\n' "$BOLD" "$RESET"
 CHECK_KIDS=()
 for k in "${DERIVED_KID:-}" "${KID:-}" "$CHECK_KID"; do
   [ -n "$k" ] || continue
-  case " ${CHECK_KIDS[*]-} " in *" $k "*) ;; *) CHECK_KIDS+=("$k") ;; esac
+  case " ${CHECK_KIDS[*]-} " in
+    *" $k "*) ;;
+    *) CHECK_KIDS+=("$k") ;;
+  esac
 done
 EFFECTIVE_KID="${CHECK_KIDS[*]-}"
 
