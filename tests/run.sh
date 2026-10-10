@@ -694,8 +694,10 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
 # case-sensitively. Anything else under http:// is cleartext to somewhere else:
 # refused for the status key set, a warning for the status list. The listeners
 # are on 127.0.0.0/8 only (python3 -I -m http.server): 127.0.0.2 for the URLs
-# that must NOT be taken for loopback (it would have answered the old prefix
-# match), 127.0.0.1 for the ones that must. Nothing leaves this machine.
+# that must NOT be taken for loopback, 127.0.0.1 for the ones that must. Of the
+# refusal cases, only the userinfo, empty-port, six-digit-port and 65536 ones
+# reproduce the old prefix match; the others guard the new regex. Nothing leaves
+# this machine.
 echo '# cleartext URLs'
 srv_start() {   # NAME ADDRESS DIR — sets SRV_PORT_<NAME>; the log is $T/<NAME>.log
   local name="$1" addr="$2" dir="$3" port='' i=0
@@ -755,6 +757,25 @@ expect 0 'over cleartext HTTP from loopback: http://localhost:' 'cleartext, loca
   "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
 expect 0 "over cleartext HTTP from loopback: http://127.0.0.1:$PL/k.json" 'cleartext, http://127.0.0.1:PORT/k.json is loopback: fetched with the loopback warning (0)' -- \
   "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+# A loopback fetch does not leave the machine: curl ignores proxy settings and
+# ~/.curlrc for it. Through the proxy below (nothing listens there) the fetch
+# would fail, or "loopback" would go out in cleartext.
+http_proxy=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 expect 0 'GOOD — not revoked' 'cleartext, loopback ignores http_proxy and ALL_PROXY: fetched directly (0)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+mkdir "$T/home-rc"
+printf 'proxy = http://127.0.0.1:9\n' > "$T/home-rc/.curlrc"
+HOME="$T/home-rc" expect 0 'GOOD — not revoked' 'cleartext, loopback ignores ~/.curlrc (a proxy in it): fetched directly (0)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+# --globoff: {a,b} in the path is one URL, one request (a 404 here), never two.
+GETS_BEFORE="$(grep -c '"GET' "$T/local.log" || true)"
+expect 2 'failed to fetch http://127.0.0.1:'"$PL"'/k{a,b}.json' 'cleartext, a {a,b} glob in a loopback path is fetched literally (fetch_failed, 2)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k{a,b}.json"
+GETS_AFTER="$(grep -c '"GET' "$T/local.log" || true)"
+if [ "$((GETS_AFTER - GETS_BEFORE))" -eq 1 ]; then
+  printf 'ok - cleartext, a {a,b} glob made exactly one request\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cleartext, a {a,b} glob made %s requests\n' "$((GETS_AFTER - GETS_BEFORE))"; FAILED=$((FAILED + 1))
+fi
 # The status list keeps its warning: cleartext to another address is fetched, as before.
 expect 0 "over cleartext HTTP: http://127.0.0.2:$PO/list.json" 'cleartext, a status list from another address: the cleartext warning, not the loopback one (0)' -- \
   --status-list --status "http://127.0.0.2:$PO/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"

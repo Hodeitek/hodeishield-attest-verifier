@@ -1053,12 +1053,18 @@ is_loopback_url() {
   return 0
 }
 
-# fetch_url URL OUT — curl URL into OUT; what curl says about a failure goes to
-# stderr through esc (it quotes the URL, and the host or the part of the URL it
-# could not read, as given on the command line).
+# fetch_url URL OUT [loopback] — curl URL into OUT; what curl says about a failure
+# goes to stderr through esc (it quotes the URL, and the host or the part of the
+# URL it could not read, as given on the command line). --globoff: a {a,b} or
+# [1-9] in the URL is part of the URL, not several fetches into one file. For a
+# loopback URL, curl ignores ~/.curlrc (-q, which must be its first argument) and
+# every proxy setting (--noproxy '*'): through a proxy, "loopback" would leave
+# this machine in cleartext. Other URLs keep the user's curl settings, since https
+# may need a proxy.
 fetch_url() {
-  local errf="$WORKDIR/curl.err" rc=0
-  curl -fsS --max-time 15 --max-filesize 5000000 -o "$2" "$1" 2> "$errf" || rc=$?
+  local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=()
+  if [ "${3:-}" = loopback ]; then curl_q=(-q); curl_np=(--noproxy '*'); fi
+  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize 5000000 -o "$2" "$1" 2> "$errf" || rc=$?
   if [ "$rc" -ne 0 ] && [ -s "$errf" ]; then
     printf '%s\n' "$(esc "$(cat "$errf")")" >&2
   fi
@@ -1110,7 +1116,7 @@ fetch_or_read() {
     http://*)
       if is_loopback_url "$src"; then
         warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${shown}"
-        fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
+        fetch_url "$src" "$out" loopback || die fetch_failed "failed to fetch ${shown}"
         return 0
       fi
       if [ "$role" = 'status key set' ]; then

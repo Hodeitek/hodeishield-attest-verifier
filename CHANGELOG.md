@@ -20,7 +20,11 @@ before it takes effect. Only the latest release is supported, as
   loopback, and a cleartext status key set was fetched with only a warning. Only
   `http://localhost`, `http://127.0.0.1` and `http://[::1]`, with an optional
   port, now count as loopback; the host is matched case-sensitively, so
-  `http://LOCALHOST` is not loopback and a status key set from it is refused. An
+  `http://LOCALHOST` is not loopback and a status key set from it is refused. A
+  `?` or `#` directly after the host or the port is no longer treated as
+  loopback either. A loopback fetch now ignores `~/.curlrc` and the proxy
+  settings (it went to the proxy, in cleartext, when one was set), and a `{a,b}`
+  or `[1-9]` in a URL is no longer expanded into several fetches. An
   attacker who can choose the URL could already serve their own keys over
   https, so this changes no verdict that `--anchor-file` does not already
   decide; use `--anchor-file` to bind the status key (Closes #70).
