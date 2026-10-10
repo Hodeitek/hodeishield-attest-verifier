@@ -36,7 +36,30 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh .github/scripts/fetch-release-assets.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh
+
+  # Semgrep's bash parser is stricter than bash: one construct it does not read
+  # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
+  # file, and a scan that parsed nothing reports no finding. This fails the
+  # build if the script is not parsed completely. Semgrep is pinned to an exact
+  # version, in a venv; nothing is sent to Semgrep (no login, no metrics).
+  semgrep-parse:
+    name: Semgrep parses the script
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install semgrep 1.163.0
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep-venv"
+          "$RUNNER_TEMP/semgrep-venv/bin/pip" install --quiet --disable-pip-version-check semgrep==1.163.0
+          echo "$RUNNER_TEMP/semgrep-venv/bin" >> "$GITHUB_PATH"
+      - name: semgrep version
+        run: semgrep --version
+      - name: semgrep --lang bash parses verify-attestation.sh
+        run: bash .github/scripts/semgrep-parses.sh scripts/attest/verify-attestation.sh
 
   tests:
     name: offline tests (valid + rejection)
