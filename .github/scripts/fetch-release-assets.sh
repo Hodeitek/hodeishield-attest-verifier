@@ -26,7 +26,7 @@ set -euo pipefail
 dir="${1:?usage: fetch-release-assets.sh DIR}"
 : "${TAG:?}" "${GITHUB_REPOSITORY:?}" "${RELEASE_IDENTITY:?}"
 
-mkdir -p "$dir"
+mkdir "$dir"
 cd "$dir"
 
 verify() {
@@ -66,7 +66,7 @@ args=()
 for name in "${names[@]}"; do
   args+=(--pattern "$name" --pattern "${name}.sigstore.json")
 done
-gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir . --clobber "${args[@]}"
+gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir . "${args[@]}"
 
 sha256sum -c SHA256SUMS
 for name in "${names[@]}"; do

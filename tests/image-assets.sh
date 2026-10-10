@@ -43,9 +43,21 @@ done
 printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh || fail "release.yml does not list verify-attestation.sh"
 ok "release.yml lists: ${files[*]}"
 
+# release.yml's two per-file loops (sign, verify as a reader) must cover every
+# listed file plus SHA256SUMS: a file without a bundle breaks the image job.
+want="$(printf '%s\n' "${files[@]}" SHA256SUMS | sort)"
+loops="$(grep -E '^[[:space:]]*for f in .*; do[[:space:]]*$' "$RELEASE" || true)"
+[ "$(printf '%s\n' "$loops" | grep -c .)" -eq 2 ] \
+  || fail "expected exactly two 'for f in ...; do' loops in release.yml"
+while IFS= read -r loop; do
+  got="$(printf '%s' "$loop" | sed -E 's/^[[:space:]]*for f in //; s/; do[[:space:]]*$//' | tr ' ' '\n' | sort)"
+  [ "$got" = "$want" ] || fail "a release.yml loop does not list exactly the SHA256SUMS files plus SHA256SUMS: $loop"
+done <<<"$loops"
+ok "both release.yml loops cover the SHA256SUMS files and SHA256SUMS"
+
 # ---- b. image.yml derives its list from SHA256SUMS -------------------------
-grep -qF 'bash .github/scripts/fetch-release-assets.sh' "$IMAGE" \
-  || fail "image.yml does not call .github/scripts/fetch-release-assets.sh"
+grep -qE '^[[:space:]]+bash \.github/scripts/fetch-release-assets\.sh dist$' "$IMAGE" \
+  || fail "image.yml does not run .github/scripts/fetch-release-assets.sh dist (a comment does not count)"
 for f in "${files[@]}"; do
   if [ "$f" != verify-attestation.sh ] && grep -qF "$f" "$IMAGE" "$FETCH"; then
     fail "$f is named in image.yml or the fetch script: the list must come from SHA256SUMS"
@@ -76,10 +88,16 @@ while [ $# -gt 0 ]; do
     *) echo "stub gh: unexpected argument $1" >&2; exit 9 ;;
   esac
 done
+matched=0
 for p in "${pats[@]}"; do
   echo "$p" >>"$STUB_LOG/downloads"
+  # As the real gh: a pattern that matches no asset is skipped, and only a
+  # download where nothing matched at all is an error.
+  [ -f "$STUB_FIXTURES/$p" ] || continue
   cp "$STUB_FIXTURES/$p" "$dir/$p"
+  matched=1
 done
+[ "$matched" -eq 1 ] || { echo "stub gh: no assets match the patterns" >&2; exit 1; }
 STUB
 # cosign: "cosign verify-blob --bundle B ... FILE" succeeds if B and FILE exist.
 cat >"$tmp/bin/cosign" <<'STUB'
@@ -114,6 +132,8 @@ run_case() {
     printf 'content of %s\n' "$f" >"$case_dir/fix/$f"
     : >"$case_dir/fix/$f.sigstore.json"
   done
+  # MISSING_ASSET: a fixture (a bundle) that the release does not have.
+  [ -z "${MISSING_ASSET:-}" ] || rm -f "$case_dir/fix/$MISSING_ASSET"
   rc=0
   out="$(cd "$case_dir" && env PATH="$tmp/bin:$PATH" STUB_FIXTURES="$case_dir/fix" STUB_LOG="$case_dir/log" \
     EXPECT_IDENTITY=https://example.test/id COSIGN_REJECT="${COSIGN_REJECT:-}" \
@@ -156,6 +176,12 @@ ok "a SHA256SUMS that fails cosign stops the job before any other download"
 COSIGN_REJECT="${files[${#files[@]}-1]}" run_case badbundle "$good"
 [ "$rc" -ne 0 ] || fail "a rejected bundle was accepted"
 ok "a listed file whose bundle fails cosign is refused"
+
+# A listed file whose bundle is not in the release: gh skips the pattern, so
+# the script itself must notice (cosign finds no bundle).
+MISSING_ASSET="${files[${#files[@]}-1]}.sigstore.json" run_case nobundle "$good"
+[ "$rc" -ne 0 ] || fail "a listed file with no bundle in the release was accepted"
+ok "a listed file whose bundle is missing from the release is refused"
 
 refuse() { # label sums
   run_case refuse "$2"
