@@ -132,6 +132,16 @@ signed or published.
   and any byte outside printable ASCII as `\xHH`, like the values of a document
   (Closes #71).
 
+### Added
+- The live check also runs the signed image: for the latest release (from
+  v1.4.1, the first with an image) it takes the digest of
+  `ghcr.io/hodeitek/hodeishield-attest-verifier:TAG`, verifies the signature
+  and the SBOM attestation as README.md tells a reader to, and runs the
+  production example in the image, by digest only, with the same verdicts as
+  the script. It skips, with a warning, for a release without an image and
+  during an outage; an image that is missing or private for a release that has
+  one fails (Refs #22).
+
 ### Changed
 - The script is parsed by more bash parsers: the `10#` arithmetic (a leading
   zero is never octal) is written without it, and two other constructs that
