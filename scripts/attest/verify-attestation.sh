@@ -355,6 +355,15 @@ is_digits() {
   local shape="^[0-9]{1,$1}\$"
   [[ "$2" =~ $shape ]]
 }
+# Sets REPLY to the digit string $1 without its leading zeros ("0" if it is all
+# zeros), so that arithmetic reads it as decimal and a leading zero is not
+# octal. $1 must already be digits only (is_digits, or a regex that allows
+# nothing else): there is no check here. No subshell.
+dec() {
+  local v="$1"
+  v=${v#"${v%%[!0]*}"}
+  REPLY=${v:-0}
+}
 
 # --- --json ------------------------------------------------------------------
 # With --json anywhere in the arguments (found here, before they are parsed, so
@@ -652,21 +661,22 @@ while [ $# -gt 0 ]; do
     --expect-nonce)
       [ $# -ge 2 ] || arg_die "error: --expect-nonce needs a value (use '' for \"no challenge\")"
       EXPECT_NONCE_SET=1; EXPECT_NONCE="$2"; shift 2 ;;
-    # Numbers are checked before any arithmetic, and read as decimal (10#), so
+    # Numbers are checked before any arithmetic, and read as decimal (dec), so
     # that a leading zero is not octal.
     --max-age-seconds)
       is_digits 9 "$2" || arg_die 'error: --max-age-seconds must be a whole number of seconds (digits only, at most 9)'
-      MAX_AGE_SECONDS=$(( 10#$2 )); shift 2 ;;
+      dec "$2"; MAX_AGE_SECONDS=$(( REPLY )); shift 2 ;;
     --max-age-days)
       is_digits 9 "$2" || arg_die 'error: --max-age-days must be a whole number of days (digits only, at most 9)'
-      MAX_AGE_SECONDS=$(( 10#$2 * 86400 )); shift 2 ;;
+      dec "$2"; MAX_AGE_SECONDS=$(( REPLY * 86400 )); shift 2 ;;
     --now)
       is_digits 12 "$2" || arg_die 'error: --now must be a Unix time in seconds (digits only, at most 12)'
       # Every time is compared as RFC 3339, whose year has four digits: a later
       # "now" could not be written as one, and the run would blame the document.
-      [ $(( 10#$2 )) -le "$NOW_MAX" ] \
+      dec "$2"
+      [ $(( REPLY )) -le "$NOW_MAX" ] \
         || arg_die "error: --now is out of range: at most $NOW_MAX (9999-12-31T23:59:59Z)"
-      NOW_OVERRIDE=$(( 10#$2 )); shift 2 ;;
+      NOW_OVERRIDE=$(( REPLY )); shift 2 ;;
     --raw)          SHOW_RAW=1; shift ;;
     # Repeatable, so that two kids can be pinned through a key rotation overlap.
     # A kid is BASE64URL of 16 bytes: 21 characters of the alphabet, then one of
@@ -693,7 +703,7 @@ while [ $# -gt 0 ]; do
     --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
     --min-seq)              MIN_SEQ="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2
       is_digits 18 "$MIN_SEQ" || arg_die 'error: --min-seq must be a non-negative integer'
-      MIN_SEQ=$(( 10#$MIN_SEQ )) ;;
+      dec "$MIN_SEQ"; MIN_SEQ=$(( REPLY )) ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
     --json)         shift ;;
     --version)      plain_output; printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
@@ -1589,8 +1599,9 @@ anchor_cosign_new_enough() {
   pre="${BASH_REMATCH[4]}"
   IFS=. read -r -a want <<< "$ANCHOR_MIN_COSIGN"
   for i in 0 1 2; do
-    if [ $(( 10#${have[i]} )) -gt "${want[i]}" ]; then return 0; fi
-    if [ $(( 10#${have[i]} )) -lt "${want[i]}" ]; then return 1; fi
+    dec "${have[i]}"
+    if [ $(( REPLY )) -gt "${want[i]}" ]; then return 0; fi
+    if [ $(( REPLY )) -lt "${want[i]}" ]; then return 1; fi
   done
   [ -z "$pre" ]
 }
@@ -1805,13 +1816,15 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign-identity.out")"
   IFS=. read -r -a anchor_tv <<< "${anchor_tag#v}"
   IFS=. read -r -a anchor_vv <<< "$VERIFIER_VERSION"
   for i in 0 1 2; do
-    if [ $(( 10#${anchor_tv[i]} )) -lt $(( 10#${anchor_vv[i]} )) ]; then
+    dec "${anchor_tv[i]}"; anchor_tn=$REPLY
+    dec "${anchor_vv[i]}"; anchor_vn=$REPLY
+    if [ $(( anchor_tn )) -lt $(( anchor_vn )) ]; then
       die anchor_statement_older "anchor could not be checked: statement from ${anchor_tag}, older than this verifier v${VERIFIER_VERSION}.
        A statement from an older release may not list the current key, and accepting it would let an old, genuinely
        signed statement stand in for the current one. Download the statement from the latest release.
        This is not evidence against the attestation."
     fi
-    if [ $(( 10#${anchor_tv[i]} )) -gt $(( 10#${anchor_vv[i]} )) ]; then break; fi
+    if [ $(( anchor_tn )) -gt $(( anchor_vn )) ]; then break; fi
   done
   # The statement, strictly: UTF-8, no BOM, one value, no duplicate member; then
   # the schema, the documented members only, the grammar of retired_at.

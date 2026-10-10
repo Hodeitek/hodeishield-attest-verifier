@@ -1236,6 +1236,15 @@ for v in v2.4.0 v3.1.2 v3.0.9 v2.99.99 v3.1.3-rc1 '' devel v3.1 v3.x.1 v03.1.3x;
   COSIGN_STUB_VERSION="$v" expect 2 'anchor could not be checked: --anchor-file needs cosign 3.1.3 or later' "cosign '$v' is too old or unreadable: could not check (2)" -- \
     --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
 done
+# Zero-padded components with an 8 or a 9 are decimal, not octal.
+for v in v3.08.09 v03.01.04 v3.1.03; do
+  COSIGN_STUB_VERSION="$v" expect 0 "$ANCHOR_SIGNED" "cosign $v is new enough (components are decimal)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+done
+for v in v03.00.09 v3.01.02 v02.08.09; do
+  COSIGN_STUB_VERSION="$v" expect 2 'anchor could not be checked: --anchor-file needs cosign 3.1.3 or later' "cosign $v is too old (components are decimal): could not check (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+done
 COSIGN_STUB_VERSION='v2.4.0' expect 2 "this one reports 'v2.4.0'" 'the old version is named in the message' -- \
   --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
 lacks 'VERIFIED' 'no verdict on the attestation when cosign is too old'
@@ -1810,6 +1819,25 @@ expect 0 'within the 600s freshness window' '--max-age-seconds 0600 is 600 secon
   --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0600
 expect 1 'EXPIRED' '--max-age-days 0 rejects a document 300 s old (genuine but too old)' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 0
+# Zero-padded numbers with an 8 or a 9 in them are not octal anywhere they are read.
+expect 0 'within the 900s freshness window' '--max-age-seconds 0900 is 900 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0900
+expect 1 'beyond --max-age-seconds 8' '--max-age-seconds 08 is 8 seconds, not an octal error' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 08
+expect 1 'beyond --max-age-seconds 9' '--max-age-seconds 0009 is 9 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0009
+expect 1 'beyond --max-age-seconds 0' '--max-age-seconds 000 is 0 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 000
+expect 0 'within the 691200s freshness window' '--max-age-days 08 is 8 days' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 08
+expect 0 'VERIFIED — this document was signed' '--now with two leading zeros is read as decimal' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now "00$NOW"
+expect 3 'rolled_back' '--min-seq 08 is 8: a list with seq 7 is rolled back' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --min-seq 08
+expect 0 'GOOD — not revoked' '--min-seq 007 is 7: a list with seq 7 is accepted' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --min-seq 007
+expect 0 'GOOD — not revoked' '--min-seq 00 is 0' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --min-seq 00
 jexpect 2 'a status-list option without --status-list is a usage error' \
   'o["reason"] == "usage" and o["message"] == "error: --status requires --status-list" and o["checks"] == []' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-key.json"
