@@ -8,6 +8,12 @@ name: Live check
 # waiting for the next commit here. An outage is a warning (tests/live.sh exits
 # 0); a document that does not verify, a revoked or unknown status, or a 404 on
 # the example fail.
+#
+# A second job, live-image, verifies and runs the latest release's signed image
+# the same way (tests/live-image.sh). It skips, with a warning, while the latest
+# release predates images (before v1.4.1) and during an outage; a missing or
+# private image for a release that has one, a signature that does not verify
+# and a wrong verdict fail.
 on:
   push:
     branches: [dev, main]
@@ -55,3 +61,24 @@ jobs:
       # hs_retired_at must equal its retired_at. Read-only.
       - name: tests/keys-drift.sh
         run: bash tests/keys-drift.sh
+
+  # On the runner itself, not in the container above: it needs docker. One job,
+  # no matrix. The image package must be public: the check pulls anonymously,
+  # as the README tells a reader to, and does not log in anywhere.
+  live-image:
+    name: live check (signed image)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+      # GITHUB_TOKEN (read-only) is for the GitHub API and gh attestation verify.
+      - name: tests/live-image.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash tests/live-image.sh
