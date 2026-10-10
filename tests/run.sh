@@ -34,7 +34,8 @@ VERIFIER="${VERIFIER:-$ROOT/scripts/attest/verify-attestation.sh}"
 MINT=(python3 -I "$ROOT/tests/lib/mint.py")
 
 T="$(mktemp -d)"; chmod 700 "$T"
-trap 'rm -rf -- "$T"' EXIT
+SRV_PIDS=()
+trap 'kill "${SRV_PIDS[@]}" 2>/dev/null; rm -rf -- "$T"' EXIT
 
 ISS='https://issuer.test'
 SLUG='fixture-org'
@@ -687,6 +688,77 @@ c["posture"] = {"x": {"generatedAt": "2026-01-01T00:12:00.000Z"}, **c["posture"]
 expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subject withdrawal' -- \
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --attestation "$T/decoy-revoked.json" "${COMMON[@]}"
+
+# Cleartext URLs (#70). Only http://localhost, http://127.0.0.1 and http://[::1],
+# each with an optional :PORT and a path, are loopback; the host is matched
+# case-sensitively. Anything else under http:// is cleartext to somewhere else:
+# refused for the status key set, a warning for the status list. The listeners
+# are on 127.0.0.0/8 only (python3 -I -m http.server): 127.0.0.2 for the URLs
+# that must NOT be taken for loopback (it would have answered the old prefix
+# match), 127.0.0.1 for the ones that must. Nothing leaves this machine.
+echo '# cleartext URLs'
+srv_start() {   # NAME ADDRESS DIR — sets SRV_PORT_<NAME>; the log is $T/<NAME>.log
+  local name="$1" addr="$2" dir="$3" port='' i=0
+  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  python3 -I -m http.server "$port" --bind "$addr" --directory "$dir" > "$T/$name.log" 2>&1 &
+  SRV_PIDS+=("$!")
+  for (( i = 0; i < 50; i++ )); do
+    if (exec 3<> "/dev/tcp/$addr/$port") 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  printf -v "SRV_PORT_$name" '%s' "$port"
+}
+mkdir "$T/srv-other" "$T/srv-local"
+cp "$ROOT/tests/vectors/v1/keys/test-only-status-jwks.json" "$T/srv-other/k.json"
+cp "$T/list-empty.json" "$T/srv-other/list.json"
+cp "$T/status-keys.json" "$T/srv-local/k.json"
+srv_start other 127.0.0.2 "$T/srv-other"
+srv_start local 127.0.0.1 "$T/srv-local"
+# shellcheck disable=SC2154 # srv_start sets SRV_PORT_<name> with printf -v
+PO="$SRV_PORT_other"
+# shellcheck disable=SC2154
+PL="$SRV_PORT_local"
+CLR=(--status-list --status "$T/list-empty.json" --attestation "$T/att.json" "${COMMON[@]}")
+REFUSED='refusing to fetch the STATUS KEY SET over cleartext HTTP: '
+# clr NAME URL — a status key set from URL is refused (2), and is not called loopback.
+clr() {
+  expect 2 "${REFUSED}$2" "cleartext, $1: a status key set is refused (2)" -- "${CLR[@]}" --status-keys "$2"
+  lacks 'from loopback' "cleartext, $1: not taken for loopback"
+}
+clr 'userinfo that looks like a port' "http://localhost:x@127.0.0.2:$PO/k.json"
+if ! grep -q 'GET' "$T/other.log"; then
+  printf 'ok - cleartext, userinfo that looks like a port: the listener got no request\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cleartext, userinfo that looks like a port: the listener got a request\n'; sed 's/^/    # /' "$T/other.log"; FAILED=$((FAILED + 1))
+fi
+clr 'a fragment before an @' "http://localhost#@127.0.0.2:$PO/"
+clr 'a query before an @' "http://localhost?@127.0.0.2:$PO/"
+clr 'a backslash before an @' "http://localhost\\@127.0.0.2:$PO/"
+clr '[::1] as userinfo' "http://[::1]@127.0.0.2:$PO/"
+clr 'upper-case host' "http://LOCALHOST:$PL/"
+clr 'an empty port' 'http://localhost:/'
+clr 'a six-digit port' 'http://localhost:123456/'
+clr 'a port above 65535' 'http://localhost:65536/'
+clr 'a longer host name' 'http://localhost.example/'
+clr 'a name that starts with 127.0.0.1' 'http://127.0.0.1.nip.io/'
+clr 'another 127/8 address' "http://127.0.0.2:$PO/k.json"
+if ! grep -q 'GET' "$T/other.log"; then
+  printf 'ok - cleartext: no refused URL reached a listener\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cleartext: a refused URL reached a listener\n'; sed 's/^/    # /' "$T/other.log"; FAILED=$((FAILED + 1))
+fi
+# Loopback: fetched, with the loopback warning, and the run goes on to GOOD.
+expect 0 'GOOD — not revoked' 'cleartext, http://localhost:PORT/k.json is loopback: the key set is fetched (0)' -- \
+  "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
+lacks 'refusing to fetch' 'cleartext, localhost is not refused'
+expect 0 'over cleartext HTTP from loopback: http://localhost:' 'cleartext, localhost: the loopback warning is shown' -- \
+  "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
+expect 0 "over cleartext HTTP from loopback: http://127.0.0.1:$PL/k.json" 'cleartext, http://127.0.0.1:PORT/k.json is loopback: fetched with the loopback warning (0)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+# The status list keeps its warning: cleartext to another address is fetched, as before.
+expect 0 "over cleartext HTTP: http://127.0.0.2:$PO/list.json" 'cleartext, a status list from another address: the cleartext warning, not the loopback one (0)' -- \
+  --status-list --status "http://127.0.0.2:$PO/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'from loopback' 'cleartext, a status list from 127.0.0.2 is not loopback'
 
 # Attested content (#14). What a document SAYS (its bands and frameworks) is
 # printed only when the run ends VERIFIED/GOOD. A document that does not verify

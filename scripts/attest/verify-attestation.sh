@@ -1034,6 +1034,25 @@ rfc3339_of() {
   python3 -I -X utf8 -c 'import sys, time; sys.stdout.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' "$1" 2>/dev/null || true
 }
 
+# Whether the URL $1 is a cleartext URL to this machine: http://, then exactly
+# localhost, 127.0.0.1 or [::1], then an optional :PORT (1 to 5 digits, at most
+# 65535) and then either nothing or a path. Anything else after the host, such as
+# "@", "#", "?" or "\" (where curl and the reader of the URL may disagree about
+# where the host ends), or a longer host name (localhost.example, 127.0.0.1.nip.io),
+# is not loopback. Matched in the C locale, case-sensitively, with an explicit
+# digit class: the scheme and host of a URL are case-insensitive (RFC 3986), but
+# http://LOCALHOST is not accepted here, so the safe answer is "not loopback"
+# (a status key set from it is refused). dec reads the port as decimal.
+is_loopback_url() {
+  local LC_ALL=C re='^http://(localhost|127\.0\.0\.1|\[::1\])(:([0123456789]{1,5}))?(/.*)?$'
+  [[ "$1" =~ $re ]] || return 1
+  if [ -n "${BASH_REMATCH[3]}" ]; then
+    dec "${BASH_REMATCH[3]}"
+    [ $(( REPLY )) -le 65535 ] || return 1
+  fi
+  return 0
+}
+
 # Fetch (http(s):// URL, via curl) or read (anything else, as a file path) SRC
 # into OUT, labelling it ROLE for the messages below. Used by --status-list for
 # --status/--status-keys, which accept either the raw `curl -o` output of the
@@ -1075,13 +1094,12 @@ fetch_or_read() {
     https://*)
       curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
       ;;
-    http://localhost|http://localhost/*|http://localhost:*|\
-    http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|\
-    "http://[::1]"|"http://[::1]/"*|"http://[::1]:"*)
-      warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${src}"
-      curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
-      ;;
     http://*)
+      if is_loopback_url "$src"; then
+        warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${src}"
+        curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
+        return 0
+      fi
       if [ "$role" = 'status key set' ]; then
         die status_keys_cleartext_refused "refusing to fetch the STATUS KEY SET over cleartext HTTP: ${src}
 
