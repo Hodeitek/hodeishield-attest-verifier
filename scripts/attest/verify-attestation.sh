@@ -205,7 +205,7 @@ set -euo pipefail
 # The version this script is released as. --anchor-file refuses a key statement
 # from an older release than this (anti-rollback); tests/version-consistency.sh
 # keeps it in step with CHANGELOG.md and, on a release, with the tag.
-VERIFIER_VERSION="1.4.0"
+VERIFIER_VERSION="1.4.1"
 
 JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
@@ -354,6 +354,15 @@ is_digits() {
   local LC_ALL=C
   local shape="^[0-9]{1,$1}\$"
   [[ "$2" =~ $shape ]]
+}
+# Sets REPLY to the digit string $1 without its leading zeros ("0" if it is all
+# zeros), so that arithmetic reads it as decimal and a leading zero is not
+# octal. $1 must already be digits only (is_digits, or a regex that allows
+# nothing else): there is no check here. No subshell.
+dec() {
+  local v="$1"
+  v=${v#"${v%%[!0]*}"}
+  REPLY=${v:-0}
 }
 
 # --- --json ------------------------------------------------------------------
@@ -528,7 +537,7 @@ sys.stdout.write(json.dumps(obj, ensure_ascii=True, sort_keys=False) + "\n")
 # no attested content, no unverified values, no anchor. A byte outside printable
 # ASCII becomes \u00XX (so a non-ASCII message is not exact, but it is safe).
 json_str() {
-  local LC_ALL=C s="$1" out='' c='' i=0 n=${#1} bs=$'\\'
+  local LC_ALL=C s="$1" out='' c='' i=0 n=${#1} bs="\\"
   for (( i = 0; i < n; i++ )); do
     c="${s:i:1}"
     case "$c" in
@@ -652,21 +661,22 @@ while [ $# -gt 0 ]; do
     --expect-nonce)
       [ $# -ge 2 ] || arg_die "error: --expect-nonce needs a value (use '' for \"no challenge\")"
       EXPECT_NONCE_SET=1; EXPECT_NONCE="$2"; shift 2 ;;
-    # Numbers are checked before any arithmetic, and read as decimal (10#), so
+    # Numbers are checked before any arithmetic, and read as decimal (dec), so
     # that a leading zero is not octal.
     --max-age-seconds)
       is_digits 9 "$2" || arg_die 'error: --max-age-seconds must be a whole number of seconds (digits only, at most 9)'
-      MAX_AGE_SECONDS=$(( 10#$2 )); shift 2 ;;
+      dec "$2"; MAX_AGE_SECONDS=$(( REPLY )); shift 2 ;;
     --max-age-days)
       is_digits 9 "$2" || arg_die 'error: --max-age-days must be a whole number of days (digits only, at most 9)'
-      MAX_AGE_SECONDS=$(( 10#$2 * 86400 )); shift 2 ;;
+      dec "$2"; MAX_AGE_SECONDS=$(( REPLY * 86400 )); shift 2 ;;
     --now)
       is_digits 12 "$2" || arg_die 'error: --now must be a Unix time in seconds (digits only, at most 12)'
       # Every time is compared as RFC 3339, whose year has four digits: a later
       # "now" could not be written as one, and the run would blame the document.
-      [ $(( 10#$2 )) -le "$NOW_MAX" ] \
+      dec "$2"
+      [ $(( REPLY )) -le "$NOW_MAX" ] \
         || arg_die "error: --now is out of range: at most $NOW_MAX (9999-12-31T23:59:59Z)"
-      NOW_OVERRIDE=$(( 10#$2 )); shift 2 ;;
+      NOW_OVERRIDE=$(( REPLY )); shift 2 ;;
     --raw)          SHOW_RAW=1; shift ;;
     # Repeatable, so that two kids can be pinned through a key rotation overlap.
     # A kid is BASE64URL of 16 bytes: 21 characters of the alphabet, then one of
@@ -693,12 +703,12 @@ while [ $# -gt 0 ]; do
     --check-generated-at)   CHECK_GENERATED_AT="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2 ;;
     --min-seq)              MIN_SEQ="${2:?}"; STATUS_OPT="${STATUS_OPT:-$1}"; shift 2
       is_digits 18 "$MIN_SEQ" || arg_die 'error: --min-seq must be a non-negative integer'
-      MIN_SEQ=$(( 10#$MIN_SEQ )) ;;
+      dec "$MIN_SEQ"; MIN_SEQ=$(( REPLY )) ;;
     --expect-issuer)        EXPECT_ISSUER="${2:?}"; shift 2 ;;
     --json)         shift ;;
     --version)      plain_output; printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
     -h|--help)      plain_output; usage; exit 0 ;;
-    *) arg_die "unknown argument: $1" ;;
+    *) arg_die "unknown argument: $(esc "$1")" ;;
   esac
 done
 # An option of the status-list mode without --status-list would be read by
@@ -1024,6 +1034,43 @@ rfc3339_of() {
   python3 -I -X utf8 -c 'import sys, time; sys.stdout.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' "$1" 2>/dev/null || true
 }
 
+# Whether the URL $1 is a cleartext URL to this machine: http://, then exactly
+# localhost, 127.0.0.1 or [::1], then an optional :PORT (1 to 5 digits, at most
+# 65535) and then either nothing or a path. Anything else after the host, such as
+# "@", "#", "?" or "\" (where curl and the reader of the URL may disagree about
+# where the host ends), or a longer host name (localhost.example, 127.0.0.1.nip.io),
+# is not loopback. Matched in the C locale, case-sensitively, with an explicit
+# digit class: the scheme and host of a URL are case-insensitive (RFC 3986), but
+# http://LOCALHOST is not accepted here, so the safe answer is "not loopback"
+# (a status key set from it is refused). dec reads the port as decimal.
+is_loopback_url() {
+  local LC_ALL=C re='^http://(localhost|127\.0\.0\.1|\[::1\])(:([0123456789]{1,5}))?(/.*)?$'
+  [[ "$1" =~ $re ]] || return 1
+  if [ -n "${BASH_REMATCH[3]}" ]; then
+    dec "${BASH_REMATCH[3]}"
+    [ $(( REPLY )) -le 65535 ] || return 1
+  fi
+  return 0
+}
+
+# fetch_url URL OUT [loopback] — curl URL into OUT; what curl says about a failure
+# goes to stderr through esc (it quotes the URL, and the host or the part of the
+# URL it could not read, as given on the command line). --globoff: a {a,b} or
+# [1-9] in the URL is part of the URL, not several fetches into one file. For a
+# loopback URL, curl ignores ~/.curlrc (-q, which must be its first argument) and
+# every proxy setting (--noproxy '*'): through a proxy, "loopback" would leave
+# this machine in cleartext. Other URLs keep the user's curl settings, since https
+# may need a proxy.
+fetch_url() {
+  local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=()
+  if [ "${3:-}" = loopback ]; then curl_q=(-q); curl_np=(--noproxy '*'); fi
+  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize 5000000 -o "$2" "$1" 2> "$errf" || rc=$?
+  if [ "$rc" -ne 0 ] && [ -s "$errf" ]; then
+    printf '%s\n' "$(esc "$(cat "$errf")")" >&2
+  fi
+  return "$rc"
+}
+
 # Fetch (http(s):// URL, via curl) or read (anything else, as a file path) SRC
 # into OUT, labelling it ROLE for the messages below. Used by --status-list for
 # --status/--status-keys, which accept either the raw `curl -o` output of the
@@ -1060,20 +1107,20 @@ rfc3339_of() {
 # --max-time 15, so a hostile endpoint can stream into the (0700, mktemp -d)
 # work directory for up to 15 seconds.
 fetch_or_read() {
-  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}"
+  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}" shown=''
+  shown="$(esc "$src")"
   case "$src" in
     https://*)
-      curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
-      ;;
-    http://localhost|http://localhost/*|http://localhost:*|\
-    http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|\
-    "http://[::1]"|"http://[::1]/"*|"http://[::1]:"*)
-      warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${src}"
-      curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
+      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
       ;;
     http://*)
+      if is_loopback_url "$src"; then
+        warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${shown}"
+        fetch_url "$src" "$out" loopback || die fetch_failed "failed to fetch ${shown}"
+        return 0
+      fi
       if [ "$role" = 'status key set' ]; then
-        die status_keys_cleartext_refused "refusing to fetch the STATUS KEY SET over cleartext HTTP: ${src}
+        die status_keys_cleartext_refused "refusing to fetch the STATUS KEY SET over cleartext HTTP: ${shown}
 
        The key set is the trust anchor for everything section 8 checks. Fetched
        over http://, anyone on the path can replace it with keys they hold and
@@ -1083,13 +1130,13 @@ fetch_or_read() {
 
        Use https://, or fetch it yourself and pass the file, which makes the
        decision yours rather than this script's:
-         curl -fsS ${src} -o status-keys.json
+         curl -fsS ${shown} -o status-keys.json
          verify-attestation.sh --status-list --status-keys status-keys.json ..."
       fi
-      warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${src}"
+      warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${shown}"
       warn_more "the list is signed, so tampering shows up as a failed signature (=> unknown),"
       warn_more "but use https:// — a downgrade you did not notice is not a threat model."
-      curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
+      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
       ;;
     *)
       [ -r "$src" ] || die file_unreadable "cannot read $(esc "$name")"
@@ -1589,8 +1636,9 @@ anchor_cosign_new_enough() {
   pre="${BASH_REMATCH[4]}"
   IFS=. read -r -a want <<< "$ANCHOR_MIN_COSIGN"
   for i in 0 1 2; do
-    if [ $(( 10#${have[i]} )) -gt "${want[i]}" ]; then return 0; fi
-    if [ $(( 10#${have[i]} )) -lt "${want[i]}" ]; then return 1; fi
+    dec "${have[i]}"
+    if [ $(( REPLY )) -gt "${want[i]}" ]; then return 0; fi
+    if [ $(( REPLY )) -lt "${want[i]}" ]; then return 1; fi
   done
   [ -z "$pre" ]
 }
@@ -1805,13 +1853,15 @@ $(anchor_diagnostics "$WORKDIR/anchor/cosign-identity.out")"
   IFS=. read -r -a anchor_tv <<< "${anchor_tag#v}"
   IFS=. read -r -a anchor_vv <<< "$VERIFIER_VERSION"
   for i in 0 1 2; do
-    if [ $(( 10#${anchor_tv[i]} )) -lt $(( 10#${anchor_vv[i]} )) ]; then
+    dec "${anchor_tv[i]}"; anchor_tn=$REPLY
+    dec "${anchor_vv[i]}"; anchor_vn=$REPLY
+    if [ $(( anchor_tn )) -lt $(( anchor_vn )) ]; then
       die anchor_statement_older "anchor could not be checked: statement from ${anchor_tag}, older than this verifier v${VERIFIER_VERSION}.
        A statement from an older release may not list the current key, and accepting it would let an old, genuinely
        signed statement stand in for the current one. Download the statement from the latest release.
        This is not evidence against the attestation."
     fi
-    if [ $(( 10#${anchor_tv[i]} )) -gt $(( 10#${anchor_vv[i]} )) ]; then break; fi
+    if [ $(( anchor_tn )) -gt $(( anchor_vn )) ]; then break; fi
   done
   # The statement, strictly: UTF-8, no BOM, one value, no duplicate member; then
   # the schema, the documented members only, the grammar of retired_at.
@@ -2347,7 +2397,7 @@ if [ -n "$POSTURE_FILE" ]; then
     if [ "$SLUG" = "$EXPECT_SLUG" ]; then
       ok slug_match "posture is for slug '$(esc "${SLUG}")', as expected"
     else
-      bad slug_mismatch "posture is for slug '$(esc "${SLUG}")', not the expected '${EXPECT_SLUG}' —
+      bad slug_mismatch "posture is for slug '$(esc "${SLUG}")', not the expected '$(esc "${EXPECT_SLUG}")' —
           this attestation belongs to a different organisation"
     fi
   fi
@@ -2432,7 +2482,7 @@ if [ -n "$CLAIMS_FILE" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
       ok issuer_match "iss (E2) is '$(esc "${CLAIMS_ISS}")', as expected"
     else
-      bad issuer_mismatch "issuer_mismatch — iss is '$(esc "${CLAIMS_ISS}")', not the expected '${EXPECT_ISSUER}'"
+      bad issuer_mismatch "issuer_mismatch — iss is '$(esc "${CLAIMS_ISS}")', not the expected '$(esc "${EXPECT_ISSUER}")'"
     fi
   else
     warn issuer_unpinned "no --expect-issuer: iss is '$(esc "${CLAIMS_ISS}")' and nothing pinned it. The key set you"
@@ -2451,7 +2501,7 @@ if [ -n "$CLAIMS_FILE" ]; then
     elif [ "$CLAIMS_NONCE_PRESENT" = '1' ] && [ "$CLAIMS_NONCE" = "$EXPECT_NONCE" ]; then
       ok nonce_match "nonce (E5) echoes your challenge verbatim — this document was minted for you, now"
     else
-      bad nonce_mismatch "nonce_mismatch — you challenged with '${EXPECT_NONCE}', the document carries \
+      bad nonce_mismatch "nonce_mismatch — you challenged with '$(esc "${EXPECT_NONCE}")', the document carries \
 '$(esc "${CLAIMS_NONCE:-null}")'. A replayed or substituted document, however well it verifies."
     fi
   elif [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
@@ -2765,7 +2815,7 @@ if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$EXPECT_ISSUER" ]; then
   if [ "$LIST_ISS" = "$EXPECT_ISSUER" ]; then
     ok status_issuer_match "iss is '$(esc "${LIST_ISS}")', as expected"
   else
-    stat_bad status_unknown_issuer_mismatch "issuer_mismatch — iss is '$(esc "${LIST_ISS}")', expected '${EXPECT_ISSUER}'"
+    stat_bad status_unknown_issuer_mismatch "issuer_mismatch — iss is '$(esc "${LIST_ISS}")', expected '$(esc "${EXPECT_ISSUER}")'"
   fi
 fi
 
@@ -2875,7 +2925,10 @@ printf '\n%s[9] Revocation check%s\n' "$BOLD" "$RESET"
 CHECK_KIDS=()
 for k in "${DERIVED_KID:-}" "${KID:-}" "$CHECK_KID"; do
   [ -n "$k" ] || continue
-  case " ${CHECK_KIDS[*]-} " in *" $k "*) ;; *) CHECK_KIDS+=("$k") ;; esac
+  case " ${CHECK_KIDS[*]-} " in
+    *" $k "*) ;;
+    *) CHECK_KIDS+=("$k") ;;
+  esac
 done
 EFFECTIVE_KID="${CHECK_KIDS[*]-}"
 

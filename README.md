@@ -283,9 +283,18 @@ failure reasons, not attested content:
 - the visibility `gated`, in a redaction failure message;
 - the words "nothing is attested", in the `PASS` line for a null `overallBand`.
 
-Every value taken from a document, key set or status list is printed with
+Every value taken from a document, key set or status list, and every value
+given on the command line that a message prints back (`--expect-slug`,
+`--expect-issuer`, `--expect-nonce`, the URLs of `--status` and `--status-keys`,
+an unknown argument), and what curl says about a failed fetch, is printed with
 control characters, and any byte outside printable ASCII, as a visible `\xHH`
 escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
+
+The "Attested content" block is the one place that shows text another way,
+because it is only printed for a document that verified: a character that is not
+printable is shown as `?` (not as `\xHH`), and any other text, such as a label
+with a non-ASCII character, is printed as UTF-8, whatever the terminal encoding.
+The check lines and messages above never do that.
 
 ## Machine-readable output
 

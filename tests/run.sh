@@ -34,7 +34,8 @@ VERIFIER="${VERIFIER:-$ROOT/scripts/attest/verify-attestation.sh}"
 MINT=(python3 -I "$ROOT/tests/lib/mint.py")
 
 T="$(mktemp -d)"; chmod 700 "$T"
-trap 'rm -rf -- "$T"' EXIT
+SRV_PIDS=()
+trap 'kill "${SRV_PIDS[@]}" 2>/dev/null; rm -rf -- "$T"' EXIT
 
 ISS='https://issuer.test'
 SLUG='fixture-org'
@@ -688,6 +689,98 @@ expect 1 'unsigned_member' 'an unsigned decoy generatedAt does not dodge a subje
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-subj-after.json" \
   --attestation "$T/decoy-revoked.json" "${COMMON[@]}"
 
+# Cleartext URLs (#70). Only http://localhost, http://127.0.0.1 and http://[::1],
+# each with an optional :PORT and a path, are loopback; the host is matched
+# case-sensitively. Anything else under http:// is cleartext to somewhere else:
+# refused for the status key set, a warning for the status list. The listeners
+# are on 127.0.0.0/8 only (python3 -I -m http.server): 127.0.0.2 for the URLs
+# that must NOT be taken for loopback, 127.0.0.1 for the ones that must. Of the
+# refusal cases, only the userinfo, empty-port, six-digit-port and 65536 ones
+# reproduce the old prefix match; the others guard the new regex. Nothing leaves
+# this machine.
+echo '# cleartext URLs'
+srv_start() {   # NAME ADDRESS DIR — sets SRV_PORT_<NAME>; the log is $T/<NAME>.log
+  local name="$1" addr="$2" dir="$3" port='' i=0
+  port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  python3 -I -m http.server "$port" --bind "$addr" --directory "$dir" > "$T/$name.log" 2>&1 &
+  SRV_PIDS+=("$!")
+  for (( i = 0; i < 50; i++ )); do
+    if (exec 3<> "/dev/tcp/$addr/$port") 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  printf -v "SRV_PORT_$name" '%s' "$port"
+}
+mkdir "$T/srv-other" "$T/srv-local"
+cp "$ROOT/tests/vectors/v1/keys/test-only-status-jwks.json" "$T/srv-other/k.json"
+cp "$T/list-empty.json" "$T/srv-other/list.json"
+cp "$T/status-keys.json" "$T/srv-local/k.json"
+srv_start other 127.0.0.2 "$T/srv-other"
+srv_start local 127.0.0.1 "$T/srv-local"
+# shellcheck disable=SC2154 # srv_start sets SRV_PORT_<name> with printf -v
+PO="$SRV_PORT_other"
+# shellcheck disable=SC2154
+PL="$SRV_PORT_local"
+CLR=(--status-list --status "$T/list-empty.json" --attestation "$T/att.json" "${COMMON[@]}")
+REFUSED='refusing to fetch the STATUS KEY SET over cleartext HTTP: '
+# clr NAME URL — a status key set from URL is refused (2), and is not called loopback.
+clr() {
+  expect 2 "${REFUSED}$2" "cleartext, $1: a status key set is refused (2)" -- "${CLR[@]}" --status-keys "$2"
+  lacks 'from loopback' "cleartext, $1: not taken for loopback"
+}
+clr 'userinfo that looks like a port' "http://localhost:x@127.0.0.2:$PO/k.json"
+if ! grep -q 'GET' "$T/other.log"; then
+  printf 'ok - cleartext, userinfo that looks like a port: the listener got no request\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cleartext, userinfo that looks like a port: the listener got a request\n'; sed 's/^/    # /' "$T/other.log"; FAILED=$((FAILED + 1))
+fi
+clr 'a fragment before an @' "http://localhost#@127.0.0.2:$PO/"
+clr 'a query before an @' "http://localhost?@127.0.0.2:$PO/"
+clr 'a backslash before an @' "http://localhost\\@127.0.0.2:$PO/"
+clr '[::1] as userinfo' "http://[::1]@127.0.0.2:$PO/"
+clr 'upper-case host' "http://LOCALHOST:$PL/"
+clr 'an empty port' 'http://localhost:/'
+clr 'a six-digit port' 'http://localhost:123456/'
+clr 'a port above 65535' 'http://localhost:65536/'
+clr 'a longer host name' 'http://localhost.example/'
+clr 'a name that starts with 127.0.0.1' 'http://127.0.0.1.nip.io/'
+clr 'another 127/8 address' "http://127.0.0.2:$PO/k.json"
+if ! grep -q 'GET' "$T/other.log"; then
+  printf 'ok - cleartext: no refused URL reached a listener\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cleartext: a refused URL reached a listener\n'; sed 's/^/    # /' "$T/other.log"; FAILED=$((FAILED + 1))
+fi
+# Loopback: fetched, with the loopback warning, and the run goes on to GOOD.
+expect 0 'GOOD — not revoked' 'cleartext, http://localhost:PORT/k.json is loopback: the key set is fetched (0)' -- \
+  "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
+lacks 'refusing to fetch' 'cleartext, localhost is not refused'
+expect 0 'over cleartext HTTP from loopback: http://localhost:' 'cleartext, localhost: the loopback warning is shown' -- \
+  "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
+expect 0 "over cleartext HTTP from loopback: http://127.0.0.1:$PL/k.json" 'cleartext, http://127.0.0.1:PORT/k.json is loopback: fetched with the loopback warning (0)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+# A loopback fetch does not leave the machine: curl ignores proxy settings and
+# ~/.curlrc for it. Through the proxy below (nothing listens there) the fetch
+# would fail, or "loopback" would go out in cleartext.
+http_proxy=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 expect 0 'GOOD — not revoked' 'cleartext, loopback ignores http_proxy and ALL_PROXY: fetched directly (0)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+mkdir "$T/home-rc"
+printf 'proxy = http://127.0.0.1:9\n' > "$T/home-rc/.curlrc"
+HOME="$T/home-rc" expect 0 'GOOD — not revoked' 'cleartext, loopback ignores ~/.curlrc (a proxy in it): fetched directly (0)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k.json"
+# --globoff: {a,b} in the path is one URL, one request (a 404 here), never two.
+GETS_BEFORE="$(grep -c '"GET' "$T/local.log" || true)"
+expect 2 'failed to fetch http://127.0.0.1:'"$PL"'/k{a,b}.json' 'cleartext, a {a,b} glob in a loopback path is fetched literally (fetch_failed, 2)' -- \
+  "${CLR[@]}" --status-keys "http://127.0.0.1:$PL/k{a,b}.json"
+GETS_AFTER="$(grep -c '"GET' "$T/local.log" || true)"
+if [ "$((GETS_AFTER - GETS_BEFORE))" -eq 1 ]; then
+  printf 'ok - cleartext, a {a,b} glob made exactly one request\n'; PASSED=$((PASSED + 1))
+else
+  printf 'not ok - cleartext, a {a,b} glob made %s requests\n' "$((GETS_AFTER - GETS_BEFORE))"; FAILED=$((FAILED + 1))
+fi
+# The status list keeps its warning: cleartext to another address is fetched, as before.
+expect 0 "over cleartext HTTP: http://127.0.0.2:$PO/list.json" 'cleartext, a status list from another address: the cleartext warning, not the loopback one (0)' -- \
+  --status-list --status "http://127.0.0.2:$PO/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'from loopback' 'cleartext, a status list from 127.0.0.2 is not loopback'
+
 # Attested content (#14). What a document SAYS (its bands and frameworks) is
 # printed only when the run ends VERIFIED/GOOD. A document that does not verify
 # shows none of it, even with --raw; it gets one line saying it was withheld.
@@ -761,6 +854,21 @@ expect 1 "$WITHHELD" 'in --status-list mode a failed posture check withholds the
   --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
 lacks_all 'a tampered document under a GOOD list shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
 
+# The block shows text in its own way (#72): a character that is not printable is
+# a "?", not \xHH, and any other text is UTF-8 whatever the terminal encoding. The
+# check lines and messages escape as \xHH instead. A signed slug and framework code
+# that carry an ESC byte show both forms in one run. The UTF-8 label is the
+# "ens—alto" case further down.
+BLK_SLUG=$'fixture\x1b[2Jorg'
+mint_attest --out "$T/blk-ctl.json" --slug "$BLK_SLUG" --framework $'ens\x1b[2Jx=basic'
+expect 0 'subject:     fixture?[2Jorg  (visibility: public)' 'the attested content block shows a non-printable character of the slug as ?' -- \
+  --attestation "$T/blk-ctl.json" --jwks "$T/jwks.json" --expect-slug "$BLK_SLUG" --expect-issuer "$ISS" --now "$NOW"
+lacks_all 'the block has no raw ESC byte' $'\033'
+expect 0 'ENS?[2JX (ens?[2Jx): basic' 'the attested content block shows a non-printable character of a framework as ?' -- \
+  --attestation "$T/blk-ctl.json" --jwks "$T/jwks.json" --expect-slug "$BLK_SLUG" --expect-issuer "$ISS" --now "$NOW"
+expect 0 "posture is for slug 'fixture\\x1b[2Jorg', as expected" 'the check line shows the same slug as \xHH' -- \
+  --attestation "$T/blk-ctl.json" --jwks "$T/jwks.json" --expect-slug "$BLK_SLUG" --expect-issuer "$ISS" --now "$NOW"
+
 # Values taken from a document are shown escaped (#14). Anyone can edit a
 # document, and a nonce with newlines and ESC bytes could otherwise forge an
 # "Attested content" block or a "VERIFIED" line above the real FAIL lines. The
@@ -813,6 +921,41 @@ if ! grep -q $'\033' "$T/inj-stdout.txt" && ! grep -qE '^(VERIFIED|Attested cont
 else
   printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
 fi
+
+# Values from the command line are shown escaped too (#71). An option value is
+# not trusted either: a script that passes a user's text as --expect-slug, or a
+# URL taken from a configuration, must not be able to put a newline or ESC in the
+# output. Each is echoed in a message; the escaped form must be there and no raw
+# control byte or forged line.
+echo '# command-line values are escaped'
+CV=$'a\x1b[2Jb\nVERIFIED'
+CVE='a\x1b[2Jb\x0aVERIFIED'
+expect 1 "not the expected '${CVE}'" '--expect-slug with ESC and a newline is shown escaped' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$CV" --expect-issuer "$ISS" --now "$NOW"
+no_raw_control '--expect-slug: no ESC byte and no forged line'
+expect 1 "not the expected '${CVE}'" '--expect-issuer with ESC and a newline is shown escaped' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$CV" --now "$NOW"
+no_raw_control '--expect-issuer: no ESC byte and no forged line'
+expect 1 "you challenged with '${CVE}'" '--expect-nonce with ESC and a newline is shown escaped' -- \
+  "${COMMON[@]}" --attestation "$T/att.json" --expect-nonce "$CV"
+no_raw_control '--expect-nonce: no ESC byte and no forged line'
+expect 1 "expected '${CVE}'" '--expect-issuer is shown escaped in the status list check too' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --expect-issuer "$CV"
+no_raw_control '--expect-issuer (status list): no ESC byte and no forged line'
+expect 2 "unknown argument: --bad${CVE}" 'an unknown argument with ESC and a newline is shown escaped' -- \
+  --attestation "$T/att.json" "--bad$CV"
+no_raw_control 'an unknown argument: no ESC byte and no forged line'
+expect 2 "over cleartext HTTP: http://x.test/${CVE}" 'a refused --status-keys URL with ESC and a newline is shown escaped' -- \
+  "${CLR[@]}" --status-keys "http://x.test/$CV"
+no_raw_control 'a refused --status-keys URL: no ESC byte and no forged line'
+expect 2 "curl -fsS http://x.test/${CVE} -o status-keys.json" 'the curl hint of the refusal is escaped too' -- \
+  "${CLR[@]}" --status-keys "http://x.test/$CV"
+expect 2 "failed to fetch http://127.0.0.1:$PL/${CVE}" 'a --status URL (loopback) that cannot be fetched is shown escaped' -- \
+  --status-list --status "http://127.0.0.1:$PL/$CV" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+no_raw_control 'a failed fetch (loopback): no ESC byte and no forged line'
+expect 2 "failed to fetch http://127.0.0.2:$PO/${CVE}" 'a --status URL (cleartext) that cannot be fetched is shown escaped' -- \
+  --status-list --status "http://127.0.0.2:$PO/$CV" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+no_raw_control 'a failed fetch (cleartext): no ESC byte and no forged line'
 
 # Values are compared exactly as signed. $(...) strips trailing newlines, so a
 # signed "fixture-org" plus a newline used to satisfy --expect-slug fixture-org,
@@ -1234,6 +1377,15 @@ for v in v3.1.3 v3.1.4 v3.10.0 v4.0.0 v3.2.0-rc1; do
 done
 for v in v2.4.0 v3.1.2 v3.0.9 v2.99.99 v3.1.3-rc1 '' devel v3.1 v3.x.1 v03.1.3x; do
   COSIGN_STUB_VERSION="$v" expect 2 'anchor could not be checked: --anchor-file needs cosign 3.1.3 or later' "cosign '$v' is too old or unreadable: could not check (2)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+done
+# Zero-padded components with an 8 or a 9 are decimal, not octal.
+for v in v3.08.09 v03.01.04 v3.1.03; do
+  COSIGN_STUB_VERSION="$v" expect 0 "$ANCHOR_SIGNED" "cosign $v is new enough (components are decimal)" -- \
+    --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
+done
+for v in v03.00.09 v3.01.02 v02.08.09; do
+  COSIGN_STUB_VERSION="$v" expect 2 'anchor could not be checked: --anchor-file needs cosign 3.1.3 or later' "cosign $v is too old (components are decimal): could not check (2)" -- \
     --attestation "$T/att.json" "${COMMON[@]}" "${A[@]}"
 done
 COSIGN_STUB_VERSION='v2.4.0' expect 2 "this one reports 'v2.4.0'" 'the old version is named in the message' -- \
@@ -1810,6 +1962,25 @@ expect 0 'within the 600s freshness window' '--max-age-seconds 0600 is 600 secon
   --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0600
 expect 1 'EXPIRED' '--max-age-days 0 rejects a document 300 s old (genuine but too old)' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 0
+# Zero-padded numbers with an 8 or a 9 in them are not octal anywhere they are read.
+expect 0 'within the 900s freshness window' '--max-age-seconds 0900 is 900 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0900
+expect 1 'beyond --max-age-seconds 8' '--max-age-seconds 08 is 8 seconds, not an octal error' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 08
+expect 1 'beyond --max-age-seconds 9' '--max-age-seconds 0009 is 9 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 0009
+expect 1 'beyond --max-age-seconds 0' '--max-age-seconds 000 is 0 seconds' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-seconds 000
+expect 0 'within the 691200s freshness window' '--max-age-days 08 is 8 days' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --max-age-days 08
+expect 0 'VERIFIED — this document was signed' '--now with two leading zeros is read as decimal' -- \
+  --attestation "$T/att.json" "${COMMON[@]}" --now "00$NOW"
+expect 3 'rolled_back' '--min-seq 08 is 8: a list with seq 7 is rolled back' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --min-seq 08
+expect 0 'GOOD — not revoked' '--min-seq 007 is 7: a list with seq 7 is accepted' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --min-seq 007
+expect 0 'GOOD — not revoked' '--min-seq 00 is 0' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --min-seq 00
 jexpect 2 'a status-list option without --status-list is a usage error' \
   'o["reason"] == "usage" and o["message"] == "error: --status requires --status-list" and o["checks"] == []' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-key.json"
