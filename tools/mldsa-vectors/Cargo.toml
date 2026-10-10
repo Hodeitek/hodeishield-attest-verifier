@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
+[package]
+name = "mldsa-vectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Runs the ML-DSA-65 verify primitive of aws-lc-rs over tests/vectors/v1 and compares its verdict with the reference script's."
+
+[dependencies]
+# Exact versions: the trust path does not move without a commit.
+# default-features = false: no ring-io / ring-sig-verify (the ring-compatible
+# API), only the AWS-LC backend that the ML-DSA verifier needs.
+aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+data-encoding = { version = "=2.11.1", default-features = false, features = ["std"] }
