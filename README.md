@@ -78,6 +78,7 @@ own starts at [hodeishield.com](https://hodeishield.com).
 | **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
 | `jq` | Only for `--status-list` (revocation checking). |
+| `cosign` ≥ 3.1.3 | Only for `--anchor-file` ([Anchor the key](#anchor-the-key)). Optional: nothing else needs it. |
 
 `xxd` is used when present and is not required.
 
@@ -138,8 +139,53 @@ docker run --rm -v "$PWD":/work:ro -w /work \
 The image is the upstream Debian 13 image, pinned by digest: the same one CI
 tests on, so a rebuilt tag cannot change what you run. The digest pins the
 base image; `openssl`, `python3` and `jq` come from Debian 13's archive when the
-command runs, so they carry Debian's current security updates. An official signed image
-is tracked in [#22](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/22).
+command runs, so they carry Debian's current security updates.
+
+### A signed image
+
+From v1.4.0 on, each release also publishes a ready-made image,
+`ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
+(`:v1.4.0`). There is no `latest` tag, and releases before v1.4.0 have no
+image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
+and its entrypoint is the verifier, so it needs no network to run. Take its
+digest from the release page, and pin that digest, not the tag. Check the
+signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
+
+```bash
+cosign verify ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/image.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Replace `<digest>` and `<TAG>` with the image digest and the release tag. Then
+run it like the commands above, without the script and the `bash -c` wrapper:
+
+```bash
+docker run --rm -v "$PWD":/work:ro \
+  ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
+  --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
+```
+
+To check that the script inside is the one the release signed, compare its
+sha256 with the one in the release's `SHA256SUMS` (see
+[Verifying a release](#verifying-a-release)):
+
+```bash
+docker run --rm --entrypoint sha256sum \
+  ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
+  /usr/local/bin/verify-attestation.sh
+```
+
+The image label `com.hodeitek.verifier.script-sha256` records the same value
+(`docker inspect`). Treat the label as information: the signed digest and this
+command are the evidence. The release workflow also checks the script against
+the release's signed `SHA256SUMS` before it builds the image, and again inside
+the build. The image carries a signed SBOM; fetch and check it with
+`gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier`.
+The signature proves which workflow built the image and when, not that the
+image can be rebuilt bit for bit: the Debian packages are taken from the
+archive on the day of the build.
 
 ## Exit codes — the distinction matters
 
@@ -199,7 +245,13 @@ bash scripts/attest/verify-attestation.sh --status-list \
 ```
 
 `--jwks` and `--status-keys` are different key sets and are never
-interchangeable. What the list can and cannot tell you is in
+interchangeable. With a document, the list is always applied to the document's
+own kid; `--check-kid KID` (a kid, or a usage error) adds a kid to look up and
+never replaces it. In the same way the list is always applied to the document's
+own slug at its own `generatedAt`; `--check-subject` and `--check-generated-at`
+add a subject to look up and never replace it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
+`--check-generated-at` and `--min-seq` need `--status-list`: without it they are
+a usage error, exit 2. What the list can and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 
 ## What the output shows
@@ -235,6 +287,26 @@ Every value taken from a document, key set or status list is printed with
 control characters, and any byte outside printable ASCII, as a visible `\xHH`
 escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
 
+## Machine-readable output
+
+`--json` prints one JSON object on stdout and nothing else (no text on stdout
+or stderr), with the same exit codes. Add `--json` to any other options,
+anywhere in the arguments (an argument error is reported as JSON too); `--help`
+and `--version` keep printing their text.
+
+```bash
+bash scripts/attest/verify-attestation.sh --json \
+  --attestation att.json --jwks jwks.json --expect-slug acme --expect-issuer https://issuer.example
+```
+
+The object has the `verdict` (`verified`, `expired`, `failed`,
+`could_not_check`, `good`, `revoked` or `unknown`), the `reason` code that
+decided the exit code, every check with its code and result, and, **only when
+the exit code is 0**, the `attested` content. The values it reads from a
+document that did not verify are under `unverified`, and are not established.
+Test the exit code first. The fields, their stability and examples are in
+[docs/security/json-output.md](docs/security/json-output.md).
+
 ## Convince yourself it can fail
 
 A verifier that has only ever printed `PASS` has told you nothing. Each of these
@@ -242,7 +314,7 @@ must exit 1, and you should run them before trusting a `VERIFIED`:
 
 ```bash
 # 1. Tamper with a signed field.
-python3 -c "import json;d=json.load(open('att.json'));\
+python3 -I -c "import json;d=json.load(open('att.json'));\
 d['attestation']['claims']['overallBand']='advanced';\
 json.dump(d,open('att-tampered.json','w'))"
 bash scripts/attest/verify-attestation.sh --attestation att-tampered.json \
@@ -253,7 +325,7 @@ bash scripts/attest/verify-attestation.sh --attestation att.json \
   --jwks jwks.json --expect-slug not-talmaren-payments ; echo "exit=$?" # 1
 
 # 3. Add a member the signature does not cover.
-python3 -c "import json;d=json.load(open('att.json'));\
+python3 -I -c "import json;d=json.load(open('att.json'));\
 d['attestation']['claims']['note']='not signed';\
 json.dump(d,open('att-extra.json','w'))"
 bash scripts/attest/verify-attestation.sh --attestation att-extra.json \
@@ -300,7 +372,7 @@ rejects a JWKS whose `kid` does not match its key. To compute it yourself from
 a downloaded `jwks.json`, one value per key:
 
 ```bash
-python3 -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
+python3 -I -c 'import sys,json,base64,hashlib;[print(base64.urlsafe_b64encode(hashlib.sha256(b"hodei-shield.attest.kid.v1"+base64.urlsafe_b64decode(k["pub"]+"="*(-len(k["pub"])%4))).digest()[:16]).decode().rstrip("=")) for k in json.load(open(sys.argv[1]))["keys"]]' jwks.json
 ```
 
 Compare the output with the `kid` you pinned. The current values are listed in
@@ -327,6 +399,68 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   list; `--expect-kid` requires the attestation's signing key to be one you
   pinned. It does not apply to the key that signs the status list, which has no
   pin option in this release.
+
+### Anchor the key
+
+The key set comes from the issuer's web host, so on its own it proves nothing
+about who published the key. A release of this repository from v1.4.0 publishes
+a key statement, `keys-statement.json`, signed with Sigstore by the release
+workflow ([the decision record](docs/security/key-anchor.md)). `--anchor-file`
+checks that statement and requires it to list the key that signed your document,
+by a channel other than the issuer's web host. Download the statement and its
+bundle from the release you trust (not from the issuer's host):
+
+```bash
+gh release download <TAG> -R Hodeitek/hodeishield-attest-verifier \
+  -p keys-statement.json -p keys-statement.json.sigstore.json
+bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.json \
+  --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com \
+  --anchor-file keys-statement.json
+```
+
+- It needs [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+  3.1.3 or later, for this option only. cosign may contact the Sigstore TUF
+  repository to refresh its trust root. The bundle is read from
+  `keys-statement.json.sigstore.json` next to the statement, or from the file
+  given with `--anchor-bundle`.
+- The identity cosign must see is fixed in the script (this repository's release
+  workflow at a tag `vN.N.N`, issued by GitHub Actions). No option or environment
+  variable changes it.
+- The bundle must be exactly a Sigstore bundle v0.3, as the release publishes
+  it; any other shape, such as cosign's legacy bundle format, is refused before
+  cosign runs (exit 2). cosign is then asked a second time for the exact
+  identity read from the bundle's certificate, so the release tag below comes
+  from the certificate cosign verified. That certificate must also carry this
+  repository's numeric GitHub ID (Fulcio's Source Repository Identifier), so a
+  repository that took over the name is not accepted.
+- The anchor accepts a statement signed for any `v*` tag that `release.yml` of
+  this repository built, published or not: the workflow signs when the tag is
+  pushed. See "Consequences" in [the decision record](docs/security/key-anchor.md).
+- Exit 2, "anchor could not be checked", when cosign is missing or older, the
+  bundle is not v0.3, or the statement does not verify (wrong identity, altered
+  statement, unreadable bundle, no trust root), or is not a well-formed statement. This is by design:
+  a statement that does not verify says nothing about the attestation, just as a
+  wrong key document does not. The run never ends in `VERIFIED` then, and the
+  message says which cause it found.
+- A statement from a release older than the verifier is refused (exit 2): the
+  release tag is read from the verified certificate and compared with the
+  script's own version (`--version`), so an old, genuinely signed statement
+  cannot stand in for the current one. A tag that cannot be read is exit 2 too.
+  The check has a limit: an OLD verifier can still be served a statement as old
+  as itself. That is why only the latest release is supported, and why
+  `--status-list`, which revokes a compromised key unconditionally, remains the
+  path for a key compromise.
+- Exit 1, with a `FAIL` line, when the statement verifies and does not list the
+  key that signed, lists it under another role, retires it differently from the
+  key set's `hs_retired_at`, or names another issuer than the document's `iss`.
+  With `--status-list`, the same questions about the status-list key leave the
+  revocation status unknown (exit 3).
+- With `--pub-b64url` there is no JWK, but the kid is still recomputed from the
+  key bytes, so the statement is still asked about it. There is no key set, so
+  there is no `hs_retired_at` to compare; a retirement in the statement still
+  applies to the document's `generatedAt`.
+- A release made before a rotation does not list the new key: update the
+  verifier.
 
 ## Where this comes from, and what is redacted
 
@@ -372,9 +506,10 @@ The verifier checks two document formats, and no other version of either:
 
 ## Verifying a release
 
-Download these four files from the GitHub release you are using:
-`verify-attestation.sh`, `SHA256SUMS`, `SHA256SUMS.sigstore.json` and
-`verify-attestation.sh.sigstore.json`. Then:
+Download these six files from the GitHub release you are using:
+`verify-attestation.sh`, `keys-statement.json`, `SHA256SUMS`,
+`SHA256SUMS.sigstore.json`, `verify-attestation.sh.sigstore.json` and
+`keys-statement.json.sigstore.json`. Then:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -388,9 +523,16 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
+
+cosign verify-blob --bundle keys-statement.json.sigstore.json \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  keys-statement.json
 ```
 
-Replace `<TAG>` with the release tag. What changed in each release is in
+Replace `<TAG>` with the release tag. `keys-statement.json` is the signed list of
+the issuer's signing keys; see the
+[key anchor decision](docs/security/key-anchor.md). What changed in each release is in
 [CHANGELOG.md](CHANGELOG.md). This proves that the file was built from
 that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
@@ -402,10 +544,16 @@ the reason it is a short, single, readable script.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
   printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
+  The anchor cases use a test double in place of cosign.
 - `bash tests/vectors.sh` runs the published, versioned test vectors in
   `tests/vectors/v1/`: fixed documents, TEST-ONLY keys, a fixed `--now` and the
   expected exit code and reason for each, so you can check another verifier
   against them. `tests/run.sh` runs them too; see `tests/vectors/v1/README.md`.
+  The few cases that use real Sigstore bundles need cosign ≥ 3.1.3 and the
+  network; where cosign is missing they are reported as skipped, never as
+  passed.
+- `bash tests/vectors.sh --json` runs every vector again with `--json` and checks
+  the object instead of the text; `tests/run.sh` runs it too.
 - `bash tests/mutants.sh` builds a copy of the verifier whose signature check
   always passes and shows the vectors that depend only on that check
   (`signature_only`) are accepted by it, so a verifier with a disabled
@@ -418,6 +566,9 @@ the reason it is a short, single, readable script.
 - `bash tests/container.sh` extracts both container commands from this README
   and runs them as written (live example, plus offline rejection and revocation
   cases); the "Container route" workflow does so with Docker and Podman.
+- A pull request that changes the Dockerfile builds the signed-image
+  candidate without pushing it and runs `tests/image-smoke.sh` in it
+  (`--help`, a non-root user, and the published `valid-detached` vector).
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document

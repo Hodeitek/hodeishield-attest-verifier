@@ -12,6 +12,260 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
+## v1.4.0 - 2026-10-10
+
+`verify-attestation.sh` changes. sha256
+`dc6f227a0ae92d9e1fe8e9852fb0d4b22bfe6868f2690a6a0d91497348b01123`.
+
+### Added
+- `--json`: one JSON object on stdout and nothing else, with the verdict, the
+  reason code that decided the exit code, every check, the attested content
+  (only when the exit code is 0, with `--raw` also the signed posture), the
+  values read from a document that did not verify (under `unverified`, not
+  established) and the result of `--anchor-file`. The exit codes do not change;
+  an argument error is JSON too (`reason` `usage`, exit 2). The schema is
+  `hodeishield.verifier.result.v1`, described in
+  [docs/security/json-output.md](docs/security/json-output.md); `tests/vectors.sh --json`
+  checks it against every published vector (Closes #38).
+- [`docs/security/keys.json`](docs/security/keys.json), the machine-readable
+  list of the issuer's signing keys (schema `hodeishield.keys.statement.v1`),
+  kept identical to `docs/security/keys.md` by a CI check. Releases from the
+  next one publish it as `keys-statement.json`, in `SHA256SUMS` and signed with
+  Sigstore (`keys-statement.json.sigstore.json`).
+- [A decision record for the key anchor](docs/security/key-anchor.md): the
+  signed statement, checked by `--anchor-file`, with "anchor could not be
+  checked" as exit 2.
+- `--anchor-file STATEMENT` (and `--anchor-bundle FILE`), from v1.4.0: the
+  verifier runs `cosign verify-blob` on a key statement from a release, with the
+  signing identity fixed in the script, and requires the key that signed (and,
+  with `--status-list`, the status-list key) to be listed under the right role
+  with a matching retirement. cosign 3.1.3 or later is needed for this option
+  only; it may contact the Sigstore TUF repository. A statement that does not
+  verify is exit 2, by design; a key it does not list is exit 1 (3 for the
+  status-list key). See [Anchor the key](README.md#anchor-the-key).
+- `--anchor-file` refuses a key statement from a release older than the
+  verifier (exit 2): the release tag is read from the verified certificate and
+  compared with the new `VERIFIER_VERSION`, shown by `--version`. A CI check
+  keeps that version in step with this changelog and with the release tag.
+- Test vectors with real Sigstore bundles for `--anchor-file`
+  (`tests/vectors/v1/anchor/`), marked `requires: ["cosign"]` in the manifest;
+  `tests/vectors.sh` reports them as skipped where cosign is missing. A check of
+  the latest release's key statement in the live workflow.
+- A daily check that the live key sets contain no key, and no retirement time,
+  that `keys.json` does not list.
+- A signed container image, from v1.4.0: `ghcr.io/hodeitek/hodeishield-attest-verifier`,
+  tagged with the version, amd64, published when a release is published and
+  signed by digest with Sigstore keyless signing, with an SBOM attestation.
+  README.md, "A signed image", has the commands to verify and run it. Earlier
+  releases have no image.
+- Machine reason codes for every check, listed in
+  [docs/security/reason-codes.md](docs/security/reason-codes.md). The text
+  output is unchanged.
+
+### Security
+- `--anchor-file` read the release tag from a certificate cosign may not have
+  verified. cosign reads a bundle that does not load as a Sigstore v0.3 bundle
+  in its legacy format, and then verifies the certificate in `cert`, while the
+  script read the tag from `verificationMaterial.certificate`. A genuine old
+  signature could so be given a decoy certificate with a newer tag and pass the
+  anti-rollback check. The bundle must now be exactly a v0.3 bundle before
+  cosign runs (`anchor_bundle_unsupported`, exit 2), and cosign is asked a
+  second time for the exact identity read from the certificate (a failure is
+  `anchor_unverified`, exit 2). `--anchor-file` is new in this release; no
+  earlier release is affected.
+- `--anchor-file` bound the release workflow to this repository by name only.
+  The verified certificate must now also carry this repository's numeric GitHub
+  ID, `1340684886`, in Fulcio's Source Repository Identifier extension (OID
+  1.3.6.1.4.1.57264.1.15), or the anchor could not be checked (exit 2), so a
+  repository that takes over the name after a rename or deletion is not
+  accepted. The decision record no longer presents publishing the draft release
+  by hand as a mitigation: the statement is signed when a `v*` tag is pushed,
+  so the anchor trusts any `v*` tag that `release.yml` of this repository built.
+- `--check-kid` replaced the document's own kid in the revocation check. With
+  `--status-list` and a document, `--check-kid OTHER` looked up `OTHER` and never
+  the kid of the key that signed, so a document signed by a revoked key could end
+  `GOOD`, exit 0. In this release's development line `--check-kid --raw` did the
+  same, with `--raw` as the kid. Now the document's own kid (recomputed from the
+  key bytes, and its header kid) is always looked up, and a `--check-kid` is
+  looked up as well; either one listed is `REVOKED`. `--check-kid` must have the
+  shape of a kid (a usage error, exit 2, otherwise). And `--status`,
+  `--status-keys`, `--check-kid`, `--check-subject`, `--check-generated-at` and
+  `--min-seq` given without `--status-list` were silently ignored and the run
+  could end `VERIFIED`; each is now a usage error, exit 2 ("--status requires
+  --status-list"). This also affected earlier releases.
+- A value read from a document lost its trailing newlines before it was
+  compared, so the comparison was not of the signed value: a signed slug
+  `fixture-org` plus a newline satisfied `--expect-slug fixture-org`, and so for
+  `--expect-nonce`, `--expect-issuer`, the issuer `--anchor-file` compares (on
+  either side) and the `iss` and `kid` of a status list; the subject rule hashed
+  the slug without them, and `--json` `unverified.slug` differed from
+  `attested.slug`. Every such value is now read exactly as signed. A signed
+  string holding a NUL byte, which the shell cannot hold, is a failed check
+  (`nul_byte`, exit 1; `status_unknown_nul_byte`, exit 3, in a status list; a
+  malformed statement, exit 2, in the `--anchor-file` issuer), never the string
+  without it. This also affected earlier releases.
+- Globals that a run does not always set were read from the caller's
+  environment, which bash imports as shell variables. A standalone
+  `--status-list` query (no document) took an exported `GENERATED` as the
+  document's `generatedAt`, so a withdrawn `--check-subject` came out `GOOD`
+  instead of `UNKNOWN`; an exported `SLUG` was checked as the document's subject,
+  an exported `KID` or `DERIVED_KID` was looked up in the key rule, and
+  `--json` reported them under `unverified`. Every such global is now set when
+  the script starts, `--json` uses an explicit flag instead of testing whether a
+  variable is set, and a test checks statically that every global read with a
+  default is set before it is read. This also affected earlier releases.
+- The numbers given as options were not checked. `--max-age-seconds 60s` made a
+  test error, which read as "within the freshness window", so the run could end
+  `VERIFIED`, exit 0; `--max-age-days` and `--now` were evaluated as bash
+  arithmetic, in which a value such as `a[$(cmd)]` runs a command, so a wrapper
+  that passed an untrusted value ran it. Each is now checked before any
+  arithmetic: `--max-age-seconds` and `--max-age-days` take 1 to 9 digits,
+  `--now` 1 to 12 (Unix seconds), `--min-seq` 1 to 18, and anything else is a
+  usage error, exit 2 (`error: --now must be a Unix time in seconds ...`). A
+  leading zero is decimal, not octal. `--now` must also be no later than
+  9999-12-31T23:59:59Z (`error: --now is out of range`): a later time cannot be
+  written as an RFC 3339 time, and the run then reported the document's dates
+  as unparseable. This also affected earlier releases.
+- The subject rule compared `generatedAt` with `notBefore` in whole seconds, so
+  a document generated less than a second before a fractional `notBefore`
+  (00:00:00.000 against 00:00:00.900) was `GOOD` instead of `REVOKED`. The TTL
+  ceiling (`expiresAt - generatedAt`) and the validity ceiling of a status list
+  (`nextUpdate - issuedAt`) were truncated the same way, so a window less than a
+  second over either passed. All three now compare exact instants through the
+  comparator the retirement checks use (one comparator for the script), and the
+  messages give the exact window (`3600.5s`). A `notBefore` or `--check-generated-at`
+  that is not an RFC 3339 time leaves the subject unknown, as the documentation
+  says. This also affected earlier releases.
+- `--check-subject` and `--check-generated-at` replaced the document's own slug
+  and `generatedAt` in the subject rule. With `--status-list` and a document
+  whose subject was withdrawn, `--check-subject OTHER` or a later
+  `--check-generated-at` made the run end `GOOD`, exit 0. Now the document's own
+  signed slug is always checked at its own signed `generatedAt`, and a
+  `--check-subject` or `--check-generated-at` adds one more check (each defaults
+  to the document's value); a withdrawal found by either is `REVOKED`. A query
+  without a document is unchanged. This also affected earlier releases.
+- Every `python3` the verifier runs (the canonical encoders, the document,
+  key-set and statement readers, the `--json` writer) ran without `-I`, so the
+  directory the verifier was run from came first on Python's module path: a
+  `json.py` placed there ran inside every check and could decide the verdict.
+  Each call is now `python3 -I` (isolated: no current or script directory on the
+  path, no `PYTHON*` environment variables, no user site-packages), and so are
+  the test runners'. This also affected earlier releases.
+
+### Fixed
+- Without GNU date (macOS), reading a time could ignore its offset. The last
+  fallback, BSD `date -j -f`, ignores what follows the seconds, so
+  `20:00:00+02:00` read as 20:00 UTC, two hours off; and the python3 fallback
+  read a time without an offset as local time. The BSD path now takes only a
+  UTC time (`Z`) and refuses any other (could not check, never a wrong time),
+  and the python3 fallback refuses a time without an offset. GNU date was not
+  affected. This also affected earlier releases.
+- `not_yet_valid` (a document's `generatedAt`, or a status list's `issuedAt`,
+  more than 300 s ahead of now) compared whole seconds, so a time up to a
+  second beyond the allowance passed. Both now compare exact instants through
+  the same comparator as the other time checks, with "now" as an RFC 3339
+  time; the message gives the exact distance (`300.5s`). The age, expiry and
+  staleness checks were already exact, "now" being a whole second.
+- The `alg`, `kid` and `typ` of the protected header were read with `sed` in the
+  caller's locale: under a UTF-8 locale a header kid holding a byte that is not
+  valid UTF-8 was read as empty, so the run named another kid than under the C
+  locale. The header is now read in the C locale, under any locale.
+- The verdict depended on the locale. The embedded Python read the claims, the
+  key sets and the status list in the locale's encoding, while other readers
+  used UTF-8: under a locale such as `en_US.ISO-8859-1`, a genuine document
+  carrying a non-ASCII character as raw UTF-8 (a framework label such as
+  `ens—alto`) failed its signature, exit 1, and the `--claims` checks and the
+  attested content could read different values. Every file is now opened as
+  bytes or as UTF-8, every output that holds document text is UTF-8 or escaped,
+  and every `python3` runs as `python3 -I -X utf8`, so its arguments and
+  streams are UTF-8 too. A test that set `PYTHONIOENCODING`, which `-I`
+  ignores, is replaced by one under a Latin-1 locale (in CI). This also affected
+  earlier releases.
+- An option given without its value exited 1, as if a check had failed. It is now
+  a usage error, exit 2, with `error: --jws needs a value` (and likewise for
+  every option that takes a value). For a file, URL, slug, number or time the
+  next option is never taken as the value, so `--jwks --json` is a usage error;
+  a kid, key or nonce is base64url or opaque and may start with `--`, so for
+  those only an absent value is missing.
+- The list of checks behind the reason codes lost a check made inside a
+  subshell, and merged two different checks that share a code. Both are fixed;
+  the text output is unchanged.
+- A signed but empty `slug` (`""`) was accepted, and the subject rule of
+  `--status-list` skipped an empty slug, so it never checked the document's own
+  subject. It is now a failed check, `slug_empty` (exit 1), as an empty `iss`
+  is, and the subject rule checks the document's slug even when it is empty.
+  This also affected earlier releases.
+- A signed but empty `iss` (`""`) was not a failed check: without
+  `--expect-issuer` the document could end `VERIFIED` naming no issuer, and
+  `--anchor-file` skipped its issuer check for it. It is now a failed check,
+  `iss_empty` (exit 1), and the anchor's issuer check is never skipped
+  (`anchor_issuer_mismatch`). The first part also affected earlier releases.
+- The input files (`--attestation`, `--jws`, `--claims`, `--posture`, `--jwks`,
+  and `--status`/`--status-keys` given as files) were read again by each check,
+  `--claims` more than a dozen times, so a file that changed during the run could be
+  checked as several documents, and an input given as a pipe such as
+  `<(curl ...)` was empty after its first read. Each is now copied once into the
+  private work directory right after the arguments are read, and only the copy
+  is read. Messages name the file as it was given, escaped, never the copy (the
+  claims of an `--attestation` are named "the claims in FILE").
+- `--json`: the script defined `json_str()` twice, and the header reader of
+  section 2 replaced the JSON string encoder that the object written without
+  python3 relies on. The header reader is now `header_field()`; a test checks
+  that no function is defined twice. No run reached the broken writer (python3
+  is required before section 2 on every path), so no output changes.
+- `--json`: `anchor.verified` was true when the run stopped after the key
+  statement verified and before the membership or issuer check ran (an unknown
+  kid, a document that could not be canonicalised, a status list that failed
+  first). It is now true only when every anchor check that applies ran and held.
+- The tests: a `--json` check in `tests/run.sh` that could not be evaluated (it
+  raised, or it spanned several lines) was reported as passing, and so was a
+  case of `tests/vectors.sh --json` on which the checker raised. Both are now
+  failures with the traceback, and each harness checks itself first. The five
+  checks written over several lines now run, and hold.
+- The tests: the check that a forged verdict never starts a line read an output
+  file that did not exist, and its strings carried a newline, which grep reads
+  as a pattern that matches everything; it always passed. The helpers now read
+  the output of the run they follow, refuse such a string, and the check is
+  written as line-anchored patterns. It holds.
+- The tests: the check that no global is read from the environment missed
+  array reads with a default (`${ANCHOR_E[0]:-absent}`) and `:=`, and exempted
+  a name declared `local` in any function. It reads those forms now, exempts a
+  local only inside its own function, and checks itself on each; the two
+  arrays it found are set when the script starts.
+- The tests: the check that no function is defined twice read only the form
+  `name()`, and missed `name ()`, `function name` and `function name()`. It
+  reads every form now, and checks itself on each.
+- The tests: the self-checks of the `--json` harness accepted any "not ok" for
+  a check that raises, so one of them would still pass if such a check were
+  reported as merely false. Each now requires its exact outcome ("could not be
+  evaluated", or "false").
+- The tests: the real-cosign test of a legacy-format bundle is refused by the
+  bundle shape check before cosign runs, so it shows the shape check, not
+  cosign's legacy fallback, which no bundle can now reach; its comment says so,
+  and what each layer of the anchor covers. Two real-cosign tests (CI) are
+  added for the second, exact-identity cosign call: the genuine v1.3.0 bundle
+  passes it and its tag is read, and an identity that is not the verified
+  certificate's is rejected by cosign, with no tag reported.
+
+### Changed
+- §6 item 2 of the verification document no longer says the Web PKI is the only
+  channel for the attestation key: from the release that carries the key
+  statement there is a second one, signed by this repository's release workflow.
+
+### Documentation
+- The `python3` commands shown in README.md, `docs/security/keys.md` and the
+  verification document run as `python3 -I`, as the verifier's own do: they
+  read downloaded files from the current directory, where a planted `json.py`
+  would otherwise be imported.
+- The reference `canon.py` of the verification document reads the claims as
+  UTF-8 (`encoding="utf-8"`) and is run as `python3 -I -X utf8`, so under a
+  locale that is not UTF-8 it re-derives the signed bytes, as the verifier does.
+- [An evaluation of Rust ML-DSA-65 implementations](docs/security/rust-mldsa-evaluation.md)
+  for a port of the verifier: version, stability, verification API, audits,
+  FIPS 140-3, C or pure Rust, and WebAssembly for each candidate, with a
+  recommendation and a date to look again. It does not run any candidate
+  against the test vectors; that stays open and will be done in CI.
+
 ## v1.3.0 - 2026-10-08
 
 `verify-attestation.sh` changes. sha256

@@ -1,0 +1,226 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
+name: Container image
+
+# Two paths:
+#
+#   pull_request  builds the image WITHOUT pushing and runs positive checks in
+#                 it (tests/image-smoke.sh), so the Dockerfile is tested before
+#                 a release depends on it.
+#
+#   release       when the owner PUBLISHES the draft that release.yml created
+#                 (never on the tag push, so nothing reaches the registry before
+#                 the draft is reviewed). It downloads the release's assets,
+#                 re-verifies them, builds the image from the verified script,
+#                 pushes it, signs it by digest with cosign (keyless), attests
+#                 an SBOM, and checks its own signature.
+#
+# The release path runs only if the draft is published with a person's own
+# credentials, as it is today. An event caused by GITHUB_TOKEN does not start
+# a workflow run, so automating the publish with GITHUB_TOKEN would stop this
+# job without an error.
+#
+# A release run uses the workflow file as of the tagged commit, so the first
+# image is the first release tagged after this file exists. Older releases have
+# no image.
+#
+# The base image digest in container/Dockerfile must match README.md and the
+# other workflows; tests/container.sh checks:
+# debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+on:
+  release:
+    types: [published]
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - container/Dockerfile
+      - .github/workflows/image.yml
+      - scripts/attest/verify-attestation.sh
+      - tests/image-smoke.sh
+
+concurrency:
+  group: image-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/hodeitek/hodeishield-attest-verifier
+
+jobs:
+  build-check:
+    name: build and check (no push)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir ctx
+          cp scripts/attest/verify-attestation.sh ctx/
+          sha="$(sha256sum ctx/verify-attestation.sh | cut -d' ' -f1)"
+          docker build -f container/Dockerfile \
+            --build-arg SCRIPT_SHA256="$sha" \
+            --build-arg VERSION=pull-request \
+            --build-arg REVISION="$REVISION" \
+            -t verifier-check ctx
+      - name: Positive checks in the image
+        run: bash tests/image-smoke.sh verifier-check
+
+  publish:
+    name: build, push, sign (release)
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # to check out the tag and download the release assets
+      packages: write # to push the image to ghcr.io
+      id-token: write # for Sigstore keyless signing (cosign, attestation)
+      attestations: write # to store the SBOM attestation
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Check the tag
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected tag: $TAG" >&2; exit 1; }
+          [ "$GITHUB_REF" = "refs/tags/$TAG" ] || { echo "ref $GITHUB_REF is not the tag $TAG" >&2; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      # The same check README.md gives a reader, against the published assets
+      # of this tag, before anything is built from them.
+      - name: Download and verify the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          mkdir dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern verify-attestation.sh \
+            --pattern SHA256SUMS \
+            --pattern verify-attestation.sh.sigstore.json \
+            --pattern SHA256SUMS.sigstore.json
+          cd dist
+          sha256sum -c SHA256SUMS
+          for f in verify-attestation.sh SHA256SUMS; do
+            cosign verify-blob --bundle "${f}.sigstore.json" \
+              --certificate-identity "$RELEASE_IDENTITY" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$f"
+          done
+          sha="$(awk '$2 == "verify-attestation.sh" { print $1 }' SHA256SUMS)"
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "no sha256 for verify-attestation.sh in SHA256SUMS" >&2; exit 1; }
+          echo "SCRIPT_SHA256=$sha" >> "$GITHUB_ENV"
+          mkdir ../ctx
+          cp verify-attestation.sh ../ctx/
+
+      - name: Build
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker build -f container/Dockerfile \
+            --build-arg SCRIPT_SHA256="$SCRIPT_SHA256" \
+            --build-arg VERSION="$TAG" \
+            --build-arg REVISION="$REVISION" \
+            -t "$IMAGE:$TAG" ctx
+
+      - name: Positive checks in the image
+        run: bash tests/image-smoke.sh "$IMAGE:$TAG"
+
+      - name: Push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker push "$IMAGE:$TAG"
+          digest="$(docker inspect --format '{{json .RepoDigests}}' "$IMAGE:$TAG" \
+            | jq -r --arg p "$IMAGE@" '.[] | select(startswith($p)) | sub("^.*@"; "")' | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "could not read the pushed digest" >&2; exit 1; }
+          echo "DIGEST=$digest" >> "$GITHUB_ENV"
+
+      # Sign the digest, never the tag. Keyless: cosign gets a short-lived
+      # Fulcio certificate for this job's GitHub OIDC identity and records the
+      # signature in the public Rekor log. No signing key or secret exists.
+      - name: Sign the image digest
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      # The SBOM is made by Syft (the action pins the Syft version it runs) and
+      # attested with GitHub's own action; neither needs a third-party app with
+      # write access. upload-release-assets is off so the release is untouched.
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.IMAGE }}@${{ env.DIGEST }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ github.token }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ env.DIGEST }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      # Check the signature the way a reader will. This is also the first run
+      # of the certificate identity below, so a mistake in it shows here.
+      - name: Verify what was pushed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/image.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "$IMAGE_IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY"
+          docker pull "$IMAGE@$DIGEST"
+          inside="$(docker run --rm --entrypoint sha256sum "$IMAGE@$DIGEST" /usr/local/bin/verify-attestation.sh | cut -d' ' -f1)"
+          [ "$inside" = "$SCRIPT_SHA256" ] || { echo "the script in the image is $inside, the release says $SCRIPT_SHA256" >&2; exit 1; }
+          label="$(docker inspect --format '{{index .Config.Labels "com.hodeitek.verifier.script-sha256"}}' "$IMAGE@$DIGEST")"
+          [ "$label" = "$SCRIPT_SHA256" ] || { echo "the label says $label, the release says $SCRIPT_SHA256" >&2; exit 1; }
+
+      - name: Job summary
+        env:
+          IMAGE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/image.yml@${{ github.ref }}
+        run: |
+          {
+            echo "## Image for $TAG"
+            echo
+            echo "Digest: \`$DIGEST\`"
+            echo
+            echo "Script sha256 (from the release): \`$SCRIPT_SHA256\`"
+            echo
+            echo "Verify it:"
+            echo
+            echo '```bash'
+            echo "cosign verify $IMAGE@$DIGEST \\"
+            echo "  --certificate-identity \"$IMAGE_IDENTITY\" \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

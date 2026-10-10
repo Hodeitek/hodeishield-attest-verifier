@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh
 
   tests:
     name: offline tests (valid + rejection)
@@ -48,14 +48,37 @@ jobs:
         with:
           persist-credentials: false
       - name: Install openssl, python3, jq
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base locales
+      # A Latin-1 locale, for the test that the verdict does not depend on the
+      # locale (tests/run.sh requires it here: VERIFIER_REQUIRE_LATIN1 below).
+      - name: Generate the en_US.ISO-8859-1 locale
+        run: |
+          # localedef exits 1 on a mere warning; whether the locale exists is what counts.
+          localedef -c -i en_US -f ISO-8859-1 en_US.ISO-8859-1 || true
+          test "$(LC_ALL=en_US.ISO-8859-1 locale charmap)" = ISO-8859-1
       - name: Toolchain
         run: |
           openssl version
           openssl list -signature-algorithms | grep -i ml-dsa-65
           python3 --version
           jq --version
+      # cosign, the version and the installer release.yml pins. It is needed by
+      # the vectors with real Sigstore bundles (tests/vectors/v1/anchor/), which
+      # tests/vectors.sh skips where cosign is missing; the stub-based anchor
+      # tests in tests/run.sh do not need it.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+      - name: cosign version
+        run: cosign version
+      # VERIFIER_VERSION is the version --anchor-file compares a statement's
+      # release tag with: it must agree with CHANGELOG.md.
+      - name: VERIFIER_VERSION agrees with CHANGELOG.md
+        run: bash tests/version-consistency.sh
       - name: tests/run.sh
+        env:
+          VERIFIER_REQUIRE_LATIN1: "1"
         run: bash tests/run.sh
 
   # The README says an OpenSSL without ML-DSA is "a limit of your tooling, not

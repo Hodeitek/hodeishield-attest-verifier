@@ -1,0 +1,27 @@
+{
+  "schema": "hodeishield.keys.statement.v1",
+  "issuer": "https://app.hodeishield.com",
+  "keys": [
+    {
+      "kid": "roeFReafBOA_WF3cqfilHA",
+      "role": "attestation",
+      "status": "active",
+      "published_at": "https://app.hodeishield.com/api/public/attest/keys",
+      "active_since": "2026-07-31"
+    },
+    {
+      "kid": "1_9j4Qa0yh0DaIWNdo5shw",
+      "role": "attestation",
+      "status": "retired",
+      "published_at": "https://app.hodeishield.com/api/public/attest/keys",
+      "retired_at": "2026-07-31T18:53:58Z"
+    },
+    {
+      "kid": "ybyUZ2JKT6PFvTREXyU9_A",
+      "role": "status-list",
+      "status": "active",
+      "published_at": "https://app.hodeishield.com/api/public/attest/status-keys",
+      "active_since": "2026-07-31"
+    }
+  ]
+}

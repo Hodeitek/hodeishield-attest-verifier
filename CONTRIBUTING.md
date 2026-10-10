@@ -106,6 +106,22 @@ No issue stays open once the code that fixes it is on `main`.
 - Closing comments are in English and, like everything in this public
   repository, cite only public material.
 
+## Releasing
+
+The release commit does two things, and `tests/version-consistency.sh` checks
+both:
+
+- It sets `VERIFIER_VERSION` in `scripts/attest/verify-attestation.sh` to the
+  version being released. `--anchor-file` compares the release tag of a key
+  statement with it, so a statement from an older release is refused.
+- It dates the changelog heading: `## Unreleased` becomes
+  `## vX.Y.Z - YYYY-MM-DD`.
+
+Between releases, with `## Unreleased` on top, `VERIFIER_VERSION` is the next
+version and must be greater than the newest dated heading. On a tag push,
+`release.yml` fails before signing anything unless `VERIFIER_VERSION` equals the
+tag without its `v` and the changelog has the dated heading.
+
 ## Dependencies
 
 No third-party bot with write access runs on this repository.
@@ -117,11 +133,17 @@ No third-party bot with write access runs on this repository.
   in `release.yml`) are bumped by hand, in the periodic dependency reviews:
   - Take a new digest or release only once it is at least 7 days old.
   - The digest is pinned in the workflows (`ci.yml`, `live.yml`,
-    `release.yml`, and a comment in `container.yml`) and in the two container
-    commands in `README.md`. Change all of them in the same commit;
+    `release.yml`, `image.yml`, and a comment in `container.yml`), in
+    `container/Dockerfile`, and in the two container commands in `README.md`.
+    Change all of them in the same commit;
     `tests/container.sh` fails if they differ.
   - `bash tests/container.sh` must pass before the pull request is opened.
   - To read the current multi-architecture digest of the tag:
     `docker buildx imagetools inspect debian:trixie-slim` (the `Digest:` line).
+- **The cosign version** is also used by `image.yml`, which signs the container
+  image: bump it there in the same commit as in `release.yml`. `image.yml` also
+  pins `anchore/sbom-action` and `actions/attest` by commit SHA; Dependabot
+  moves both with the other actions. The SBOM tool (Syft) is the version the
+  pinned `anchore/sbom-action` runs.
 - **The `alpine:3.22` digest** in `ci.yml` (the LibreSSL job) follows the same
   rules: bumped by hand, at least 7 days old.

@@ -87,3 +87,48 @@ COMMON=(--attestation "$T/att.json" --jwks "$T/jwks.json"
 run "posture attestation for $SLUG verifies" 0 -- "${COMMON[@]}"
 run "$SLUG is not revoked per the live status list" 0 -- "${COMMON[@]}" \
   --status-list --status "$T/status.json" --status-keys "$T/status-keys.json"
+
+# The key anchor, after a release that publishes a key statement (v1.4.0 and
+# later): download the latest release's keys-statement.json and its bundle and
+# run the verifier on the production example with --anchor-file. It needs cosign
+# and the network. It SKIPS, with a warning, when cosign is missing here, when
+# GitHub cannot be reached, or when the latest release has no statement yet (the
+# releases before v1.4.0 do not). Anything else is a result: exit 0 is expected,
+# so a live key that the released statement does not list fails this check.
+anchor_skip() {
+  printf 'WARN  anchor step skipped: %s\n' "$1"
+  gha warning "anchor step skipped: $1"
+  exit 0
+}
+command -v cosign >/dev/null 2>&1 || anchor_skip 'cosign is not installed here'
+REPO_API='https://api.github.com/repos/Hodeitek/hodeishield-attest-verifier'
+GH_AUTH=()
+if [ -n "${GITHUB_TOKEN:-}" ]; then GH_AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN"); fi
+code="$(curl -sS --max-time 20 --retry 3 --retry-delay 5 -o "$T/release.json" -w '%{http_code}' \
+          -H 'Accept: application/vnd.github+json' "${GH_AUTH[@]}" "$REPO_API/releases/latest" 2>/dev/null)" || code=000
+case "$code" in
+  200) ;;
+  404) anchor_skip 'the repository has no published release yet' ;;
+  *) anchor_skip "could not read the latest release (HTTP $code)" ;;
+esac
+STMT_URLS="$(python3 -I -c '
+import json, sys
+a = {x["name"]: x["browser_download_url"] for x in json.load(open(sys.argv[1])).get("assets", [])}
+if "keys-statement.json" in a and "keys-statement.json.sigstore.json" in a:
+    print(a["keys-statement.json"]); print(a["keys-statement.json.sigstore.json"])
+' "$T/release.json" 2>/dev/null || true)"
+[ -n "$STMT_URLS" ] || anchor_skip 'the latest release has no keys-statement.json yet'
+mkdir -p "$T/anchor"
+n_assets=0
+while IFS= read -r url; do
+  case "$url" in
+    https://github.com/Hodeitek/hodeishield-attest-verifier/releases/download/*) ;;
+    *) fail "the latest release names an asset outside this repository's releases: $url" ;;
+  esac
+  curl -fsSL --max-time 30 --retry 3 --retry-delay 5 -o "$T/anchor/$(basename "$url")" "$url" \
+    || anchor_skip "could not download $(basename "$url")"
+  n_assets=$((n_assets + 1))
+done <<< "$STMT_URLS"
+[ "$n_assets" -eq 2 ] || fail "expected the statement and its bundle, got $n_assets assets"
+run "the production key is listed in the latest release's key statement" 0 -- "${COMMON[@]}" \
+  --anchor-file "$T/anchor/keys-statement.json"
