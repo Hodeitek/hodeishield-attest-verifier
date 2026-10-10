@@ -159,7 +159,7 @@ jobs:
       # attested with GitHub's own action; neither needs a third-party app with
       # write access. upload-release-assets is off so the release is untouched.
       - name: Generate the SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.IMAGE }}@${{ env.DIGEST }}
           registry-username: ${{ github.actor }}
