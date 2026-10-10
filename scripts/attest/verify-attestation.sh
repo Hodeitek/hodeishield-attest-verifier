@@ -205,7 +205,7 @@ set -euo pipefail
 # The version this script is released as. --anchor-file refuses a key statement
 # from an older release than this (anti-rollback); tests/version-consistency.sh
 # keeps it in step with CHANGELOG.md and, on a release, with the tag.
-VERIFIER_VERSION="1.4.0"
+VERIFIER_VERSION="1.4.1"
 
 JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''

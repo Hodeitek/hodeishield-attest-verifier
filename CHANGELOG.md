@@ -12,6 +12,40 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
+## Unreleased
+
+### Security
+- The loopback exception for cleartext `--status-keys` and `--status` URLs
+  matched URL prefixes, so some URLs whose host is not loopback were treated as
+  loopback, and a cleartext status key set was fetched with only a warning. Only
+  `http://localhost`, `http://127.0.0.1` and `http://[::1]`, with an optional
+  port, now count as loopback; the host is matched case-sensitively, so
+  `http://LOCALHOST` is not loopback and a status key set from it is refused. An
+  attacker who can choose the URL could already serve their own keys over
+  https, so this changes no verdict that `--anchor-file` does not already
+  decide; use `--anchor-file` to bind the status key (Closes #70).
+
+### Fixed
+- The container image was not built for v1.4.0: the release job downloaded only
+  some of the files that `SHA256SUMS` lists. It now reads the list from the
+  verified `SHA256SUMS`; the first image is v1.4.1.
+- A value given on the command line and printed back (`--expect-slug`,
+  `--expect-issuer`, `--expect-nonce`, the URLs of `--status` and
+  `--status-keys`, an unknown argument) and what curl says about a failed fetch
+  reached the terminal as given. They are now printed with control characters
+  and any byte outside printable ASCII as `\xHH`, like the values of a document
+  (Closes #71).
+
+### Changed
+- The script is parsed by more bash parsers: the `10#` arithmetic (a leading
+  zero is never octal) is written without it, and two other constructs that
+  Semgrep's bash parser rejected are written another way. No behaviour change.
+  CI now fails if `semgrep --lang bash` (pinned to an exact version) cannot
+  parse `verify-attestation.sh` completely.
+- README.md says that the "Attested content" block shows a character that is not
+  printable as `?` and prints other text as UTF-8, while check lines and
+  messages use `\xHH` (Closes #72).
+
 ## v1.4.0 - 2026-10-10
 
 `verify-attestation.sh` changes. sha256
