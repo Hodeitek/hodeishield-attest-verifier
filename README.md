@@ -143,10 +143,10 @@ command runs, so they carry Debian's current security updates.
 
 ### A signed image
 
-From v1.4.0 on, each release also publishes a ready-made image,
+Releases after v1.4.0 also publish a ready-made image,
 `ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
-(`:v1.4.0`). There is no `latest` tag, and releases before v1.4.0 have no
-image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
+(`:vX.Y.Z`). There is no `latest` tag, and v1.4.0 and earlier
+releases have no image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
 and its entrypoint is the verifier, so it needs no network to run. Take its
 digest from the release page, and pin that digest, not the tag. Check the
 signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):

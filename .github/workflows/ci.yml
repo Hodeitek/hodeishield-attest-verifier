@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh .github/scripts/fetch-release-assets.sh
 
   tests:
     name: offline tests (valid + rejection)
@@ -76,6 +76,10 @@ jobs:
       # release tag with: it must agree with CHANGELOG.md.
       - name: VERIFIER_VERSION agrees with CHANGELOG.md
         run: bash tests/version-consistency.sh
+      # The release path of image.yml never runs on a pull request; this checks
+      # it covers every file release.yml lists in SHA256SUMS, offline.
+      - name: image.yml covers every file in SHA256SUMS
+        run: bash tests/image-assets.sh
       - name: tests/run.sh
         env:
           VERIFIER_REQUIRE_LATIN1: "1"

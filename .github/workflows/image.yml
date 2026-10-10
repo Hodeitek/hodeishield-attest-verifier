@@ -36,6 +36,9 @@ on:
     paths:
       - container/Dockerfile
       - .github/workflows/image.yml
+      - .github/workflows/release.yml
+      - .github/scripts/fetch-release-assets.sh
+      - tests/image-assets.sh
       - scripts/attest/verify-attestation.sh
       - tests/image-smoke.sh
 
@@ -104,32 +107,20 @@ jobs:
           cosign-release: "v3.1.3"
 
       # The same check README.md gives a reader, against the published assets
-      # of this tag, before anything is built from them.
+      # of this tag, before anything is built from them. The files come from
+      # the verified SHA256SUMS, so a file release.yml adds is covered.
       - name: Download and verify the release assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
         run: |
           set -euo pipefail
-          mkdir dist
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
-            --pattern verify-attestation.sh \
-            --pattern SHA256SUMS \
-            --pattern verify-attestation.sh.sigstore.json \
-            --pattern SHA256SUMS.sigstore.json
-          cd dist
-          sha256sum -c SHA256SUMS
-          for f in verify-attestation.sh SHA256SUMS; do
-            cosign verify-blob --bundle "${f}.sigstore.json" \
-              --certificate-identity "$RELEASE_IDENTITY" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "$f"
-          done
-          sha="$(awk '$2 == "verify-attestation.sh" { print $1 }' SHA256SUMS)"
+          bash .github/scripts/fetch-release-assets.sh dist
+          sha="$(awk '$2 == "verify-attestation.sh" { print $1 }' dist/SHA256SUMS)"
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "no sha256 for verify-attestation.sh in SHA256SUMS" >&2; exit 1; }
           echo "SCRIPT_SHA256=$sha" >> "$GITHUB_ENV"
-          mkdir ../ctx
-          cp verify-attestation.sh ../ctx/
+          mkdir ctx
+          cp dist/verify-attestation.sh ctx/
 
       - name: Build
         env:
