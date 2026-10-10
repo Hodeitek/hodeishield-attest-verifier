@@ -49,6 +49,14 @@ before it takes effect. Only the latest release is supported, as
 - README.md says that the "Attested content" block shows a character that is not
   printable as `?` and prints other text as UTF-8, while check lines and
   messages use `\xHH` (Closes #72).
+- [`tools/mldsa-vectors`](tools/mldsa-vectors/README.md), a small Rust harness
+  that runs the ML-DSA-65 verify primitive of `aws-lc-rs` 1.18.1 over
+  `tests/vectors/v1` and checks it reaches the same signature verdict as the
+  script (47 cases checked, 0 disagree, 71 skipped because the manifest states
+  no signature verdict). A new CI workflow runs it when the harness, the
+  vectors or the script change. It is not the Rust port and does not change the script
+  ([docs/security/rust-mldsa-evaluation.md](docs/security/rust-mldsa-evaluation.md);
+  Refs #30).
 
 ## v1.4.0 - 2026-10-10
 

@@ -113,8 +113,8 @@ A 1.0 version number alone does not meet the intent of the policy.
 
 ## Recommendation
 
-- **Native binary: conditional go on `aws-lc-rs` (>= 1.18.0), once the
-  vectors check below passes in CI.** It is the only candidate that is >= 1.0
+- **Native binary: conditional go on `aws-lc-rs` (>= 1.18.0). The vectors check
+  passes (see "Result of the vector check").** It is the only candidate that is >= 1.0
   with verification in the stable API. Two points the owner must accept or
   reject first: the C/asm code underneath, and `aws-lc-sys` being pre-1.0.
   Its FIPS status for ML-DSA is not confirmed and must not be cited.
@@ -134,16 +134,26 @@ records that the issuer side uses a pre-1.0, unaudited Rust ML-DSA library.
 A verifier whose point is that the evaluator need not trust us should not add
 a second one.
 
-## How the vector criterion will be met
+## Result of the vector check
 
 Issue #30 requires that any candidate verify the same vectors as the bash
-script. That is not done here and is not checked on a developer machine:
-`tests/vectors/v1` includes negative cases. It will be done in CI, as part of
-the Rust port work (#29): the selected crate verifies every case in
-`tests/vectors/v1` and must give the same outcome as the bash script for each
-(accepted or rejected, and the same failure class). A single difference
-rejects the candidate. This criterion stays open until that CI job exists and
-passes.
+script. For `aws-lc-rs` this was run on 2026-10-11 by
+[`tools/mldsa-vectors`](../../tools/mldsa-vectors/README.md), a small harness
+(not the port, #29) that gives `aws_lc_rs::signature::ML_DSA_65` the signing
+input and key of each case in `tests/vectors/v1` and compares its accept or
+reject with the signature verdict the manifest states for the reference
+script. With `aws-lc-rs` 1.18.1 (`aws-lc-sys` 0.45.0): 118 cases, 47 checked
+and agreed, 0 disagreed, 71 skipped (3 anchor cases decided by cosign, and 68
+whose reason for failing is not the signature, so the manifest states no
+signature verdict). The 47 cover valid documents, tampered fields, flipped
+signature bytes, a signature by another key, a transplanted signature, wrong
+signature sizes, and status lists. The harness fails if any case disagrees or
+if fewer than 47 are checked. It runs in CI (`.github/workflows/mldsa-vectors.yml`)
+when the harness, the vectors or the script change.
+
+This is a check of the primitive's signature verdict only. It is not a check of
+the whole verifier, and it does not change the points under "Not confirmed". The
+other candidates were not run: none of them meets the stability policy.
 
 ## Not confirmed
 

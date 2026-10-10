@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
+name: ML-DSA vectors
+
+# Runs the ML-DSA-65 verify primitive of aws-lc-rs over tests/vectors/v1 and
+# compares its signature verdict with the reference script's (issue #30). It
+# builds a C library (AWS-LC) and a Rust program, so it only runs when the
+# harness, the vectors, the script (whose canonical encoders it runs) or this
+# file change. The toolchain is the official Rust
+# image, pinned by version and digest (1.97.1, Debian 13), like the Debian image
+# of ci.yml: a rebuilt tag cannot change what the harness ran on.
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "tools/mldsa-vectors/**"
+      - "tests/vectors/**"
+      - "scripts/attest/verify-attestation.sh"
+      - ".github/workflows/mldsa-vectors.yml"
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "tools/mldsa-vectors/**"
+      - "tests/vectors/**"
+      - "scripts/attest/verify-attestation.sh"
+      - ".github/workflows/mldsa-vectors.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mldsa-vectors-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  vectors:
+    name: aws-lc-rs ML-DSA-65 agrees with the vectors
+    runs-on: ubuntu-latest
+    container: rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # python3 runs the canonical encoders that the reference script embeds.
+      - name: Install python3
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends python3
+      # --locked: Cargo.lock is committed and must not change in CI.
+      - name: Build the harness
+        working-directory: tools/mldsa-vectors
+        run: cargo build --locked --release
+      - name: Run the harness over tests/vectors/v1
+        run: tools/mldsa-vectors/target/release/mldsa-vectors tests/vectors/v1 scripts/attest/verify-attestation.sh

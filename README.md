@@ -569,6 +569,10 @@ the reason it is a short, single, readable script.
   signature check cannot pass the suite. `tests/run.sh` runs it too;
   `VERIFIER_SKIP_MUTANTS=1 bash tests/run.sh` skips it locally. CI always runs
   it and fails if that variable is set there.
+- A separate workflow runs `tools/mldsa-vectors`, a Rust harness that checks the
+  ML-DSA-65 primitive of `aws-lc-rs` against the signature verdicts in the test
+  vectors, when it, the vectors or the script change. It is a test of a candidate library for
+  a future port, not part of the verifier; see its README.
 - Two jobs check that the verifier exits 2 ("could not check"), never 1, when
   its `openssl` cannot do ML-DSA: one with an OpenSSL older than 3.5, one with
   real LibreSSL in a digest-pinned Alpine image.
