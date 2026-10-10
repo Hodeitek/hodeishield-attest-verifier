@@ -708,7 +708,7 @@ while [ $# -gt 0 ]; do
     --json)         shift ;;
     --version)      plain_output; printf 'verify-attestation.sh %s\n' "$VERIFIER_VERSION"; exit 0 ;;
     -h|--help)      plain_output; usage; exit 0 ;;
-    *) arg_die "unknown argument: $1" ;;
+    *) arg_die "unknown argument: $(esc "$1")" ;;
   esac
 done
 # An option of the status-list mode without --status-list would be read by
@@ -1053,6 +1053,18 @@ is_loopback_url() {
   return 0
 }
 
+# fetch_url URL OUT — curl URL into OUT; what curl says about a failure goes to
+# stderr through esc (it quotes the URL, and the host or the part of the URL it
+# could not read, as given on the command line).
+fetch_url() {
+  local errf="$WORKDIR/curl.err" rc=0
+  curl -fsS --max-time 15 --max-filesize 5000000 -o "$2" "$1" 2> "$errf" || rc=$?
+  if [ "$rc" -ne 0 ] && [ -s "$errf" ]; then
+    printf '%s\n' "$(esc "$(cat "$errf")")" >&2
+  fi
+  return "$rc"
+}
+
 # Fetch (http(s):// URL, via curl) or read (anything else, as a file path) SRC
 # into OUT, labelling it ROLE for the messages below. Used by --status-list for
 # --status/--status-keys, which accept either the raw `curl -o` output of the
@@ -1089,19 +1101,20 @@ is_loopback_url() {
 # --max-time 15, so a hostile endpoint can stream into the (0700, mktemp -d)
 # work directory for up to 15 seconds.
 fetch_or_read() {
-  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}"
+  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}" shown=''
+  shown="$(esc "$src")"
   case "$src" in
     https://*)
-      curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
+      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
       ;;
     http://*)
       if is_loopback_url "$src"; then
-        warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${src}"
-        curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
+        warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${shown}"
+        fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
         return 0
       fi
       if [ "$role" = 'status key set' ]; then
-        die status_keys_cleartext_refused "refusing to fetch the STATUS KEY SET over cleartext HTTP: ${src}
+        die status_keys_cleartext_refused "refusing to fetch the STATUS KEY SET over cleartext HTTP: ${shown}
 
        The key set is the trust anchor for everything section 8 checks. Fetched
        over http://, anyone on the path can replace it with keys they hold and
@@ -1111,13 +1124,13 @@ fetch_or_read() {
 
        Use https://, or fetch it yourself and pass the file, which makes the
        decision yours rather than this script's:
-         curl -fsS ${src} -o status-keys.json
+         curl -fsS ${shown} -o status-keys.json
          verify-attestation.sh --status-list --status-keys status-keys.json ..."
       fi
-      warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${src}"
+      warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${shown}"
       warn_more "the list is signed, so tampering shows up as a failed signature (=> unknown),"
       warn_more "but use https:// — a downgrade you did not notice is not a threat model."
-      curl -fsS --max-time 15 --max-filesize 5000000 -o "$out" "$src" || die fetch_failed "failed to fetch ${src}"
+      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
       ;;
     *)
       [ -r "$src" ] || die file_unreadable "cannot read $(esc "$name")"
@@ -2378,7 +2391,7 @@ if [ -n "$POSTURE_FILE" ]; then
     if [ "$SLUG" = "$EXPECT_SLUG" ]; then
       ok slug_match "posture is for slug '$(esc "${SLUG}")', as expected"
     else
-      bad slug_mismatch "posture is for slug '$(esc "${SLUG}")', not the expected '${EXPECT_SLUG}' —
+      bad slug_mismatch "posture is for slug '$(esc "${SLUG}")', not the expected '$(esc "${EXPECT_SLUG}")' —
           this attestation belongs to a different organisation"
     fi
   fi
@@ -2463,7 +2476,7 @@ if [ -n "$CLAIMS_FILE" ]; then
     if [ "$CLAIMS_ISS" = "$EXPECT_ISSUER" ]; then
       ok issuer_match "iss (E2) is '$(esc "${CLAIMS_ISS}")', as expected"
     else
-      bad issuer_mismatch "issuer_mismatch — iss is '$(esc "${CLAIMS_ISS}")', not the expected '${EXPECT_ISSUER}'"
+      bad issuer_mismatch "issuer_mismatch — iss is '$(esc "${CLAIMS_ISS}")', not the expected '$(esc "${EXPECT_ISSUER}")'"
     fi
   else
     warn issuer_unpinned "no --expect-issuer: iss is '$(esc "${CLAIMS_ISS}")' and nothing pinned it. The key set you"
@@ -2482,7 +2495,7 @@ if [ -n "$CLAIMS_FILE" ]; then
     elif [ "$CLAIMS_NONCE_PRESENT" = '1' ] && [ "$CLAIMS_NONCE" = "$EXPECT_NONCE" ]; then
       ok nonce_match "nonce (E5) echoes your challenge verbatim — this document was minted for you, now"
     else
-      bad nonce_mismatch "nonce_mismatch — you challenged with '${EXPECT_NONCE}', the document carries \
+      bad nonce_mismatch "nonce_mismatch — you challenged with '$(esc "${EXPECT_NONCE}")', the document carries \
 '$(esc "${CLAIMS_NONCE:-null}")'. A replayed or substituted document, however well it verifies."
     fi
   elif [ "$CLAIMS_NONCE_PRESENT" = '1' ]; then
@@ -2796,7 +2809,7 @@ if [ "$STATUS_FAILURES" -eq 0 ] && [ -n "$EXPECT_ISSUER" ]; then
   if [ "$LIST_ISS" = "$EXPECT_ISSUER" ]; then
     ok status_issuer_match "iss is '$(esc "${LIST_ISS}")', as expected"
   else
-    stat_bad status_unknown_issuer_mismatch "issuer_mismatch — iss is '$(esc "${LIST_ISS}")', expected '${EXPECT_ISSUER}'"
+    stat_bad status_unknown_issuer_mismatch "issuer_mismatch — iss is '$(esc "${LIST_ISS}")', expected '$(esc "${EXPECT_ISSUER}")'"
   fi
 fi
 

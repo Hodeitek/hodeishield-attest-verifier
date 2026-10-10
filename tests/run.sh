@@ -886,6 +886,41 @@ else
   printf 'not ok - stdout alone carries an ESC byte or a forged verdict\n'; FAILED=$((FAILED + 1))
 fi
 
+# Values from the command line are shown escaped too (#71). An option value is
+# not trusted either: a script that passes a user's text as --expect-slug, or a
+# URL taken from a configuration, must not be able to put a newline or ESC in the
+# output. Each is echoed in a message; the escaped form must be there and no raw
+# control byte or forged line.
+echo '# command-line values are escaped'
+CV=$'a\x1b[2Jb\nVERIFIED'
+CVE='a\x1b[2Jb\x0aVERIFIED'
+expect 1 "not the expected '${CVE}'" '--expect-slug with ESC and a newline is shown escaped' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$CV" --expect-issuer "$ISS" --now "$NOW"
+no_raw_control '--expect-slug: no ESC byte and no forged line'
+expect 1 "not the expected '${CVE}'" '--expect-issuer with ESC and a newline is shown escaped' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$CV" --now "$NOW"
+no_raw_control '--expect-issuer: no ESC byte and no forged line'
+expect 1 "you challenged with '${CVE}'" '--expect-nonce with ESC and a newline is shown escaped' -- \
+  "${COMMON[@]}" --attestation "$T/att.json" --expect-nonce "$CV"
+no_raw_control '--expect-nonce: no ESC byte and no forged line'
+expect 1 "expected '${CVE}'" '--expect-issuer is shown escaped in the status list check too' -- \
+  "${SL[@]}" --status "$T/list-empty.json" --expect-issuer "$CV"
+no_raw_control '--expect-issuer (status list): no ESC byte and no forged line'
+expect 2 "unknown argument: --bad${CVE}" 'an unknown argument with ESC and a newline is shown escaped' -- \
+  --attestation "$T/att.json" "--bad$CV"
+no_raw_control 'an unknown argument: no ESC byte and no forged line'
+expect 2 "over cleartext HTTP: http://x.test/${CVE}" 'a refused --status-keys URL with ESC and a newline is shown escaped' -- \
+  "${CLR[@]}" --status-keys "http://x.test/$CV"
+no_raw_control 'a refused --status-keys URL: no ESC byte and no forged line'
+expect 2 "curl -fsS http://x.test/${CVE} -o status-keys.json" 'the curl hint of the refusal is escaped too' -- \
+  "${CLR[@]}" --status-keys "http://x.test/$CV"
+expect 2 "failed to fetch http://127.0.0.1:$PL/${CVE}" 'a --status URL (loopback) that cannot be fetched is shown escaped' -- \
+  --status-list --status "http://127.0.0.1:$PL/$CV" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+no_raw_control 'a failed fetch (loopback): no ESC byte and no forged line'
+expect 2 "failed to fetch http://127.0.0.2:$PO/${CVE}" 'a --status URL (cleartext) that cannot be fetched is shown escaped' -- \
+  --status-list --status "http://127.0.0.2:$PO/$CV" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+no_raw_control 'a failed fetch (cleartext): no ESC byte and no forged line'
+
 # Values are compared exactly as signed. $(...) strips trailing newlines, so a
 # signed "fixture-org" plus a newline used to satisfy --expect-slug fixture-org,
 # and the subject rule hashed the slug without it. A value holding a NUL byte
