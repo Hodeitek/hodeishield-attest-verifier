@@ -290,6 +290,12 @@ an unknown argument), and what curl says about a failed fetch, is printed with
 control characters, and any byte outside printable ASCII, as a visible `\xHH`
 escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
 
+The "Attested content" block is the one place that shows text another way,
+because it is only printed for a document that verified: a character that is not
+printable is shown as `?` (not as `\xHH`), and any other text, such as a label
+with a non-ASCII character, is printed as UTF-8, whatever the terminal encoding.
+The check lines and messages above never do that.
+
 ## Machine-readable output
 
 `--json` prints one JSON object on stdout and nothing else (no text on stdout

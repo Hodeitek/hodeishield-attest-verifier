@@ -833,6 +833,21 @@ expect 1 "$WITHHELD" 'in --status-list mode a failed posture check withholds the
   --attestation "$T/tampered-field.json" "${COMMON[@]}" --raw
 lacks_all 'a tampered document under a GOOD list shows none of its attested values' "${SECRETS[@]}" '"frameworks"'
 
+# The block shows text in its own way (#72): a character that is not printable is
+# a "?", not \xHH, and any other text is UTF-8 whatever the terminal encoding. The
+# check lines and messages escape as \xHH instead. A signed slug and framework code
+# that carry an ESC byte show both forms in one run. The UTF-8 label is the
+# "ens—alto" case further down.
+BLK_SLUG=$'fixture\x1b[2Jorg'
+mint_attest --out "$T/blk-ctl.json" --slug "$BLK_SLUG" --framework $'ens\x1b[2Jx=basic'
+expect 0 'subject:     fixture?[2Jorg  (visibility: public)' 'the attested content block shows a non-printable character of the slug as ?' -- \
+  --attestation "$T/blk-ctl.json" --jwks "$T/jwks.json" --expect-slug "$BLK_SLUG" --expect-issuer "$ISS" --now "$NOW"
+lacks_all 'the block has no raw ESC byte' $'\033'
+expect 0 'ENS?[2JX (ens?[2Jx): basic' 'the attested content block shows a non-printable character of a framework as ?' -- \
+  --attestation "$T/blk-ctl.json" --jwks "$T/jwks.json" --expect-slug "$BLK_SLUG" --expect-issuer "$ISS" --now "$NOW"
+expect 0 "posture is for slug 'fixture\\x1b[2Jorg', as expected" 'the check line shows the same slug as \xHH' -- \
+  --attestation "$T/blk-ctl.json" --jwks "$T/jwks.json" --expect-slug "$BLK_SLUG" --expect-issuer "$ISS" --now "$NOW"
+
 # Values taken from a document are shown escaped (#14). Anyone can edit a
 # document, and a nonce with newlines and ESC bytes could otherwise forge an
 # "Attested content" block or a "VERIFIED" line above the real FAIL lines. The
