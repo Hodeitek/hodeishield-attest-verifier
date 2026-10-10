@@ -12,7 +12,10 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
-## Unreleased
+## v1.4.0 - 2026-10-10
+
+`verify-attestation.sh` changes. sha256
+`dc6f227a0ae92d9e1fe8e9852fb0d4b22bfe6868f2690a6a0d91497348b01123`.
 
 ### Added
 - `--json`: one JSON object on stdout and nothing else, with the verdict, the
