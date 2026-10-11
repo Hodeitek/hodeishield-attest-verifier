@@ -252,7 +252,7 @@ never replaces it. In the same way the list is always applied to the document's
 own slug at its own `generatedAt`; `--check-subject` and `--check-generated-at`
 add a subject to look up and never replace it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
 `--check-generated-at` and `--min-seq` need `--status-list`: without it they are
-a usage error, exit 2. The script reads at most 5,000,000 bytes of the status list,
+a usage error, exit 2. The script reads at most 2,000,000 bytes of the status list,
 1,000,000 of the status key set and 4,096 of a decoded protected header (a real
 one is about 100 bytes, the live list under 6,000 and the key set under 3,000);
 anything larger is not read: UNKNOWN (exit 3) for the status list, exit 2 for the

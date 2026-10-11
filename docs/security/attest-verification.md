@@ -1428,7 +1428,7 @@ duplicated. Verified against the script as committed
 flags below ever diverge from `scripts/attest/verify-attestation.sh --help`,
 trust the script).
 
-**Size limits.** The script reads no more than 5,000,000 bytes of the status
+**Size limits.** The script reads no more than 2,000,000 bytes of the status
 list, 1,000,000 of the status key set and 4,096 bytes of a decoded protected
 header (a real header is about 100 bytes; the live list is under 6,000 bytes and
 the live key set under 3,000). A status list, key set or status header over its

@@ -62,16 +62,29 @@ signed or published.
 
 ### Changed
 - Input size limits, so that no document can keep a parser busy: at most
-  5,000,000 bytes of the status list (`--status`, a file or a URL), 1,000,000 of
+  2,000,000 bytes of the status list (`--status`, a file or a URL), 1,000,000 of
   the status key set and 4,096 of a decoded protected header (a real header is
-  about 100 bytes, the live list under 6,000 bytes and the key set under 3,000).
-  Over the limit the input is not read: UNKNOWN (exit 3, new reason codes
+  about 100 bytes, the live list under 6,000 bytes and the key set under 3,000;
+  a revoked subject takes about 170 bytes in a list, so the limit holds some
+  11,800 of them). Padding the list with members the signature does not cover,
+  up to the limit, takes about 10 seconds and 0.9 GB; at the old download limit
+  of 5,000,000 bytes it took 24 seconds and 2.2 GB. Over the limit the input is
+  not read: UNKNOWN (exit 3) with the new reason codes
   `status_unknown_document_too_large`, `status_unknown_keys_too_large` and
-  `status_unknown_header_too_large`) for the status list, or, for the
-  attestation's own header, exit 2 (`header_too_large`, the exit of a header that
-  is not base64url). The limits are fixed in the script. Downloads were already
-  limited to 5,000,000 bytes; a server that sent more now gives the same UNKNOWN
-  instead of a failed fetch.
+  `status_unknown_header_too_large` for the status list, its key set and its
+  header, and, for the attestation's own header, a failed check (exit 1,
+  `header_too_large`; only the first 4,096 bytes are read). That header was
+  already a failed check (exit 1, `header_not_allowed`, for the member beyond
+  alg, kid and typ that made it large): the exit is the same and the reason now
+  reported first is `header_too_large`. The limits are fixed in the script.
+  What changes for a download: its limit was 5,000,000 bytes for both documents
+  and is now 2,000,000 for the list and 1,000,000 for the key set, and a body over
+  the limit gives that UNKNOWN instead of a failed fetch (exit 2). A local list
+  or key set over its limit is UNKNOWN where it used to be read.
+- The status list is read with fewer passes: the scalar fields are read in one
+  pass, `list.json` is written compact, and a list padded with 2,000,000 bytes
+  that the signature does not cover now takes about 10 seconds, where it took up to three minutes and four
+  gigabytes (Closes #80).
 - The script is parsed by more bash parsers: the `10#` arithmetic (a leading
   zero is never octal) is written without it, and two other constructs that
   Semgrep's bash parser rejected are written another way. No behaviour change.
