@@ -59,8 +59,7 @@ cannot emit.
 | `openssl_mldsa65_missing` | This OpenSSL does not offer ML-DSA-65. | fail | 2 | both |  |
 | `openssl_mldsa65_available` | OpenSSL offers ML-DSA-65. | pass | 0 | both |  |
 | `python3_missing` | `python3` is needed for this step and is not installed. | fail | 2 | both |  |
-| `jq_missing` | `jq` is not installed. | fail | 2 | status-list |  |
-| `tools_present` | `python3` and `jq` are present. | pass | 0 | status-list |  |
+| `tools_present` | `python3` is present. | pass | 0 | status-list |  |
 | `curl_missing` | `curl` is needed to fetch a URL and is not installed. | fail | 2 | status-list |  |
 | `spki_tool_missing` | Neither `xxd` nor `python3` is available to build the key header. | fail | 2 | both |  |
 | `fetch_failed` | Fetching a `--status` or `--status-keys` URL failed. | fail | 2 | status-list |  |
