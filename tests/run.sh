@@ -847,6 +847,10 @@ t = t.replace('\"truncated\":', '\"x\":' + fill + ',\"truncated\":', 1)"
   pad_to "$T/list-pad-$filler.json" "$T/list-pad-$filler.json" 2000000
   expect 0 'GOOD — not revoked, per a verified status list' "a status list padded to the cap with $filler filler under an unsigned member is still read" -- \
     "${SL[@]}" --status "$T/list-pad-$filler.json"
+  # Every kid and subject asked for is looked up in the same pass over the list, so
+  # asking for more costs next to nothing.
+  expect 0 'subjects fixture-org, other-org carry no earlier withdrawal' "the same list with --check-kid and --check-subject ($filler filler) is read in time too" -- \
+    "${SL[@]}" --status "$T/list-pad-$filler.json" --check-kid "$OTHER_KID" --check-subject other-org --check-generated-at "$GEN"
 done
 pad_to "$T/status-keys.json" "$T/keys-at-cap.json" 1000000
 pad_to "$T/status-keys.json" "$T/keys-over-cap.json" 1000001
@@ -868,6 +872,39 @@ expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key 
   --status-list --status "$T/list-empty.json" --status-keys "http://127.0.0.1:$PB/k.json" --attestation "$T/att.json" "${COMMON[@]}"
 expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set URL that sends 2000000 bytes is stopped and is UNKNOWN too' -- \
   --status-list --status "$T/list-empty.json" --status-keys "http://127.0.0.1:$PB/k2.json" --attestation "$T/att.json" "${COMMON[@]}"
+# A ~/.curlrc with `compressed` must not let a few kilobytes of gzip become a huge
+# file past --max-filesize: the fetch asks for no decoding (--no-compressed), so the
+# body stays what was sent, the gzip bytes, and is not strict JSON. ulimit -f makes a
+# file over 2.1 MB fail at once, so a regression cannot fill the disk either. The
+# URL is on 127.0.0.2, which is not loopback (loopback fetches ignore ~/.curlrc).
+cat > "$T/gzsrv.py" <<'PY'
+import gzip, http.server, sys
+body = gzip.compress(b"0" * 50_000_000)
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args): pass
+http.server.HTTPServer((sys.argv[2], int(sys.argv[1])), H).serve_forever()
+PY
+GZPORT="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.2", 0)); print(s.getsockname()[1])')"
+python3 -I "$T/gzsrv.py" "$GZPORT" 127.0.0.2 > "$T/gzsrv.log" 2>&1 &
+SRV_PIDS+=("$!")
+for (( gzi = 0; gzi < 100; gzi++ )); do
+  if (exec 3<> "/dev/tcp/127.0.0.2/$GZPORT") 2>/dev/null; then break; fi
+  sleep 0.1
+done
+mkdir "$T/curlhome"; printf 'compressed\n' > "$T/curlhome/.curlrc"
+ULIMITV="$T/ulimit-verifier.sh"
+printf '#!/usr/bin/env bash\nulimit -f 2100\nexec timeout 20 bash "%s" "$@"\n' "$VERIFIER_NOTIMEOUT" > "$ULIMITV"
+VERIFIER="$ULIMITV"
+CURL_HOME="$T/curlhome" expect 3 'status.json is not strict JSON' 'a gzip body that unpacks to 50 MB is read as it was sent, despite a curlrc with compressed (UNKNOWN)' -- \
+  --status-list --status "http://127.0.0.2:$GZPORT/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+VERIFIER="$SIZEV"
 # Headers: the status list's (UNKNOWN) and the attestation's (could not check).
 edit_text "$T/list-empty-compact.json" "$T/list-big-header.json" '
 import base64, re
@@ -895,6 +932,15 @@ assert len(json.dumps(hdr)) == 4097
 d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
 expect 1 'protected header is' 'an attestation header of 4097 bytes fails for its size (1)' -- \
   --attestation "$T/att-over-header.json" "${COMMON[@]}"
+edit "$T/att.json" "$T/att-late-kid.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+old = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr = {"alg": old["alg"], "pad": "x" * 5000, "kid": old["kid"], "typ": old["typ"]}
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'protected header is' 'an attestation header whose kid lies past byte 4096 still fails (1), as before the cap' -- \
+  --attestation "$T/att-late-kid.json" "${COMMON[@]}"
+lacks 'no key in this JWKS' 'a kid past byte 4096 is still found'
 edit "$T/att.json" "$T/att-cap-header.json" '
 import base64, json
 h, rest = d["attestation"]["signature"].split(".", 1)

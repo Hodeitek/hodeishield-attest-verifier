@@ -1102,12 +1102,15 @@ is_loopback_url() {
 # loopback URL, curl ignores ~/.curlrc (-q, which must be its first argument) and
 # every proxy setting (--noproxy '*'): through a proxy, "loopback" would leave
 # this machine in cleartext. Other URLs keep the user's curl settings, since https
-# may need a proxy.
+# may need a proxy, except that a ~/.curlrc cannot switch on `compressed` (curl
+# would then write a body of any size from a few kilobytes of gzip, past
+# --max-filesize) or `location` (redirects are not followed, see fetch_or_read):
+# --no-compressed and --no-location come after it, on every fetch.
 fetch_url() {
   local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=() lim=0
   if [ "${3:-}" = loopback ]; then curl_q=(-q); curl_np=(--noproxy '*'); fi
   lim=$(( ${4:-5000000} + 1 ))
-  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize "$lim" -o "$2" "$1" 2> "$errf" || rc=$?
+  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff --no-compressed --no-location "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize "$lim" -o "$2" "$1" 2> "$errf" || rc=$?
   if [ "$rc" -ne 0 ] && [ "$rc" -ne 63 ] && [ -s "$errf" ]; then
     printf '%s\n' "$(esc "$(cat "$errf")")" >&2
   fi
@@ -1228,6 +1231,20 @@ lf_get() {
 
 # lf_val NAME — print the loaded value (nothing when the read failed).
 lf_val() { local lf_out_=''; lf_get lf_out_ "$1" || true; printf '%s' "$lf_out_"; }
+
+# The kids and subjects to look up are read in one pass too, after the fields
+# (load_lookups KIND VALUE ...): LK_RC[i] and LK_VAL[i] are the status and the
+# result of the i-th query. A query that was not answered reads as failed, which
+# every user of it turns into UNKNOWN.
+LK_RC=(); LK_VAL=()
+load_lookups() {
+  local rc='' val='' n=0
+  LK_RC=(); LK_VAL=()
+  while IFS= read -r -d '' rc && IFS= read -r -d '' val; do
+    LK_RC[n]="$rc"; LK_VAL[n]="$val"; n=$(( n + 1 ))
+  done < <(jsonq lookup "$WORKDIR/list.json" "$@" 2>/dev/null)
+  return 0
+}
 
 # list_field VAR FILE FILTER — set VAR to what FILTER (one of the few jsonq
 # `field` filters, written as the jq filter it replaces) selects in FILE, as
@@ -1459,31 +1476,29 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 # argv[1] = mode, argv[2] = file:
 #   object                 exit 0 when the last value of the file is an object
 #                          (jq -e 'type=="object"')
-#   shape                  exit 0 for an object with members statusList and signature
 #   crit                   exit 0 for an object with a member crit (has("crit"))
 #   field FILTER           what `jq -j FILTER` prints, NUL bytes shown as \x00 (exit 3
 #                          when a string held one); FILTER is exactly one of
 #                          '.docVersion // empty', 'keys_unsorted | sort | join(",")'
-#                          or .name; exit 2 when jq would have failed
+#                          or .name; exit 2 when the read failed
+#   raw NAME               `jq -r .NAME`
 #   split OUT              for a status document: exit 1 unless it is an object with
 #                          statusList and signature; else write statusList to OUT
 #                          (compact) and print the signature as `raw` does
-#   sub NAME / csub NAME / raw NAME
-#                          `jq .NAME` / `jq -c .NAME` / `jq -r .NAME`
 #   list                   the scalar fields of a status list in one read, as
 #                          NAME NUL STATUS NUL VALUE NUL records: docVersion, kid,
 #                          iss, issuedAt, nextUpdate and seq as `field` gives them
 #                          (STATUS is its exit status), raw_iss, raw_seq and
 #                          raw_truncated as `raw` gives them (NUL bytes dropped,
 #                          trailing newlines cut: what $(...) keeps), len_keys and
-#                          len_subjects as `length` gives them, and selfrev (1 when
-#                          a revoked key has the list's own kid, as `sel` finds it)
-#   length NAME            `jq '.NAME | length'`
-#   sel LIST MEMBER VALUE [OUT]
-#                          the elements of .LIST[]? whose .MEMBER equals VALUE: with
-#                          no OUT only the exit status (0 when one exists); with
-#                          OUT -c each element, compact; with OUT a member name,
-#                          its `-r` value; one per line
+#                          len_subjects (the number of keys and subjects), and
+#                          selfrev (1 when a revoked key has the list's own kid)
+#   lookup KIND VALUE ...  for each pair, one STATUS NUL VALUE NUL record: KIND k, the
+#                          reason of the first revoked key whose kid is VALUE (its
+#                          first line, NUL bytes dropped); KIND s, the first revoked
+#                          subject whose subjectHash is VALUE, compact; empty when
+#                          there is none. STATUS 2 (and an empty value) when the
+#                          list could not be read, as `jq ... | head -1` failing did
 #   pretty                 `jq .` of every value in the file
 # Any other failure is exit 2 and nothing on stderr.
 JSONQ_PY='
@@ -1631,7 +1646,6 @@ def main(a):
         return 0
     if len(docs) != 1: raise ValueError("expected one document")
     d = docs[0]
-    if mode == "shape": return 0 if isinstance(d, dict) and "statusList" in d and "signature" in d else 1
     if mode == "crit": return 0 if isinstance(d, dict) and "crit" in d else 1
     if mode == "field":
         text_, rc = fval(d, a[2])
@@ -1664,22 +1678,28 @@ def main(a):
         with open(a[2], "wb") as fh: fh.write((dump(d["statusList"]) + "\n").encode("utf-8"))
         w((sig + "\n").encode("utf-8"))
         return 0
-    if mode == "csub": w((dump(member(d, a[2])) + "\n").encode("utf-8"))
-    elif mode == "sub": w((dump(member(d, a[2]), True) + "\n").encode("utf-8"))
-    elif mode == "raw": w((plain(member(d, a[2])) + "\n").encode("utf-8"))
-    elif mode == "length":
-        v = member(d, a[2])
-        w(("%d\n" % (0 if v is None else len(v))).encode("utf-8"))
-    elif mode == "sel":
-        hit = False
-        items = member(d, a[2])
-        if isinstance(items, dict): items = list(items.values())
-        elif not isinstance(items, list): items = []
-        for e in items:
-            if member(e, a[3]) == arg(a[4]):
-                hit = True
-                if len(a) > 5: w(((dump(e) if a[5] == "-c" else plain(member(e, a[5]))) + "\n").encode("utf-8"))
-        return 0 if hit or len(a) > 5 else 1
+    if mode == "raw": w((plain(member(d, a[2])) + "\n").encode("utf-8"))
+    elif mode == "lookup":
+        # a[2:] = KIND VALUE ...: k = the first revoked key with this kid, s = the first
+        # revoked subject with this hash. One record per query: STATUS NUL VALUE NUL,
+        # the value being the first line of the reason of the key (NUL bytes dropped, as
+        # command substitution drops them) or the entry of the subject, compact; empty when there is none.
+        out = []
+        for i in range(0, len(a) - 2, 2):
+            lst, mem = ("keys", "kid") if a[2 + i] == "k" else ("subjects", "subjectHash")
+            want = arg(a[3 + i])
+            try:
+                items = member(d, lst)
+                items = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else []
+                first = None
+                for e in items:
+                    if member(e, mem) == want and first is None: first = e
+                if first is None: val = ""
+                elif lst == "keys": val = plain(member(first, "reason")).split("\n")[0].replace("\0", "")
+                else: val = dump(first)
+                out.append("0\0%s\0" % val)
+            except Exception: out.append("2\0\0")
+        w("".join(out).encode("utf-8"))
     else: raise ValueError(mode)
     return 0
 try: rc = main(sys.argv[1:])
@@ -2367,12 +2387,14 @@ b64url_decode "$H" > "$WORKDIR/header.json" || die header_not_base64url "header 
 HEADER_LEN="$(wc -c < "$WORKDIR/header.json" | tr -d ' ')"
 if [ "$HEADER_LEN" -gt "$HEADER_MAX_BYTES" ]; then
   # A failed check (exit 1), as the same document was before the cap (it had a
-  # member beyond alg, kid, typ). Only the first HEADER_MAX_BYTES bytes are read
-  # by what follows, so the cost of this header is bounded.
+  # member beyond alg, kid, typ). The members are looked up with sed in the whole
+  # header (header.full, see header_field: one pass, as before, so the key is found
+  # wherever the kid lies); the JSON reader, grep and the display see only the first
+  # HEADER_MAX_BYTES bytes, so what the cap bounds is the parsing.
   bad header_too_large "protected header is ${HEADER_LEN} bytes, over the ${HEADER_MAX_BYTES} a header of this format can have; \
 only the first ${HEADER_MAX_BYTES} are read"
-  head -c "$HEADER_MAX_BYTES" "$WORKDIR/header.json" > "$WORKDIR/header.cut"
-  mv -- "$WORKDIR/header.cut" "$WORKDIR/header.json"
+  cp -- "$WORKDIR/header.json" "$WORKDIR/header.full"
+  head -c "$HEADER_MAX_BYTES" "$WORKDIR/header.full" > "$WORKDIR/header.json"
 fi
 b64url_decode "$S" > "$WORKDIR/sig.bin"     || die signature_not_base64url "signature is not valid base64url"
 SIG_LEN="$(wc -c < "$WORKDIR/sig.bin" | tr -d ' ')"
@@ -2387,7 +2409,13 @@ printf '\n%s[2] Header%s\n' "$BOLD" "$RESET"
 # In the C locale: under a UTF-8 locale, sed's . and [^"] do not match a byte
 # that is not valid UTF-8, so a header kid holding one read as empty, and what
 # the run then reported depended on the locale.
-header_field() { LC_ALL=C sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1; }
+# An oversized header was cut to HEADER_MAX_BYTES in header.json; the members are
+# looked up in the whole of it (header.full), the one linear pass there ever was.
+header_field() {
+  local f="$1"
+  if [ -e "${f%.json}.full" ]; then f="${f%.json}.full"; fi
+  LC_ALL=C sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$f" | head -1
+}
 ALG="$(header_field "$WORKDIR/header.json" alg)"
 KID="$(header_field "$WORKDIR/header.json" kid)"
 TYP="$(header_field "$WORKDIR/header.json" typ)"
@@ -3370,21 +3398,20 @@ REVOCATION_UNKNOWN_BECAUSE=''
 # Rule B for one subject: sets SUBJ_OUTCOME to revoked, unknown or good, and
 # SUBJ_REASON (revoked) or SUBJ_BECAUSE (unknown). The hash is printed once per slug.
 SUBJ_HASHED=' '
-subject_rule() {   # SLUG GENERATED_AT
-  local slug="$1" genat="$2" entry='' notbefore='' truncated='' hash=''
+subject_rule() {   # SLUG GENERATED_AT INDEX
+  local slug="$1" genat="$2" entry='' notbefore='' truncated='' hash="${SUBJ_HASHES[$3]}" q=0
+  q=$(( ${#CHECK_KIDS[@]} + $3 ))   # its place among the lookups
   SUBJ_OUTCOME=good; SUBJ_REASON=''; SUBJ_BECAUSE=''
-  { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$slug"; } \
-    | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
-  hash="$(b64url_encode "$WORKDIR/subject_hash.bin")"
   case "$SUBJ_HASHED" in
     *" $hash "*) ;;
     *) printf '        subjectHash(%s) = %s\n' "$(esc "$slug")" "$hash"; SUBJ_HASHED+="$hash " ;;
   esac
-  if ! entry="$(jsonq sel "$WORKDIR/list.json" subjects subjectHash "$hash" -c | head -1)"; then
+  if [ "${LK_RC[q]:-2}" -ne 0 ]; then
     SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
     warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
     return 0
   fi
+  entry="${LK_VAL[q]}"
   if [ -n "$entry" ]; then
     printf '%s' "$entry" > "$WORKDIR/subject_entry.json"
     list_field notbefore "$WORKDIR/subject_entry.json" '.notBefore'
@@ -3431,14 +3458,28 @@ elif [ -z "$EFFECTIVE_KID" ] && [ "${#SUBJ_SLUGS[@]}" -eq 0 ]; then
   REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='no_subject'
   warn_unknown status_unknown_no_subject "nothing to check (no kid or subject given) — list contents printed above only"
 else
+  # Every kid and every subject is looked up in one pass over the list (a large
+  # list is parsed once, however many are asked for).
+  LOOKUPS=(); SUBJ_HASHES=()
+  for k in "${CHECK_KIDS[@]+"${CHECK_KIDS[@]}"}"; do LOOKUPS+=(k "$k"); done
+  for i in "${!SUBJ_SLUGS[@]}"; do
+    { printf 'hodei-shield.attest.subject.v1'; printf '%s' "${SUBJ_SLUGS[i]}"; } \
+      | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
+    SUBJ_HASHES[i]="$(b64url_encode "$WORKDIR/subject_hash.bin")"
+    LOOKUPS+=(s "${SUBJ_HASHES[i]}")
+  done
+  load_lookups "${LOOKUPS[@]}"
+
   # Rule K — UNCONDITIONAL. revokedAt is deliberately never compared: it is a
   # field the compromised key itself could sign, so a rule over it is decoration.
-  for k in "${CHECK_KIDS[@]+"${CHECK_KIDS[@]}"}"; do
-    if ! KEY_HIT_REASON="$(jsonq sel "$WORKDIR/list.json" keys kid "$k" reason | head -1)"; then
+  for j in "${!CHECK_KIDS[@]}"; do
+    k="${CHECK_KIDS[j]}"
+    if [ "${LK_RC[j]:-2}" -ne 0 ]; then
       REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
       warn_unknown status_unknown_list_unverified "the list could not be read for kid '$(esc "${k}")' — UNKNOWN, never 'good'"
       continue   # the other kids are still checked: one withdrawal decides ahead of an unknown
     fi
+    KEY_HIT_REASON="${LK_VAL[j]}"
     if [ -n "$KEY_HIT_REASON" ]; then
       REVOCATION_STATUS='revoked'; REVOCATION_REASON="$KEY_HIT_REASON"; REVOCATION_VIA='key'
       break
@@ -3452,7 +3493,7 @@ else
   if [ "$REVOCATION_STATUS" != 'revoked' ]; then
     SUBJ_FIRST_UNKNOWN=''
     for i in "${!SUBJ_SLUGS[@]}"; do
-      subject_rule "${SUBJ_SLUGS[i]}" "${SUBJ_GENATS[i]}"
+      subject_rule "${SUBJ_SLUGS[i]}" "${SUBJ_GENATS[i]}" "$i"
       if [ "$SUBJ_OUTCOME" = revoked ]; then
         REVOCATION_STATUS='revoked'; REVOCATION_REASON="$SUBJ_REASON"; REVOCATION_VIA='subject'
         break
