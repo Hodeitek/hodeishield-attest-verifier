@@ -41,6 +41,7 @@ sum="$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
 # The README must state the minimums the SBOM declares (backticks are literal).
 grep -qF "| \`bash\` ≥ 4 |" "$README" || fail "README.md no longer states bash ≥ 4 in that form"
 grep -qF "| **\`openssl\` ≥ 3.5** |" "$README" || fail "README.md no longer states openssl ≥ 3.5 in that form"
+grep -qF "| **\`python3\` ≥ 3.7** |" "$README" || fail "README.md no longer states python3 ≥ 3.7 in that form"
 grep -qF "| \`cosign\` ≥ 3.1.3 |" "$README" || fail "README.md no longer states cosign ≥ 3.1.3 in that form"
 
 python3 -I - "$tmp/a" "$version" "$sum" "$EPOCH" <<'PY' || fail "the SBOM is wrong (see above)"
@@ -55,6 +56,7 @@ d = json.loads(raw)  # valid JSON
 assert d["spdxVersion"] == "SPDX-2.3", d["spdxVersion"]
 assert d["SPDXID"] == "SPDXRef-DOCUMENT"
 assert d["dataLicense"] == "CC0-1.0"
+assert d["creationInfo"]["creators"] == ["Organization: Hodeitek S.L.", "Tool: generate-sbom.sh-" + version], d["creationInfo"]["creators"]
 assert d["creationInfo"]["created"] == "2025-10-11T16:33:02Z", d["creationInfo"]["created"]
 assert d["documentNamespace"].startswith("https://") and ("/v" + version + "/") in d["documentNamespace"]
 
@@ -72,7 +74,7 @@ assert ("SPDXRef-DOCUMENT", "DESCRIBES", main["SPDXID"]) in rel
 want = {  # name: (relationship, minimum stated in README.md)
     "bash": ("RUNTIME_DEPENDENCY_OF", "minimum version: 4;"),
     "openssl": ("RUNTIME_DEPENDENCY_OF", "minimum version: 3.5;"),
-    "python3": ("RUNTIME_DEPENDENCY_OF", "no minimum version;"),
+    "python3": ("RUNTIME_DEPENDENCY_OF", "minimum version: 3.7;"),
     "curl": ("OPTIONAL_DEPENDENCY_OF", "no minimum version;"),
     "cosign": ("OPTIONAL_DEPENDENCY_OF", "minimum version: 3.1.3;"),
 }

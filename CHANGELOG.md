@@ -17,7 +17,7 @@ before it takes effect. Only the latest release is supported, as
 ### Added
 - Each release now publishes `verify-attestation.sh.spdx.json`, an SPDX 2.3 JSON
   SBOM of the script: name, version, sha256, licence (Apache-2.0) and supplier,
-  and its runtime requirements (bash 4, OpenSSL 3.5, python3, and optionally
+  and its runtime requirements (bash 4, OpenSSL 3.5, python3 3.7, and optionally
   curl and cosign 3.1.3) as the README states them. Only the container image
   had one. The SBOM is listed in `SHA256SUMS`, so it is covered by the same
   keyless signature, and has its own bundle; the release now has eight files. It

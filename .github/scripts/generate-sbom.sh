@@ -67,7 +67,7 @@ def dep(spdx_id, name, description, comment):
 deps = [
     ("bash", "bash", "RUNTIME", "The shell the script is written for. Not POSIX sh.", "4"),
     ("openssl", "openssl", "RUNTIME", "OpenSSL with ML-DSA-65 (FIPS 204). LibreSSL does not qualify.", "3.5"),
-    ("python3", "python3", "RUNTIME", "Standard library only. Re-derives the signed bytes from the JSON.", None),
+    ("python3", "python3", "RUNTIME", "Standard library only. Re-derives the signed bytes from the JSON.", "3.7"),
     ("curl", "curl", "OPTIONAL", "Only to fetch --status and --status-keys given as URLs.", None),
     ("cosign", "cosign", "OPTIONAL", "Only for --anchor-file.", "3.1.3"),
 ]
@@ -112,7 +112,7 @@ doc = {
     "documentNamespace": base + "/releases/download/v" + version + "/verify-attestation.sh.spdx.json",
     "creationInfo": {
         "created": created,
-        "creators": [SUPPLIER, "Tool: .github/scripts/generate-sbom.sh"],
+        "creators": [SUPPLIER, "Tool: generate-sbom.sh-" + version],
     },
     "packages": packages,
     "relationships": relationships,
