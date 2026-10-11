@@ -14,8 +14,8 @@
 #      and asserts the exit code, the `match` line of the reference script's
 #      output, any `absent` lines, and (when recorded) the canonical sha-256.
 #
-# Needs: bash >= 4, OpenSSL >= 3.5, python3 (standard library only; it reads the
-# manifest), and jq (the verifier itself needs it for --status-list). No network,
+# Needs: bash >= 4, OpenSSL >= 3.5 and python3 (standard library only; it reads
+# the manifest, and the verifier needs nothing else for --status-list). No network,
 # except for the cases marked "requires": ["cosign"] (the --anchor-file cases
 # built on real Sigstore bundles): they need cosign 3.1.3 or later and the network
 # (cosign may refresh its trust root from the Sigstore TUF repository). A case

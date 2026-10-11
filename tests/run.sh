@@ -23,7 +23,7 @@
 # fails. The mutant check can be skipped locally with VERIFIER_SKIP_MUTANTS=1,
 # but CI always runs it and fails if the variable is set there.
 #
-# Needs: bash >= 4, OpenSSL >= 3.5, python3, jq. No network.
+# Needs: bash >= 4, OpenSSL >= 3.5, python3. No network.
 #   bash tests/run.sh                    # the script in this repository
 #   VERIFIER=/path/to/copy bash tests/run.sh
 # =============================================================================
@@ -32,6 +32,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERIFIER="${VERIFIER:-$ROOT/scripts/attest/verify-attestation.sh}"
 MINT=(python3 -I "$ROOT/tests/lib/mint.py")
+JGET=(python3 -I "$ROOT/tests/lib/jget.py")   # reads a JSON file: what the suite used jq for
 
 T="$(mktemp -d)"; chmod 700 "$T"
 SRV_PIDS=()
@@ -106,15 +107,15 @@ PY
 "${MINT[@]}" keygen --out "$T/issuer.pem"  --jwks "$T/jwks.json"        >/dev/null
 "${MINT[@]}" keygen --out "$T/other.pem"   --jwks "$T/other-jwks.json"  >/dev/null
 "${MINT[@]}" keygen --out "$T/status.pem"  --jwks "$T/status-keys.json" >/dev/null
-ISSUER_KID="$(jq -r '.keys[0].kid' "$T/jwks.json")"
+ISSUER_KID="$("${JGET[@]}" -r "$T/jwks.json" keys 0 kid)"
 
 mint_attest() { "${MINT[@]}" attest --key "$T/issuer.pem" --slug "$SLUG" --iss "$ISS" \
   --generated-at "$GEN" --expires-at "$EXP" \
   --framework iso27001=substantial --framework nis2=basic "$@"; }
 
 mint_attest --out "$T/att.json"
-jq -r '.attestation.signature' "$T/att.json" > "$T/att.jws"
-jq    '.attestation.claims'    "$T/att.json" > "$T/claims.json"
+"${JGET[@]}" -r "$T/att.json" attestation signature > "$T/att.jws"
+"${JGET[@]}" "$T/att.json" attestation claims > "$T/claims.json"
 
 COMMON=(--jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW")
 
@@ -240,7 +241,7 @@ expect 1 'kid mismatch — header says' 'a key published under a kid its bytes d
 # --expect-kid (#13): pin the key that signed. It is compared with the kid
 # recomputed from the key bytes, never with a label. It is a usage error when it
 # is not the shape of a kid, and it is not --check-kid (the status-list lookup).
-OTHER_KID="$(jq -r '.keys[0].kid' "$T/other-jwks.json")"
+OTHER_KID="$("${JGET[@]}" -r "$T/other-jwks.json" keys 0 kid)"
 expect 0 'one of the kids you pinned with --expect-kid' 'a pinned kid that matches the signing key verifies' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID"
 expect 0 'one of the kids you pinned with --expect-kid' 'two pinned kids, the first matching, verify (rotation overlap)' -- \
@@ -343,14 +344,14 @@ expect 1 'EXPIRED' 'an attached JWS alone is held to its expiry' -- \
 edit "$T/att.json" "$T/att-garbage.json" '
 h, p, s = d["attestation"]["signature"].split(".")
 d["attestation"]["signature"] = ".".join([h, "QUFBQQ", s])'
-jq -r '.attestation.signature' "$T/att-garbage.json" > "$T/garbage.jws"
+"${JGET[@]}" -r "$T/att-garbage.json" attestation signature > "$T/garbage.jws"
 expect 1 'is not a hodei-shield.attest.attestation.v1' 'an attached payload that is not an envelope is a failure (1), not "could not check" (2)' -- \
   --jws "$T/garbage.jws" "${COMMON[@]}"
 
 # Duplicate members. Every parser the script uses keeps the LAST value, which
 # is the signed one here, so these were never verdict-changing; the point is
 # that a reader who keeps the FIRST would have seen the decoy under a PASS.
-jq -c . "$T/att.json" > "$T/att-compact.json"
+"${JGET[@]}" -c "$T/att.json" > "$T/att-compact.json"
 edit_text "$T/att-compact.json" "$T/dup-posture.json" '
 t = t.replace("\"posture\":{", "\"posture\":{\"slug\":\"another-org\",\"expiresAt\":\"2099-01-01T00:00:00.000Z\",", 1)'
 expect 1 'duplicate_key' 'a duplicated slug/expiresAt inside posture is rejected' -- \
@@ -373,12 +374,12 @@ expect 1 'duplicate_key' 'a duplicated framework band is rejected' -- \
   --attestation "$T/dup-band.json" "${COMMON[@]}"
 expect 0 'every member of the claims JSON is covered by the signature' 'the same document, compact and without duplicates, verifies' -- \
   --attestation "$T/att-compact.json" "${COMMON[@]}"
-jq -c . "$T/claims.json" > "$T/claims-compact.json"
+"${JGET[@]}" -c "$T/claims.json" > "$T/claims-compact.json"
 edit_text "$T/claims-compact.json" "$T/dup-claims-file.json" '
 t = t.replace("{", "{\"iss\":\"https://other-issuer.test\",", 1)'
 expect 1 'duplicate_key' 'a duplicated member in a --claims file is rejected' -- \
   --jws "$T/att.jws" --claims "$T/dup-claims-file.json" "${COMMON[@]}"
-jq -c . "$T/jwks.json" > "$T/jwks-compact.json"
+"${JGET[@]}" -c "$T/jwks.json" > "$T/jwks-compact.json"
 edit_text "$T/jwks-compact.json" "$T/dup-jwks.json" '
 t = t.replace("\"pub\":", "\"pub\":\"AAAA\",\"pub\":", 1)'
 expect 2 'repeats members' 'a key document with duplicated members is "could not check" (2)' -- \
@@ -657,7 +658,7 @@ edit "$T/list-empty.json" "$T/list-truthy.json" 'd["statusList"]["truncated"] = 
 expect 3 'truncated must be a boolean' 'a list whose truncated flag is not a boolean is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-truthy.json"
 
-jq -c . "$T/list-key.json" > "$T/list-key-compact.json"
+"${JGET[@]}" -c "$T/list-key.json" > "$T/list-key-compact.json"
 edit_text "$T/list-key-compact.json" "$T/list-dup.json" '
 t = t.replace("\"keys\":", "\"keys\":[],\"keys\":", 1)'
 expect 3 'duplicate_key' 'a status list with a duplicated member is UNKNOWN' -- \
@@ -889,7 +890,7 @@ hdr = j.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
 hdr["kid"] = INJ
 h2 = base64.urlsafe_b64encode(j.dumps(hdr, separators=(",", ":")).encode()).rstrip(b"=").decode()
 d["attestation"]["signature"] = ".".join([h2, p, s])'
-jq -c . "$T/att.json" > "$T/att-c.json"
+"${JGET[@]}" -c "$T/att.json" > "$T/att-c.json"
 edit_text "$T/att-c.json" "$T/inj-dup.json" '
 k = "\"k\\nVERIFIED\\u001b[8m\""
 t = t.replace("\"docVersion\"", k + ":1," + k + ":2,\"docVersion\"", 1)'
@@ -1018,11 +1019,11 @@ expect 3 'nul_byte — .iss holds a NUL byte' 'a status list whose iss holds a N
 # locale is checked in the --json section below (it needs jexpect). This test used
 # to set PYTHONIOENCODING=ascii, which python3 -I ignores, so it could not fail;
 # the locale is what changed the verdict. The documents carry the label as raw
-# UTF-8 bytes, as a server may send it (mint.py writes —; jq writes it raw).
+# UTF-8 bytes, as a server may send it (mint.py writes —; jget.py writes it raw).
 mint_attest --out "$T/label-ascii.json" --framework 'ens—alto=basic'
-jq . "$T/label-ascii.json" > "$T/label.json"
-jq '.attestation.claims' "$T/label.json" > "$T/label-claims.json"
-jq -r '.attestation.signature' "$T/label.json" > "$T/label.jws"
+"${JGET[@]}" "$T/label-ascii.json" > "$T/label.json"
+"${JGET[@]}" "$T/label.json" attestation claims > "$T/label-claims.json"
+"${JGET[@]}" -r "$T/label.json" attestation signature > "$T/label.jws"
 if grep -q $'\xe2\x80\x94' "$T/label.json" && grep -q $'\xe2\x80\x94' "$T/label-claims.json"; then
   printf 'ok - the label documents carry the label as raw UTF-8\n'; PASSED=$((PASSED + 1))
 else
@@ -1115,7 +1116,7 @@ expect 0 'is retired (at 2026-07-31T18:53:58Z), but this document was generated 
 expect 1 'retired_key' '--expect-kid pinned to the retired kid does not rescue a post-retirement document' -- \
   --attestation "$T/ret-after.json" "${RET_COMMON[@]}" --expect-kid "$ISSUER_KID"
 expect 0 'VERIFIED — this document was signed' '--pub-b64url has no JWK, so retirement does not apply' -- \
-  --attestation "$T/ret-after.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --attestation "$T/ret-after.json" --pub-b64url "$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
 # Same retirement, a document generated later on the clock but with a lexically
 # smaller string would be the trap of a string comparison; instants are compared.
@@ -1126,7 +1127,7 @@ expect 0 'before the retirement' 'an offset form of 18:53:57.999Z is compared as
 # No claims JSON to read generatedAt from (an attached JWS whose payload is not
 # an envelope): a retired key cannot be shown to predate its retirement, so the
 # run fails closed (1) with retired_key, besides the failures it already has.
-IFS=. read -r UH _ US < <(jq -r '.attestation.signature' "$T/ret-before.json")
+IFS=. read -r UH _ US < <("${JGET[@]}" -r "$T/ret-before.json" attestation signature)
 printf '%s.AAAA.%s\n' "$UH" "$US" > "$T/ret-undecodable.jws"
 set_retired '"2026-07-31T18:53:58Z"'
 expect 1 "retired_key — key $ISSUER_KID is retired (at $RET_AT_S) and without the claims JSON there is no generatedAt" \
@@ -1172,7 +1173,7 @@ expect 2 '\x1b[31m\x0aPASS  forged' 'the control characters are shown as visible
   --issued-at '2026-07-31T18:53:58.000Z' --next-update '2026-07-31T20:53:58.000Z' >/dev/null
 "${MINT[@]}" status --key "$T/status.pem" --out "$T/list-ret-before.json" --iss "$ISS" --seq 9 \
   --issued-at '2026-07-31T18:53:57.999Z' --next-update '2026-07-31T20:53:57.999Z' >/dev/null
-SKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+SKID="$("${JGET[@]}" -r "$T/status-keys.json" keys 0 kid)"
 RETS=(--status-list --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
 edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$RET_AT_S'"
 expect 3 "retired_key — this status list was issued at 2026-07-31T18:53:58.000Z, at or after the retirement of key $SKID at $RET_AT_S" \
@@ -1217,10 +1218,10 @@ done
 
 # --pub-b64url and --jwks are two sources for the same key.
 expect 2 'cannot be combined with --jwks' '--pub-b64url together with --jwks is a usage error (2)' -- \
-  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
 expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable --jwks is a usage error too' -- \
-  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
 
 # --- anchor (--anchor-file), with a cosign test double -------------------------
@@ -1251,7 +1252,7 @@ STUBEOF
 chmod +x "$STUB/cosign"
 # A PATH with the tools the verifier needs and no cosign.
 NOCOSIGN="$T/nocosign"; mkdir -p "$NOCOSIGN"
-for tool in bash env openssl python3 jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
+for tool in bash env openssl python3 awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
   tool_path="$(command -v "$tool" 2>/dev/null || true)"
   if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then ln -sf "$tool_path" "$NOCOSIGN/$tool"; fi
 done
@@ -1262,7 +1263,7 @@ ANCHOR_ISSUER_URL='https://token.actions.githubusercontent.com'
 
 # The statement: the issuer, the attestation key and the status-list key of the
 # fixtures, minted from their kids as the key sets above are.
-ASKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+ASKID="$("${JGET[@]}" -r "$T/status-keys.json" keys 0 kid)"
 python3 -I - "$T/stmt-base.json" "$ISSUER_KID" "$ASKID" "$ISS" <<'PY'
 import json, sys
 out, akid, skid, iss = sys.argv[1:5]
@@ -1301,7 +1302,7 @@ ANCHOR_SIGNED="is signed by ${ANCHOR_WF}v${VER}"
 mint_bundle "$T/stmt.json.sigstore.json" "URI:${ANCHOR_WF}v${VER}"
 cp "$T/stmt-base.json" "$T/stmt.json"
 A=(--anchor-file "$T/stmt.json")                         # the bundle: stmt.json.sigstore.json, by default
-PUB="$(jq -r '.keys[0].pub' "$T/jwks.json")"
+PUB="$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)"
 
 export PATH="$STUB:$PATH_BEFORE_STUB"
 
@@ -2176,7 +2177,7 @@ fi
 
 # Without python3 a smaller, still valid object is written (nothing attested).
 NOPY="$T/nopy"; mkdir -p "$NOPY"
-for tool in bash env openssl jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
+for tool in bash env openssl awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
   tool_path="$(command -v "$tool" 2>/dev/null || true)"
   if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then ln -sf "$tool_path" "$NOPY/$tool"; fi
 done
