@@ -7,7 +7,7 @@
 #
 # Checked files, from `git ls-files`:
 #   *.sh; files with no extension whose first line is a bash or sh shebang
-#   (.githooks/commit-msg); .github/workflows/*.yml; Dockerfile and Dockerfile.*.
+#   (.githooks/commit-msg); .github/workflows/*.yml and *.yaml; Dockerfile and Dockerfile.*.
 # Not checked:
 #   tests/vectors/ (test data: its bytes are hashed in SHA256SUMS and signed, so
 #   a comment would change them); .github/ISSUE_TEMPLATE/*.yml (issue forms, not
@@ -19,9 +19,11 @@
 #
 #   bash tests/spdx-headers.sh                     the tracked files
 #   --root DIR --files LIST                        another tree and a file list
-#                                                  (one relative path per line;
-#                                                  for the tests)
-# Static: reads files, runs nothing else. Needs bash and git (not with --files).
+#                                                  (relative paths, NUL-separated
+#                                                  like git ls-files -z; for the
+#                                                  tests)
+# A listed file that is not on disk fails the check. Static: reads files, runs
+# nothing else. Needs bash and git (not with --files).
 # =============================================================================
 set -euo pipefail
 
@@ -38,12 +40,16 @@ done
 SPDX='# SPDX-License-Identifier: Apache-2.0'
 COPY_RE='^# Copyright [0-9]{4} Hodeitek S\.L\.$'
 
+TRACKED=()
 if [ -n "$LIST" ]; then
-  mapfile -t TRACKED < "$LIST"
+  while IFS= read -r -d '' f; do TRACKED+=("$f"); done < "$LIST"
 else
-  mapfile -t TRACKED < <(git -C "$ROOT" ls-files)
+  # -z and core.quotePath=false: a name with a non-ASCII or control character, or
+  # a quote, is listed as is, not as a quoted string that matches no file.
+  while IFS= read -r -d '' f; do TRACKED+=("$f"); done < <(git -C "$ROOT" -c core.quotePath=false ls-files -z)
 fi
 
+BOM=$'\xef\xbb\xbf'
 checked=0
 bad=0
 for f in "${TRACKED[@]}"; do
@@ -51,12 +57,21 @@ for f in "${TRACKED[@]}"; do
     tests/vectors/*|.github/ISSUE_TEMPLATE/*) continue ;;
   esac
   base="${f##*/}"
-  [ -f "$ROOT/$f" ] || continue
+  case "$base" in
+    *.sh|Dockerfile|Dockerfile.*) ;;
+    *.*) case "$f" in .github/workflows/*.yml|.github/workflows/*.yaml) ;; *) continue ;; esac ;;
+    *) ;;
+  esac
+  if [ ! -f "$ROOT/$f" ]; then
+    # Listed but not on disk: a deleted file (not yet committed) or a broken link.
+    printf 'not ok - %s: tracked but not a file on disk (deleted in the working tree?), so it cannot be checked\n' "$f"
+    bad=$((bad + 1)); continue
+  fi
   first=''
   IFS= read -r first < "$ROOT/$f" || true
   case "$base" in
-    *.sh|Dockerfile|Dockerfile.*) ;;
-    *.*) case "$f" in .github/workflows/*.yml) ;; *) continue ;; esac ;;
+    *.sh|Dockerfile|Dockerfile.*|*.yml|*.yaml) ;;
+    *.*) continue ;;
     *) case "$first" in '#!'*/bash*|'#!'*/sh*|'#!'*' bash'*|'#!'*' sh'*) ;; *) continue ;; esac ;;
   esac
   checked=$((checked + 1))
@@ -65,7 +80,11 @@ for f in "${TRACKED[@]}"; do
   l1=''; l2=''
   { for ((i = 0; i < skip; i++)); do IFS= read -r _ || true; done
     IFS= read -r l1 || true; IFS= read -r l2 || true; } < "$ROOT/$f"
-  if [ "$l1" != "$SPDX" ]; then
+  if [[ "$first" == "$BOM"* ]]; then
+    printf 'not ok - %s: starts with a UTF-8 byte order mark; remove it, the header must be the first thing in the file\n' "$f"; bad=$((bad + 1))
+  elif [[ "$l1" == *$'\r' || "$l2" == *$'\r' ]]; then
+    printf 'not ok - %s: the header lines end in CR (CRLF line endings); use LF\n' "$f"; bad=$((bad + 1))
+  elif [ "$l1" != "$SPDX" ]; then
     printf 'not ok - %s: line %s is not "%s"\n' "$f" "$((skip + 1))" "$SPDX"; bad=$((bad + 1))
   elif ! [[ "$l2" =~ $COPY_RE ]]; then
     printf 'not ok - %s: line %s is not "# Copyright <year> Hodeitek S.L."\n' "$f" "$((skip + 2))"; bad=$((bad + 1))
@@ -76,6 +95,6 @@ if [ "$checked" -eq 0 ]; then
   printf 'not ok - no shell script, workflow or Dockerfile found to check\n'; exit 1
 fi
 if [ "$bad" -ne 0 ]; then
-  printf '%s of %s files lack the licence header\n' "$bad" "$checked"; exit 1
+  printf '%s problems (%s files checked)\n' "$bad" "$checked"; exit 1
 fi
 printf 'ok - %s shell scripts, workflows and Dockerfiles carry the licence header\n' "$checked"

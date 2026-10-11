@@ -2578,7 +2578,7 @@ printf '{}\n' > "$T/spdx/tests/vectors/v1/a.json"
 printf '#!/bin/sh\n' > "$T/spdx/tests/vectors/v1/exempt.sh"
 printf 'name: x\n' > "$T/spdx/.github/ISSUE_TEMPLATE/form.yml"
 printf '#!/usr/bin/env python3\n' > "$T/spdx/scripts/tool"
-printf '%s\n' scripts/a.sh .github/workflows/ci.yml Dockerfile .githooks/commit-msg tests/vectors/v1/a.json \
+printf '%s\0' scripts/a.sh .github/workflows/ci.yml Dockerfile .githooks/commit-msg tests/vectors/v1/a.json \
   tests/vectors/v1/exempt.sh .github/ISSUE_TEMPLATE/form.yml scripts/tool > "$T/spdx.list"
 spdx_case() {   # NAME WANT_EXIT
   local out="$T/out.$((PASSED + FAILED))" got
@@ -2602,6 +2602,35 @@ printf '#!/usr/bin/env bash\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/scripts/
 bash "$SH" --root "$T/spdx" --files "$T/spdx.empty" > "$T/spdx.out" 2>&1; got=$?
 if [ "$got" -ne 0 ]; then printf 'ok - licence header: an empty file list fails (exit %s)\n' "$got"; PASSED=$((PASSED + 1))
 else printf 'not ok - licence header: an empty file list passed\n'; FAILED=$((FAILED + 1)); fi
+# CRLF, a byte order mark, a missing file, a .yaml workflow and a non-ASCII name.
+printf '#!/usr/bin/env bash\r\n%s\r\n%s\r\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/scripts/a.sh"
+spdx_case 'a script with CRLF line endings' 1
+if grep -q 'CRLF' "$T/out.$((PASSED + FAILED - 1))"; then printf 'ok - licence header: the CRLF message says so\n'; PASSED=$((PASSED + 1))
+else printf 'not ok - licence header: the CRLF message does not say so\n'; FAILED=$((FAILED + 1)); fi
+printf '\xef\xbb\xbf%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/Dockerfile"
+spdx_case 'a Dockerfile that starts with a byte order mark' 1
+if grep -q 'byte order mark' "$T/out.$((PASSED + FAILED - 1))"; then printf 'ok - licence header: the BOM message says so\n'; PASSED=$((PASSED + 1))
+else printf 'not ok - licence header: the BOM message does not say so\n'; FAILED=$((FAILED + 1)); fi
+printf '%s\n%s\nFROM scratch\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/Dockerfile"
+printf '#!/usr/bin/env bash\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/scripts/a.sh"
+printf 'name: y\n' > "$T/spdx/.github/workflows/y.yaml"
+printf '%s\0' scripts/a.sh .github/workflows/y.yaml > "$T/spdx.list"
+spdx_case 'a .yaml workflow without the header' 1
+printf '%s\0' scripts/a.sh scripts/gone.sh > "$T/spdx.list"
+spdx_case 'a listed file that is not on disk' 1
+rm -f "$T/spdx/.github/workflows/y.yaml"
+# A scratch git tree: the real path from git ls-files -z, with a non-ASCII name.
+if command -v git >/dev/null 2>&1; then
+  G="$T/spdx-git"; mkdir -p "$G/tests"
+  printf '#!/usr/bin/env bash\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$G/ok.sh"
+  printf '#!/usr/bin/env bash\necho hi\n' > "$G/é.sh"
+  git -C "$G" init -q 2>/dev/null && git -C "$G" add ok.sh é.sh 2>/dev/null
+  bash "$SH" --root "$G" > "$T/spdx.out" 2>&1; got=$?
+  if [ "$got" -eq 1 ] && grep -q 'é.sh' "$T/spdx.out"; then printf 'ok - licence header: a non-ASCII file name without the header fails and is named (exit 1)\n'; PASSED=$((PASSED + 1))
+  else printf 'not ok - licence header: a non-ASCII file name without the header (exit %s)\n' "$got"; sed 's/^/    # /' "$T/spdx.out"; FAILED=$((FAILED + 1)); fi
+else
+  printf 'skipped - licence header: a non-ASCII file name (no git)\n'; SKIPPED=$((SKIPPED + 1))
+fi
 if [ -d "$ROOT/.git" ] || [ -f "$ROOT/.git" ]; then
   bash "$SH" > "$T/spdx.out" 2>&1; got=$?
   if [ "$got" -eq 0 ]; then printf 'ok - licence header: this tree (%s)\n' "$(cat "$T/spdx.out")"; PASSED=$((PASSED + 1))
