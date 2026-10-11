@@ -1234,15 +1234,18 @@ lf_val() { local lf_out_=''; lf_get lf_out_ "$1" || true; printf '%s' "$lf_out_"
 
 # The kids and subjects to look up are read in one pass too, after the fields
 # (load_lookups KIND VALUE ...): LK_RC[i] and LK_VAL[i] are the status and the
-# result of the i-th query. A query that was not answered reads as failed, which
+# result of the i-th query. They go to the reader on standard input, NUL-separated
+# (a kid from a header can be longer than the system allows one argument to be, and
+# an argument list that cannot be passed would make every query fail). A query that was not answered reads as failed, which
 # every user of it turns into UNKNOWN.
 LK_RC=(); LK_VAL=()
 load_lookups() {
   local rc='' val='' n=0
   LK_RC=(); LK_VAL=()
+  if [ $# -eq 0 ]; then return 0; fi
   while IFS= read -r -d '' rc && IFS= read -r -d '' val; do
     LK_RC[n]="$rc"; LK_VAL[n]="$val"; n=$(( n + 1 ))
-  done < <(jsonq lookup "$WORKDIR/list.json" "$@" 2>/dev/null)
+  done < <(printf '%s\0' "$@" | jsonq lookup "$WORKDIR/list.json" 2>/dev/null)
   return 0
 }
 
@@ -1493,7 +1496,9 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 #                          trailing newlines cut: what $(...) keeps), len_keys and
 #                          len_subjects (the number of keys and subjects), and
 #                          selfrev (1 when a revoked key has the list's own kid)
-#   lookup KIND VALUE ...  for each pair, one STATUS NUL VALUE NUL record: KIND k, the
+#   lookup                the pairs KIND NUL VALUE NUL ... on standard input (a kid can be
+#                          longer than one argument may be); for each, one STATUS NUL VALUE
+#                          NUL record: KIND k, the
 #                          reason of the first revoked key whose kid is VALUE (its
 #                          first line, NUL bytes dropped); KIND s, the first revoked
 #                          subject whose subjectHash is VALUE, compact; empty when
@@ -1680,14 +1685,16 @@ def main(a):
         return 0
     if mode == "raw": w((plain(member(d, a[2])) + "\n").encode("utf-8"))
     elif mode == "lookup":
-        # a[2:] = KIND VALUE ...: k = the first revoked key with this kid, s = the first
-        # revoked subject with this hash. One record per query: STATUS NUL VALUE NUL,
+        # stdin = KIND NUL VALUE NUL ...: k = the first revoked key with this kid, s = the
+        # first revoked subject with this hash (stdin, not arguments: a kid can be longer
+        # than the system allows one argument to be). One record per query: STATUS NUL VALUE NUL,
         # the value being the first line of the reason of the key (NUL bytes dropped, as
         # command substitution drops them) or the entry of the subject, compact; empty when there is none.
         out = []
-        for i in range(0, len(a) - 2, 2):
-            lst, mem = ("keys", "kid") if a[2 + i] == "k" else ("subjects", "subjectHash")
-            want = arg(a[3 + i])
+        q = sys.stdin.buffer.read().split(b"\0")[:-1]
+        for i in range(0, len(q) - 1, 2):
+            lst, mem = ("keys", "kid") if q[i] == b"k" else ("subjects", "subjectHash")
+            want = utf8(q[i + 1])
             try:
                 items = member(d, lst)
                 items = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else []

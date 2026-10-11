@@ -891,19 +891,24 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 http.server.HTTPServer((sys.argv[2], int(sys.argv[1])), H).serve_forever()
 PY
-GZPORT="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.2", 0)); print(s.getsockname()[1])')"
-python3 -I "$T/gzsrv.py" "$GZPORT" 127.0.0.2 > "$T/gzsrv.log" 2>&1 &
-SRV_PIDS+=("$!")
-for (( gzi = 0; gzi < 100; gzi++ )); do
-  if (exec 3<> "/dev/tcp/127.0.0.2/$GZPORT") 2>/dev/null; then break; fi
-  sleep 0.1
-done
-mkdir "$T/curlhome"; printf 'compressed\n' > "$T/curlhome/.curlrc"
-ULIMITV="$T/ulimit-verifier.sh"
-printf '#!/usr/bin/env bash\nulimit -f 2100\nexec timeout 20 bash "%s" "$@"\n' "$VERIFIER_NOTIMEOUT" > "$ULIMITV"
-VERIFIER="$ULIMITV"
-CURL_HOME="$T/curlhome" expect 3 'status.json is not strict JSON' 'a gzip body that unpacks to 50 MB is read as it was sent, despite a curlrc with compressed (UNKNOWN)' -- \
-  --status-list --status "http://127.0.0.2:$GZPORT/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+if GZPORT="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.2", 0)); print(s.getsockname()[1])' 2>/dev/null)" && [ -n "$GZPORT" ]; then
+  python3 -I "$T/gzsrv.py" "$GZPORT" 127.0.0.2 > "$T/gzsrv.log" 2>&1 &
+  SRV_PIDS+=("$!")
+  for (( gzi = 0; gzi < 100; gzi++ )); do
+    if (exec 3<> "/dev/tcp/127.0.0.2/$GZPORT") 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  mkdir "$T/curlhome"; printf 'compressed\n' > "$T/curlhome/.curlrc"
+  ULIMITV="$T/ulimit-verifier.sh"
+  printf '#!/usr/bin/env bash\nulimit -f 2100\nexec timeout 20 bash "%s" "$@"\n' "$VERIFIER_NOTIMEOUT" > "$ULIMITV"
+  VERIFIER="$ULIMITV"
+  CURL_HOME="$T/curlhome" expect 3 'status.json is not strict JSON' 'a gzip body that unpacks to 50 MB is read as it was sent, despite a curlrc with compressed (UNKNOWN)' -- \
+    --status-list --status "http://127.0.0.2:$GZPORT/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+  VERIFIER="$SIZEV"
+else
+  # macOS has no 127.0.0.2: the test needs a non-loopback address, so it is skipped.
+  printf 'skipped - a gzip body under a curlrc with compressed (127.0.0.2 cannot be bound here)\n'; SKIPPED=$((SKIPPED + 1))
+fi
 VERIFIER="$SIZEV"
 # Headers: the status list's (UNKNOWN) and the attestation's (could not check).
 edit_text "$T/list-empty-compact.json" "$T/list-big-header.json" '
@@ -1917,6 +1922,18 @@ expect 1 'retired_key — this document was generated at 2026-07-31T18:53:58.000
   --attestation "$T/ret-after.json" "${RETC[@]}" --anchor-file "$T/stmt-ret2.json"
 
 # --- --pub-b64url: no JWK, but the kid is recomputed from the key bytes ------------------------
+# A header kid longer than one argument may be (200,000 characters) must not stop the
+# revoked key from being found: the kids are looked up through standard input.
+edit "$T/att.json" "$T/att-huge-kid.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["kid"] = "K" * 200000
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'REVOKED — via key' 'a header kid of 200000 characters does not hide that the recomputed kid is revoked' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-key.json" --attestation "$T/att-huge-kid.json" --pub-b64url "$PUB" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+lacks 'could not be read' 'and the list is not reported unreadable'
 expect 0 "lists kid '$ISSUER_KID' as an attestation key" '--pub-b64url with an anchor: the recomputed kid is listed' -- \
   --attestation "$T/att.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" "${A[@]}"
 expect 1 "anchor_kid_absent — the key bytes derive kid '$ISSUER_KID'" '--pub-b64url with an anchor that does not list the recomputed kid: a failed check (1)' -- \
