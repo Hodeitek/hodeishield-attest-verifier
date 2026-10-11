@@ -61,6 +61,17 @@ signed or published.
   (Closes #71).
 
 ### Changed
+- Input size limits, so that no document can keep a parser busy: at most
+  5,000,000 bytes of the status list (`--status`, a file or a URL), 1,000,000 of
+  the status key set and 4,096 of a decoded protected header (a real header is
+  about 100 bytes, the live list under 6,000 bytes and the key set under 3,000).
+  Over the limit the input is not read: UNKNOWN (exit 3, new reason codes
+  `status_unknown_document_too_large`, `status_unknown_keys_too_large` and
+  `status_unknown_header_too_large`) for the status list, or, for the
+  attestation's own header, exit 2 (`header_too_large`, the exit of a header that
+  is not base64url). The limits are fixed in the script. Downloads were already
+  limited to 5,000,000 bytes; a server that sent more now gives the same UNKNOWN
+  instead of a failed fetch.
 - The script is parsed by more bash parsers: the `10#` arithmetic (a leading
   zero is never octal) is written without it, and two other constructs that
   Semgrep's bash parser rejected are written another way. No behaviour change.
@@ -70,7 +81,8 @@ signed or published.
   printable as `?` and prints other text as UTF-8, while check lines and
   messages use `\xHH` (Closes #72).
 - `--status-list` no longer needs `jq`: python3, which the script already
-  needs, reads the status list and its header. It reads them as `jq` did, so no
+  needs, reads the status list and its header. It reads them as `jq` did (including its
+  limit on nesting, 256 levels), so no
   verdict, reason code or message changes for any document in the test suite or
   the published vectors. The `jq_missing` reason code is retired (it stays in
   docs/security/reason-codes.md, never emitted, and is not reused), and the

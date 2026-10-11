@@ -1428,6 +1428,17 @@ duplicated. Verified against the script as committed
 flags below ever diverge from `scripts/attest/verify-attestation.sh --help`,
 trust the script).
 
+**Size limits.** The script reads no more than 5,000,000 bytes of the status
+list, 1,000,000 of the status key set and 4,096 bytes of a decoded protected
+header (a real header is about 100 bytes; the live list is under 6,000 bytes and
+the live key set under 3,000). A status list, key set or status header over its
+limit is not read and the status is UNKNOWN (`status_unknown_document_too_large`,
+`status_unknown_keys_too_large`, `status_unknown_header_too_large`, exit 3); an
+attestation whose own header is over the limit stops the run with
+`header_too_large` (exit 2, like a header that is not base64url). The limits are
+constants in the script; no option or environment variable changes them. By hand,
+the same bound is `wc -c`.
+
 **Standalone — you already have a `kid` or a slug from elsewhere:**
 
 ```bash
