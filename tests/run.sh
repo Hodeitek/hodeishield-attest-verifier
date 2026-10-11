@@ -667,6 +667,30 @@ printf '\xef\xbb\xbf' > "$T/list-bom.json"; cat "$T/list-dup.json" >> "$T/list-b
 expect 3 'is not strict JSON' 'a status list jq accepts but a strict parser does not is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-bom.json"
 
+# A number whose exponent no double (and no 64-bit exponent) holds is still a
+# number: the strict reader takes it, and it must neither stop the run nor turn
+# a verdict into "could not check" (exit 2). json.dumps would write Infinity, so
+# the documents are edited as text. The member is not signed, so the list still
+# verifies; in the signature position it is just not a compact JWS.
+"${JGET[@]}" -c "$T/list-empty.json" > "$T/list-empty-compact.json"
+"${JGET[@]}" -c "$T/list-subj-after.json" > "$T/list-subj-after-compact.json"
+for bigexp in 1e9999999999999999999 -1e9999999999999999999 0e9999999999999999999 \
+              1e-9999999999999999999 0e-9999999999999999999 1e-1147483700; do
+  edit_text "$T/list-empty-compact.json" "$T/list-bigexp.json" "
+t = t.replace('\"truncated\":', '\"x\":$bigexp,\"truncated\":', 1)"
+  expect 0 'GOOD — not revoked, per a verified status list' "a status list with the number $bigexp as an extra member is still good" -- \
+    "${SL[@]}" --status "$T/list-bigexp.json"
+  edit_text "$T/list-subj-after-compact.json" "$T/list-bigexp-subj.json" "
+t = t.replace('\"subjectHash\":', '\"x\":$bigexp,\"subjectHash\":', 1)"
+  expect 1 'REVOKED — via subject' "a revoked subject entry with the number $bigexp as an extra member is still revoked" -- \
+    "${SL[@]}" --status "$T/list-bigexp-subj.json"
+  edit_text "$T/list-empty-compact.json" "$T/list-bigexp-sig.json" "
+import re
+t = re.sub(r'\"signature\":\"[^\"]*\"', '\"signature\":$bigexp', t)"
+  expect 3 'is not a 3-segment compact JWS' "the number $bigexp as the signature is UNKNOWN, not an abort" -- \
+    "${SL[@]}" --status "$T/list-bigexp-sig.json"
+done
+
 # Expired under a good list says so; expired under a revocation reports the
 # revocation, because "request a new one" is the wrong advice for a withdrawn
 # key or subject.
@@ -2561,19 +2585,25 @@ RC_SCRIPT="$T/rc.script"; RC_DOCS="$T/rc.docs"; RC_MANIFEST="$T/rc.manifest"
 } | sort -u > "$RC_SCRIPT"
 # A table row starts with the code between two backticks (any character below).
 sed -nE 's/^\| [^A-Za-z0-9 ]([a-z][a-z0-9_]*)[^A-Za-z0-9 ] \|.*/\1/p' "$RC_DOC" | sort -u > "$RC_DOCS"
+# A code the verifier no longer emits stays in the table as "Retired in vX.Y.Z"
+# (codes are never removed); it is not stale, but it must not be emitted again.
+RC_RETIRED="$T/rc.retired"
+sed -nE 's/^\| [^A-Za-z0-9 ]([a-z][a-z0-9_]*)[^A-Za-z0-9 ] \| Retired in v[0-9.]+: .*/\1/p' "$RC_DOC" | sort -u > "$RC_RETIRED"
 python3 -I -c 'import json,sys
 for c in json.load(open(sys.argv[1]))["cases"]: print(c["expect"]["code"])' \
   "$ROOT/tests/vectors/v1/vectors.json" | sort -u > "$RC_MANIFEST"
 rc_missing="$(comm -23 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"
-rc_stale="$(comm -13 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"
+rc_stale="$(comm -13 "$RC_SCRIPT" "$RC_DOCS" | comm -23 - "$RC_RETIRED" | tr '\n' ' ')"
+rc_revived="$(comm -12 "$RC_SCRIPT" "$RC_RETIRED" | tr '\n' ' ')"
 rc_unknown="$(comm -13 "$RC_SCRIPT" "$RC_MANIFEST" | tr '\n' ' ')"
-if [ -s "$RC_SCRIPT" ] && [ -z "$rc_missing" ] && [ -z "$rc_stale" ] && [ -z "$rc_unknown" ]; then
+if [ -s "$RC_SCRIPT" ] && [ -z "$rc_missing" ] && [ -z "$rc_stale" ] && [ -z "$rc_revived" ] && [ -z "$rc_unknown" ]; then
   printf 'ok - reason codes: %d in the script, all documented; every vectors expect.code is emitted\n' "$(wc -l < "$RC_SCRIPT")"
   PASSED=$((PASSED + 1))
 else
   printf 'not ok - reason codes\n'
   [ -z "$rc_missing" ] || printf '    # used by the script, not in reason-codes.md: %s\n' "$rc_missing"
   [ -z "$rc_stale" ]   || printf '    # in reason-codes.md, never emitted by the script: %s\n' "$rc_stale"
+  [ -z "$rc_revived" ] || printf '    # retired in reason-codes.md, but emitted by the script: %s\n' "$rc_revived"
   [ -z "$rc_unknown" ] || printf '    # expect.code in vectors.json that the script cannot emit: %s\n' "$rc_unknown"
   FAILED=$((FAILED + 1))
 fi

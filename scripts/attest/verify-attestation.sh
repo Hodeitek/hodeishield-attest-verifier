@@ -1337,8 +1337,12 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 
 # The JSON reader of --status-list (jsonq, above): the few things the status
 # list and its header needed `jq` for, done with python3, which this script
-# needs anyway. It reproduces what jq printed, EXACTLY, because the checks
-# compare it and some of it is shown:
+# needs anyway. For the documents this script reads it gives what jq (1.7)
+# gave, because the checks compare it and some of it is shown. It was compared
+# with jq on generated and mutated documents; two things are known to differ:
+# `length` of a number (an error here; the status list is checked to hold lists
+# before it is asked), and the error text jq printed for a document it refused
+# (nothing here). Otherwise:
 #   - it parses like jq: one or more values in a row, a UTF-8 BOM, invalid UTF-8
 #     replaced, number tokens as jq reads them (01, .5, nan, Infinity), raw
 #     control characters in a string refused, a lone high surrogate escape
@@ -1347,7 +1351,10 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 #     reader (DUPKEY_PY), except the protected header at the one place that asks
 #     `object`, which comes first and must judge it as jq did;
 #   - a number is printed as written, in the form jq gives a literal (1.0 stays
-#     1.0, 1e2 is 1E+2, 01 is 1, nan is null, 1e1000000000 is the largest double);
+#     1.0, 1e2 is 1E+2, 01 is 1, nan is null), through the same decimal limits
+#     (an exponent above 999999999 is the largest double, 1.7976931348623157e+308;
+#     below -1147483646 it rounds to 0E-1147483646), so no number can make it fail;
+#   - invalid UTF-8 is replaced as jq does, one U+FFFD for each bad sequence;
 #   - a string is printed escaped as jq does (DEL as \u007f, the rest raw), a
 #     document pretty (two spaces) or compact (-c).
 # argv[1] = mode, argv[2] = file:
@@ -1373,10 +1380,11 @@ import decimal, json, re, sys
 sys.setrecursionlimit(20000)
 class N:
     def __init__(self, t): self.t = t
+CTX = decimal.Context(prec=147483648, Emax=999999999, Emin=-999999999, rounding=decimal.ROUND_HALF_UP, traps=[])
 def num(n):
-    d = decimal.Decimal(n.t)
+    d = CTX.create_decimal(n.t)
     if d.is_nan(): return "null"
-    if d.is_infinite() or d.adjusted() > 999999999 and d: return ("-" if d.is_signed() else "") + "1.7976931348623157e+308"
+    if d.is_infinite(): return ("-" if d.is_signed() else "") + "1.7976931348623157e+308"
     return str(d)
 ESC = {34: "\\\"", 92: "\\\\", 10: "\\n", 13: "\\r", 9: "\\t", 8: "\\b", 12: "\\f"}
 def quote(s):
@@ -1395,13 +1403,30 @@ def dump(v, pretty=False, lvl=0):
     return o + "\n" + ",\n".join(pad + i for i in items) + "\n" + "  " * lvl + c
 TOKEN = re.compile(r"[ \t\r\n]*(?:([][{},:])|(\"(?:[^\"\\\x00-\x1f]|\\[\"\\/bfnrt]|\\u[0-9a-fA-F]{4})*\")|([^ \t\r\n\][{},:\"]+))")
 NUMBER = re.compile(r"[+-]?(?:(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)", re.I)
+def utf8(b):
+    try: return b.decode("utf-8")
+    except UnicodeDecodeError: pass
+    out, i = [], 0
+    while i < len(b):
+        c = b[i]
+        n = 1 if c < 0x80 else 2 if 0xC2 <= c <= 0xDF else 3 if 0xE0 <= c <= 0xEF else 4 if 0xF0 <= c <= 0xF4 else 0
+        k = 1
+        while 1 < n and k < n and i + k < len(b) and b[i + k] & 0xC0 == 0x80: k += 1
+        if n == 0: out.append("\ufffd"); i += 1
+        elif i + n > len(b): out.append("\ufffd"); break
+        elif k < n: out.append("\ufffd"); i += k
+        else:
+            try: out.append(b[i:i + n].decode("utf-8"))
+            except UnicodeDecodeError: out.append("\ufffd")
+            i += n
+    return "".join(out)
 def text(s):
-    s = json.loads(s)
+    s = json.loads("\"" + utf8(s[1:-1].encode("utf-8", "surrogateescape")) + "\"")
     if re.search("[\ud800-\udbff]", s): raise ValueError("lone high surrogate")
     return re.sub("[\udc00-\udfff]", "�", s)
 def parse(raw):
     if raw.startswith(b"\xef\xbb\xbf"): raw = raw[3:]
-    t, i, vals, stack = raw.decode("utf-8", "replace"), 0, [], []
+    t, i, vals, stack = raw.decode("utf-8", "surrogateescape"), 0, [], []
     while True:
         m = TOKEN.match(t, i)
         if m is None:
@@ -1443,7 +1468,7 @@ def member(v, k):
 def plain(v):
     return v if isinstance(v, str) else dump(v, True)
 def arg(s):
-    return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    return utf8(s.encode("utf-8", "surrogateescape"))
 def main(a):
     w = sys.stdout.buffer.write
     mode = a[0]
@@ -2745,10 +2770,13 @@ $(printf '%s' "$dup_found" | tr '\n' ' ')— which value counts depends on the p
   fi
 done
 
-if [ "$STATUS_FAILURES" -eq 0 ] && jsonq shape "$WORKDIR/status.json" >/dev/null 2>&1; then
+# Every jsonq call in this section sits where a failure is a condition or has a
+# fallback: under `set -e` a bare failing call would end the run with exit 2 and
+# no verdict, and a document must never turn a status into "could not check".
+if [ "$STATUS_FAILURES" -eq 0 ] && jsonq shape "$WORKDIR/status.json" >/dev/null 2>&1 \
+   && jsonq sub "$WORKDIR/status.json" statusList > "$WORKDIR/list.json" 2>/dev/null \
+   && STATUS_JWS="$(jsonq raw "$WORKDIR/status.json" signature)"; then
   ok status_shape_valid "status document has the expected {statusList, signature} shape"
-  jsonq sub "$WORKDIR/status.json" statusList > "$WORKDIR/list.json"
-  STATUS_JWS="$(jsonq raw "$WORKDIR/status.json" signature)"
 else
   stat_bad status_unknown_malformed_document "malformed_document — expected {statusList, signature, ...}, exactly what \
 GET /api/public/attest/status serves"
@@ -3141,7 +3169,11 @@ subject_rule() {   # SLUG GENERATED_AT
     *" $hash "*) ;;
     *) printf '        subjectHash(%s) = %s\n' "$(esc "$slug")" "$hash"; SUBJ_HASHED+="$hash " ;;
   esac
-  entry="$(jsonq sel "$WORKDIR/list.json" subjects subjectHash "$hash" -c | head -1)"
+  if ! entry="$(jsonq sel "$WORKDIR/list.json" subjects subjectHash "$hash" -c | head -1)"; then
+    SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+    warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
+    return 0
+  fi
   if [ -n "$entry" ]; then
     printf '%s' "$entry" > "$WORKDIR/subject_entry.json"
     list_field notbefore "$WORKDIR/subject_entry.json" '.notBefore'
@@ -3158,15 +3190,22 @@ decide, so UNKNOWN, never 'good'"
     # second before a fractional notBefore was not revoked.
     case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$genat" "$notbefore" 2>/dev/null)" in
       before)
-        SUBJ_OUTCOME=revoked; SUBJ_REASON="$(jsonq raw "$WORKDIR/subject_entry.json" reason)" ;;
+        if SUBJ_REASON="$(jsonq raw "$WORKDIR/subject_entry.json" reason)"; then
+          SUBJ_OUTCOME=revoked
+        else
+          SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'; SUBJ_REASON=''
+          warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
+        fi ;;
       equal|after) ;;
       *)
         SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
         warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'" ;;
     esac
   else
-    truncated="$(jsonq raw "$WORKDIR/list.json" truncated)"
-    if [ "$truncated" = 'true' ]; then
+    if ! truncated="$(jsonq raw "$WORKDIR/list.json" truncated)"; then
+      SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+      warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
+    elif [ "$truncated" = 'true' ]; then
       SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='truncated'
       warn_unknown status_unknown_truncated "subject not found, but truncated=true: entries were dropped for the cap, so \
 'not found' does not mean 'not listed' — UNKNOWN on the subject dimension, fail-safe"
@@ -3184,7 +3223,11 @@ else
   # Rule K — UNCONDITIONAL. revokedAt is deliberately never compared: it is a
   # field the compromised key itself could sign, so a rule over it is decoration.
   for k in "${CHECK_KIDS[@]+"${CHECK_KIDS[@]}"}"; do
-    KEY_HIT_REASON="$(jsonq sel "$WORKDIR/list.json" keys kid "$k" reason | head -1)"
+    if ! KEY_HIT_REASON="$(jsonq sel "$WORKDIR/list.json" keys kid "$k" reason | head -1)"; then
+      REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
+      warn_unknown status_unknown_list_unverified "the list could not be read for kid '$(esc "${k}")' — UNKNOWN, never 'good'"
+      break
+    fi
     if [ -n "$KEY_HIT_REASON" ]; then
       REVOCATION_STATUS='revoked'; REVOCATION_REASON="$KEY_HIT_REASON"; REVOCATION_VIA='key'
       break
@@ -3257,7 +3300,7 @@ if [ -n "$JWS_FILE" ]; then
       python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
       if [ "$SHOW_RAW" -eq 1 ]; then
         printf '\n        posture (E7, the frozen v1 bytes):\n'
-        jsonq pretty "$POSTURE_FILE" | sed 's/^/        /'
+        jsonq pretty "$POSTURE_FILE" | sed 's/^/        /' || printf '        (the posture could not be rendered)\n'
       fi
     fi
   else
