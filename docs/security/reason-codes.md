@@ -86,7 +86,7 @@ cannot emit.
 | `jws_attached` | Attached JWS: the payload segment carries the canonical bytes. | pass | 0 | both |  |
 | `jws_detached_needs_claims` | A detached JWS needs `--claims` or `--attestation`. | fail | 2 | both |  |
 | `header_not_base64url` | The protected header is not base64url. | fail | 2 | both |  |
-| `header_too_large` | The decoded protected header is over 4096 bytes (a real one is about 100). Only its first 4096 bytes are read. | fail | 1 | both |  |
+| `header_too_large` | The decoded protected header is over 4096 bytes (a real one is about 100). Only its first 4096 bytes are parsed. | fail | 1 | both |  |
 | `signature_not_base64url` | The signature is not base64url. | fail | 2 | both |  |
 | `signature_size_valid` | The signature is 3309 bytes. | pass | 0 | both |  |
 | `signature_size_invalid` | The signature is not 3309 bytes. | fail | 1 | both | 2: `sig-truncated-3308`, `sig-extended-3310` |

@@ -73,7 +73,8 @@ signed or published.
   `status_unknown_document_too_large`, `status_unknown_keys_too_large` and
   `status_unknown_header_too_large` for the status list, its key set and its
   header, and, for the attestation's own header, a failed check (exit 1,
-  `header_too_large`; only the first 4,096 bytes are read). That header was
+  `header_too_large`; only its first 4,096 bytes are parsed, and the kid is
+  still found wherever it lies). That header was
   already a failed check (exit 1, `header_not_allowed`, for the member beyond
   alg, kid and typ that made it large): the exit is the same and the reason now
   reported first is `header_too_large`. The limits are fixed in the script.
@@ -81,10 +82,16 @@ signed or published.
   and is now 2,000,000 for the list and 1,000,000 for the key set, and a body over
   the limit gives that UNKNOWN instead of a failed fetch (exit 2). A local list
   or key set over its limit is UNKNOWN where it used to be read.
-- The status list is read with fewer passes: the scalar fields are read in one
-  pass, `list.json` is written compact, and a list padded with 2,000,000 bytes
+- The status list is read with fewer passes: the scalar fields and every kid
+  and subject asked for (`--check-kid`, `--check-subject`) are read in one pass
+  each, `list.json` is written compact, and a list padded with 2,000,000 bytes
   that the signature does not cover now takes about 10 seconds, where it took up to three minutes and four
   gigabytes (Closes #80).
+- A `~/.curlrc` that turns on `compressed` (or `location`) no longer affects a
+  fetch of `--status` or `--status-keys`: the script passes `--no-compressed` and
+  `--no-location` after it, so a few kilobytes of gzip cannot become a file of any
+  size past `--max-filesize`. The rest of the user's curl settings, a proxy for
+  one, still apply to a URL that is not loopback.
 - The script is parsed by more bash parsers: the `10#` arithmetic (a leading
   zero is never octal) is written without it, and two other constructs that
   Semgrep's bash parser rejected are written another way. No behaviour change.
