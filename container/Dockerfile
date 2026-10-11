@@ -20,7 +20,7 @@ ARG REVISION=unknown
 # updates up to the day of the build; the image is not rebuilt afterwards.
 # hadolint ignore=DL3008
 RUN apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends openssl python3 jq \
+ && apt-get install -y -qq --no-install-recommends openssl python3 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY verify-attestation.sh /usr/local/bin/verify-attestation.sh

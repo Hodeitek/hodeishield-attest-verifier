@@ -69,6 +69,16 @@ signed or published.
 - README.md says that the "Attested content" block shows a character that is not
   printable as `?` and prints other text as UTF-8, while check lines and
   messages use `\xHH` (Closes #72).
+- `--status-list` no longer needs `jq`: python3, which the script already
+  needs, reads the status list and its header, and prints exactly what `jq`
+  printed, so every verdict, reason code and message is unchanged. The
+  `jq_missing` reason code is gone, and the `tools_present` check now reads
+  "python3 present". The README, the container image and the CI jobs no longer
+  list or install `jq`, and the test suite runs with no `jq` on the PATH (a CI
+  job checks that). The one visible difference: with `--raw`, the posture is
+  always printed indented, where it was printed as received on a machine
+  without `jq`; and the usage text no longer tells you to run `jq` to split a
+  document by hand (Closes #18).
 
 ## v1.4.0 - 2026-10-10
 

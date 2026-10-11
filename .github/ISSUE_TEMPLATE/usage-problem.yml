@@ -40,11 +40,6 @@ body:
       label: Output of `python3 --version`
     validations:
       required: true
-  - type: input
-    id: jq
-    attributes:
-      label: Output of `jq --version`
-      description: Only if you use `--status-list`.
   - type: textarea
     id: command
     attributes:

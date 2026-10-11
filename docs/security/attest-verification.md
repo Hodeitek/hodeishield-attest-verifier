@@ -76,7 +76,7 @@ transport path is stated here rather than left for you to discover.
 | **OpenSSL ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Older builds cannot parse these artefacts at all, and LibreSSL (the `openssl` on macOS) has no ML-DSA whatever its version number. Before anything else the verifier checks that its `openssl` is OpenSSL, is 3.5 or later and lists ML-DSA-65 in `openssl list -signature-algorithms`; otherwise it stops with exit 2, "not ML-DSA capable". A failure there is a tooling limit, not evidence against the artefact. |
 | **`bash` ≥ 4**   | `verify-attestation.sh` is bash, not POSIX `sh`. No Node, no npm, no HodeiShield code.                                                                             |
 | **`python3`**     | Needed on the path the endpoint actually serves. `GET /api/public/attest/<slug>` returns a **detached** JWS, so the canonical bytes have to be re-derived from the JSON you can read — which is the point, and which needs a JSON parser and the encoder of §4.5. Standard library only. |
-| **`jq`**          | Required by the script only for `--status-list` (§7.1). The §4.6 by-hand path uses it throughout, so that path needs **OpenSSL, `python3` and `jq`**, plus `xxd` or `python3` to turn one hex constant into bytes. It does not work with OpenSSL alone. |
+| **`jq`**          | Not needed by the script, `--status-list` (§7.1) included. Only the §4.6 by-hand path uses it throughout, so that path needs **OpenSSL, `python3` and `jq`**, plus `xxd` or `python3` to turn one hex constant into bytes. It does not work with OpenSSL alone. |
 | Network access    | Only to _fetch_ the public key and the document. Verification itself is offline.                                                                                   |
 
 ```console
@@ -1534,7 +1534,7 @@ into one outcome by checking `$? -ne 0`:
 | --- | --- |
 | `0` | `good` — if a document was given, its posture checks passed (§4) **and** the list verifies and neither rule fired; if only `--check-kid` / `--check-subject` were given, the list verifies and neither rule fired |
 | `1` | `revoked` — the key rule or the subject rule fired, **or** the posture check of the document you gave failed |
-| `2` | **could not check** — usage or environment problem (bad flags, missing `curl`/`openssl`/`python3`/`jq`, an unreadable file), **or a `--status` / `--status-keys` source that could not be fetched** (the script stops with `error: failed to fetch …`). Says nothing about the subject. |
+| `2` | **could not check** — usage or environment problem (bad flags, missing `curl`/`openssl`/`python3`, an unreadable file), **or a `--status` / `--status-keys` source that could not be fetched** (the script stops with `error: failed to fetch …`). Says nothing about the subject. |
 | `3` | `unknown` — the list was obtained but does not verify: bad signature, stale past `nextUpdate` (300 s skew allowance), rolled back (`--min-seq`), self-revoking, an unresolved or mislabelled `kid`, a malformed document; **or** the subject rule could not be decided (see above). The list's `iss` is compared to `--expect-issuer` **only if you pass it**; without it, a list from another issuer is not caught. **Not** evidence of anything either way — see the "if you never fetch" paragraph above. |
 
 **Unknown is not good.** An `unknown` outcome (exit 3) means a status list was
