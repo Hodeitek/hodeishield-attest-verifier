@@ -509,7 +509,14 @@ SL=(--status-list --status-keys "$T/status-keys.json" --attestation "$T/att.json
 expect 0 'GOOD — not revoked, per a verified status list' 'a genuine document on a list that revokes nothing is good' -- \
   "${SL[@]}" --status "$T/list-empty.json"
 
+expect 0 "0 revoked key(s), 0 revoked subject(s), truncated=false, seq=7, iss=$ISS" 'the summary of a good list shows its counts, flag, seq and issuer' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+expect 0 '(list seq 7).' 'a good verdict names the seq of the list' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+
 expect 1 'REVOKED — via key' 'a document whose signing key is revoked is rejected (Rule K)' -- \
+  "${SL[@]}" --status "$T/list-key.json"
+expect 1 "1 revoked key(s), 0 revoked subject(s), truncated=false, seq=8, iss=$ISS" 'the summary of a list that revokes a key shows its counts' -- \
   "${SL[@]}" --status "$T/list-key.json"
 
 expect 1 'REVOKED — via subject' 'a document minted before its subject was withdrawn is rejected (Rule B)' -- \
@@ -806,7 +813,7 @@ t = re.sub(r"(\"signature\":\")[^.\"]*", lambda m: m.group(1) + h, t, count=1)'
 expect 3 'protected header did not decode to a JSON object' 'a protected header nested 1900 deep is refused at once (UNKNOWN)' -- \
   "${SL[@]}" --status "$T/list-deep-header.json"
 
-# Size caps (STATUS_DOC_MAX_BYTES 5,000,000, STATUS_KEYS_MAX_BYTES 1,000,000,
+# Size caps (STATUS_DOC_MAX_BYTES 2,000,000, STATUS_KEYS_MAX_BYTES 1,000,000,
 # HEADER_MAX_BYTES 4096): over a cap the input is UNKNOWN and is not parsed; at the
 # cap it is read as before. The files are made here, from spaces after the JSON.
 pad_to() {   # IN OUT BYTES — IN followed by spaces, BYTES long in all
@@ -818,14 +825,29 @@ assert len(b) <= n
 open(sys.argv[2], "wb").write(b + b" " * (n - len(b)))
 PY
 }
-pad_to "$T/list-empty-compact.json" "$T/list-at-cap.json" 5000000
-pad_to "$T/list-empty-compact.json" "$T/list-over-cap.json" 5000001
-expect 0 'GOOD — not revoked, per a verified status list' 'a status list of exactly 5000000 bytes is read' -- \
+pad_to "$T/list-empty-compact.json" "$T/list-at-cap.json" 2000000
+pad_to "$T/list-empty-compact.json" "$T/list-over-cap.json" 2000001
+expect 0 'GOOD — not revoked, per a verified status list' 'a status list of exactly 2000000 bytes is read' -- \
   "${SL[@]}" --status "$T/list-at-cap.json"
 lacks 'too_large' 'a status list at the size cap is not called too large'
-expect 3 'too_large — the status list is over 5000000 bytes' 'a status list of 5000001 bytes is UNKNOWN, not read' -- \
+expect 3 'too_large — the status list is over 2000000 bytes' 'a status list of 2000001 bytes is UNKNOWN, not read' -- \
   "${SL[@]}" --status "$T/list-over-cap.json"
 lacks 'is not strict JSON' 'an oversized status list is not parsed'
+# The worst a list under the cap can cost is padding that the signature does not
+# cover (statusList may carry any member): 2,000,000 bytes of it, flat or nested
+# 250 deep (the deepest jq allows), must still be read in the time the wrapper
+# allows, and give the verdict of the list underneath.
+for filler in flat nested; do
+  edit_text "$T/list-empty-compact.json" "$T/list-pad-$filler.json" "
+if '$filler' == 'flat':
+    fill = '[' + '0,' * 900000 + '0]'
+else:
+    fill = '[' * 250 + '0,' * 900000 + '0' + ']' * 250
+t = t.replace('\"truncated\":', '\"x\":' + fill + ',\"truncated\":', 1)"
+  pad_to "$T/list-pad-$filler.json" "$T/list-pad-$filler.json" 2000000
+  expect 0 'GOOD — not revoked, per a verified status list' "a status list padded to the cap with $filler filler under an unsigned member is still read" -- \
+    "${SL[@]}" --status "$T/list-pad-$filler.json"
+done
 pad_to "$T/status-keys.json" "$T/keys-at-cap.json" 1000000
 pad_to "$T/status-keys.json" "$T/keys-over-cap.json" 1000001
 expect 0 'GOOD — not revoked, per a verified status list' 'a status key set of exactly 1000000 bytes is read' -- \
@@ -861,8 +883,18 @@ h, rest = d["attestation"]["signature"].split(".", 1)
 hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
 hdr["pad"] = "x" * 5000
 d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
-expect 2 'protected header is' 'an attestation whose protected header is over 4096 bytes could not be checked (2)' -- \
+expect 1 'protected header is' 'an attestation whose protected header is over 4096 bytes fails (1), as it did before the cap' -- \
   --attestation "$T/att-big-header.json" "${COMMON[@]}"
+edit "$T/att.json" "$T/att-over-header.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["pad"] = ""
+hdr["pad"] = "x" * (4097 - len(json.dumps(hdr)))
+assert len(json.dumps(hdr)) == 4097
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'protected header is' 'an attestation header of 4097 bytes fails for its size (1)' -- \
+  --attestation "$T/att-over-header.json" "${COMMON[@]}"
 edit "$T/att.json" "$T/att-cap-header.json" '
 import base64, json
 h, rest = d["attestation"]["signature"].split(".", 1)

@@ -274,25 +274,41 @@ MAX_STATUS_LIST_VALIDITY_SECONDS=86400
 # House NTP allowance (status-list.ts DEFAULT_CLOCK_SKEW_MS / 1000).
 STATUS_CLOCK_SKEW_SECONDS=300
 
-# Size caps, in bytes, on what is parsed from the other side of a wire. They are
-# defence in depth, so that no document, however it is built, can keep a parser
-# busy: an input over its cap is UNKNOWN (or, for the attestation's header,
-# could-not-check) and is never parsed. They are constants on purpose: no option
+# Size caps, in bytes, on what is parsed from the other side of a wire. They bound
+# what a document can cost, so that no document, however it is built, can keep a
+# parser busy: an input over its cap is UNKNOWN (or, for the attestation's header,
+# a failed check) and is never parsed. They are constants on purpose: no option
 # and no environment variable changes them, so whoever supplies a document cannot
-# raise the bound on it. Measured on 2026-10-11: the live status list is 5,657
-# bytes (no revocation in it), the live status key set 2,697 bytes (one key), the
-# largest document among the published vectors 5,539 bytes, and a protected header
-# 112 bytes ({"alg","kid","typ"}). Each cap is far above that, and still small
-# enough that reading it costs well under a second.
-#   STATUS_DOC_MAX_BYTES   --status: about 880 times the live list (the bound this
-#                          script already put on a download), room for tens of
-#                          thousands of revoked entries
+# raise the bound on it.
+#
+# Measured on 2026-10-11: the live status list is 5,657 bytes (no revocation in
+# it), the live status key set 2,697 bytes (one key), the largest document among
+# the published vectors 5,539 bytes, and a protected header 112 bytes
+# ({"alg","kid","typ"}). A revoked subject takes 169 bytes in a list and a revoked
+# key 98.
+#
+# The status list is the one that costs: the cost is the time and the memory of
+# reading it, and the unsigned members of a signed list (statusList may carry any
+# member the signature does not cover) are the worst padding. A fully signed run on
+# a list padded to N bytes took, on the development machine (one run, wall clock,
+# peak memory, the floor of a small list being 1.5 s):
+#     N         flat padding   nested 250 deep    long string
+#     0.5 MB       3.4 s          3.7 s / 232 MB   1.8 s
+#     1   MB       5.5 s          5.7 s / 457 MB   2.3 s
+#     2   MB       9.4 s         10.3 s / 906 MB   3.1 s
+#     5   MB      21.1 s         23.7 s / 2.2 GB   4.1 s
+# and 20,000 genuine revoked subjects (3.4 MB) took 4.7 s, 10,000 (1.7 MB) 3.2 s,
+# 20,000 revoked keys (2 MB) 3.8 s, all under 100 MB. 2,000,000 bytes keeps the
+# worst padding at about 10 seconds and 0.9 GB, and still holds some 11,800 revoked
+# subjects or 20,400 revoked keys, 350 times the live list.
+#   STATUS_DOC_MAX_BYTES   --status
 #   STATUS_KEYS_MAX_BYTES  --status-keys: about 370 times the live key set, room for
-#                          hundreds of keys of 2.7 KB each
+#                          hundreds of keys of 2.7 KB each; it is read by the C JSON
+#                          reader only, so its worst case is far below the list's
 #   HEADER_MAX_BYTES       a decoded protected header (the attestation's and the
 #                          status list's): about 36 times a real one, and the
 #                          bound the envelope puts on any one field
-STATUS_DOC_MAX_BYTES=5000000
+STATUS_DOC_MAX_BYTES=2000000
 STATUS_KEYS_MAX_BYTES=1000000
 HEADER_MAX_BYTES=4096
 
@@ -1189,17 +1205,56 @@ fetch_or_read() {
 # there.
 jsonq() { python3 -I -X utf8 -c "$JSONQ_PY" "$@"; }
 
+# The scalar fields of the status list are read once, by one jsonq process, after
+# list.json is written (load_list_fields): LF_V_<name> holds the value and LF_R_<name>
+# the exit status of the read (0, 2 for a read that failed, 3 for a NUL byte),
+# exactly what separate reads of the same fields gave. A name that was not loaded
+# reads as failed. This keeps the number of times a large list is parsed small.
+LF_NAMES=(docVersion kid iss issuedAt nextUpdate seq raw_iss raw_seq raw_truncated len_keys len_subjects selfrev)
+load_list_fields() {
+  local name='' rc='' val='' n=''
+  for n in "${LF_NAMES[@]}"; do printf -v "LF_R_$n" '%s' 2; printf -v "LF_V_$n" '%s' ''; done
+  while IFS= read -r -d '' name && IFS= read -r -d '' rc && IFS= read -r -d '' val; do
+    printf -v "LF_R_$name" '%s' "$rc"; printf -v "LF_V_$name" '%s' "$val"
+  done < <(jsonq list "$WORKDIR/list.json" 2>/dev/null)
+  return 0
+}
+# lf_get VAR NAME — VAR is the loaded value; the status is that of the read.
+lf_get() {
+  local lf_v_="LF_V_$2" lf_r_="LF_R_$2"   # names no caller uses for VAR
+  printf -v "$1" '%s' "${!lf_v_-}"
+  return "${!lf_r_:-2}"
+}
+
+# lf_val NAME — print the loaded value (nothing when the read failed).
+lf_val() { local lf_out_=''; lf_get lf_out_ "$1" || true; printf '%s' "$lf_out_"; }
+
 # list_field VAR FILE FILTER — set VAR to what FILTER (one of the few jsonq
 # `field` filters, written as the jq filter it replaces) selects in FILE, as
 # `jq -r` printed it but EXACTLY: read with a sentinel after it, removed, because
 # $(...) strips trailing newlines (see claims_field). A string holding a NUL byte
 # is a failed check that leaves the status UNKNOWN (status_unknown_nul_byte), and
-# VAR shows each NUL as \x00.
+# VAR shows each NUL as \x00. The fields of list.json come from load_list_fields.
 list_field() {
-  local out='' rc=''
-  out="$(jsonq field "$2" "$3"; printf 'x%s' "$?")"
-  rc="${out##*x}"
-  printf -v "$1" '%s' "${out%x*}"
+  local out='' rc='' name=''
+  if [ "$2" = "$WORKDIR/list.json" ]; then
+    case "$3" in
+      '.docVersion // empty') name=docVersion ;;
+      '.kid') name=kid ;;
+      '.iss') name=iss ;;
+      '.issuedAt') name=issuedAt ;;
+      '.nextUpdate') name=nextUpdate ;;
+      '.seq') name=seq ;;
+    esac
+  fi
+  if [ -n "$name" ]; then
+    rc=0; lf_get out "$name" || rc=$?
+  else
+    out="$(jsonq field "$2" "$3"; printf 'x%s' "$?")"
+    rc="${out##*x}"
+    out="${out%x*}"
+  fi
+  printf -v "$1" '%s' "$out"
   case "$rc" in
     0) ;;
     3) stat_bad status_unknown_nul_byte "nul_byte — $3 holds a NUL byte (shown as \\x00): no comparison can read it exactly" ;;
@@ -1410,7 +1465,19 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 #                          when a string held one); FILTER is exactly one of
 #                          '.docVersion // empty', 'keys_unsorted | sort | join(",")'
 #                          or .name; exit 2 when jq would have failed
-#   sub NAME / raw NAME    `jq .NAME` / `jq -r .NAME`
+#   split OUT              for a status document: exit 1 unless it is an object with
+#                          statusList and signature; else write statusList to OUT
+#                          (compact) and print the signature as `raw` does
+#   sub NAME / csub NAME / raw NAME
+#                          `jq .NAME` / `jq -c .NAME` / `jq -r .NAME`
+#   list                   the scalar fields of a status list in one read, as
+#                          NAME NUL STATUS NUL VALUE NUL records: docVersion, kid,
+#                          iss, issuedAt, nextUpdate and seq as `field` gives them
+#                          (STATUS is its exit status), raw_iss, raw_seq and
+#                          raw_truncated as `raw` gives them (NUL bytes dropped,
+#                          trailing newlines cut: what $(...) keeps), len_keys and
+#                          len_subjects as `length` gives them, and selfrev (1 when
+#                          a revoked key has the list's own kid, as `sel` finds it)
 #   length NAME            `jq '.NAME | length'`
 #   sel LIST MEMBER VALUE [OUT]
 #                          the elements of .LIST[]? whose .MEMBER equals VALUE: with
@@ -1430,7 +1497,9 @@ def num(n):
     if d.is_infinite(): return ("-" if d.is_signed() else "") + "1.7976931348623157e+308"
     return str(d)
 ESC = {34: "\\\"", 92: "\\\\", 10: "\\n", 13: "\\r", 9: "\\t", 8: "\\b", 12: "\\f"}
+PLAIN = re.compile("[^\\x00-\\x1f\"\\\\\\x7f]*")
 def quote(s):
+    if PLAIN.fullmatch(s): return "\"" + s + "\""
     return "\"" + "".join(ESC.get(ord(c)) or ("\\u%04x" % ord(c) if ord(c) < 32 or ord(c) == 127 else c) for c in s) + "\""
 def emit(v, pretty, lvl, out):
     if v is None: out.append("null")
@@ -1450,7 +1519,24 @@ def emit(v, pretty, lvl, out):
                 x = x[1]
             emit(x, pretty, lvl + 1, out)
         out.append(("\n" + "  " * lvl if pretty else "") + ("]" if isl else "}"))
+NUMC = {}
+def scalar(x):
+    if x is None: return "null"
+    if x is True: return "true"
+    if x is False: return "false"
+    if type(x) is N:
+        r = NUMC.get(x.t)
+        if r is None: r = NUMC[x.t] = num(x)
+        return r
+    return quote(x)
+def compact(v):
+    if type(v) is list:
+        return "[" + ",".join([compact(x) if type(x) is list or type(x) is dict else scalar(x) for x in v]) + "]"
+    if type(v) is dict:
+        return "{" + ",".join([quote(k) + ":" + (compact(x) if type(x) is list or type(x) is dict else scalar(x)) for k, x in v.items()]) + "}"
+    return scalar(v)
 def dump(v, pretty=False):
+    if not pretty: return compact(v)
     out = []
     emit(v, pretty, 0, out)
     return "".join(out)
@@ -1524,6 +1610,17 @@ def plain(v):
     return v if isinstance(v, str) else dump(v, True)
 def arg(s):
     return utf8(s.encode("utf-8", "surrogateescape"))
+def fval(d, f):
+    if f == ".docVersion // empty":
+        v = member(d, "docVersion")
+        if v is None or v is False: return "", 0
+    elif f == "keys_unsorted | sort | join(\",\")":
+        if isinstance(d, dict): v = ",".join(sorted(d))
+        elif isinstance(d, list): v = ",".join(str(i) for i in range(len(d)))
+        else: raise ValueError("no keys")
+    elif re.fullmatch(r"\.[A-Za-z]+", f): v = member(d, f[1:])
+    else: raise ValueError("filter")
+    return plain(v).replace("\0", "\\x00"), (3 if isinstance(v, str) and "\0" in v else 0)
 def main(a):
     w = sys.stdout.buffer.write
     mode = a[0]
@@ -1537,20 +1634,38 @@ def main(a):
     if mode == "shape": return 0 if isinstance(d, dict) and "statusList" in d and "signature" in d else 1
     if mode == "crit": return 0 if isinstance(d, dict) and "crit" in d else 1
     if mode == "field":
-        f = a[2]
-        if f == ".docVersion // empty":
-            v = member(d, "docVersion")
-            if v is None or v is False: return 0
-        elif f == "keys_unsorted | sort | join(\",\")":
-            if isinstance(d, dict): v = ",".join(sorted(d))
-            elif isinstance(d, list): v = ",".join(str(i) for i in range(len(d)))
-            else: raise ValueError("no keys")
-        elif re.fullmatch(r"\.[A-Za-z]+", f): v = member(d, f[1:])
-        else: raise ValueError("filter")
-        t = plain(v)
-        w(t.replace("\0", "\\x00").encode("utf-8"))
-        return 3 if isinstance(v, str) and "\0" in v else 0
-    if mode == "sub": w((dump(member(d, a[2]), True) + "\n").encode("utf-8"))
+        text_, rc = fval(d, a[2])
+        w(text_.encode("utf-8"))
+        return rc
+    if mode == "list":
+        recs = []
+        for name, f in (("docVersion", ".docVersion // empty"), ("kid", ".kid"), ("iss", ".iss"), ("issuedAt", ".issuedAt"), ("nextUpdate", ".nextUpdate"), ("seq", ".seq")):
+            try: text_, rc = fval(d, f)
+            except Exception: text_, rc = "", 2
+            recs.append((name, rc, text_))
+        for name, key in (("raw_iss", "iss"), ("raw_seq", "seq"), ("raw_truncated", "truncated")):
+            try: recs.append((name, 0, plain(member(d, key)).replace("\0", "").rstrip("\n")))
+            except Exception: recs.append((name, 2, ""))
+        for name, key in (("len_keys", "keys"), ("len_subjects", "subjects")):
+            try:
+                v = member(d, key)
+                recs.append((name, 0, str(0 if v is None else len(v))))
+            except Exception: recs.append((name, 2, ""))
+        try:
+            kid, items = member(d, "kid"), member(d, "keys")
+            items = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else []
+            recs.append(("selfrev", 0, "1" if isinstance(kid, str) and any(member(e, "kid") == kid for e in items) else "0"))
+        except Exception: recs.append(("selfrev", 2, ""))
+        w("".join("%s\0%d\0%s\0" % r for r in recs).encode("utf-8"))
+        return 0
+    if mode == "split":
+        if not (isinstance(d, dict) and "statusList" in d and "signature" in d): return 1
+        sig = plain(d["signature"])
+        with open(a[2], "wb") as fh: fh.write((dump(d["statusList"]) + "\n").encode("utf-8"))
+        w((sig + "\n").encode("utf-8"))
+        return 0
+    if mode == "csub": w((dump(member(d, a[2])) + "\n").encode("utf-8"))
+    elif mode == "sub": w((dump(member(d, a[2]), True) + "\n").encode("utf-8"))
     elif mode == "raw": w((plain(member(d, a[2])) + "\n").encode("utf-8"))
     elif mode == "length":
         v = member(d, a[2])
@@ -2251,9 +2366,13 @@ fi
 b64url_decode "$H" > "$WORKDIR/header.json" || die header_not_base64url "header is not valid base64url"
 HEADER_LEN="$(wc -c < "$WORKDIR/header.json" | tr -d ' ')"
 if [ "$HEADER_LEN" -gt "$HEADER_MAX_BYTES" ]; then
-  # Nothing below reads the header; like a header that is not base64url, this one
-  # ends the run as could-not-check (exit 2).
-  die header_too_large "protected header is ${HEADER_LEN} bytes, over the ${HEADER_MAX_BYTES} a header of this format can have; it was not read"
+  # A failed check (exit 1), as the same document was before the cap (it had a
+  # member beyond alg, kid, typ). Only the first HEADER_MAX_BYTES bytes are read
+  # by what follows, so the cost of this header is bounded.
+  bad header_too_large "protected header is ${HEADER_LEN} bytes, over the ${HEADER_MAX_BYTES} a header of this format can have; \
+only the first ${HEADER_MAX_BYTES} are read"
+  head -c "$HEADER_MAX_BYTES" "$WORKDIR/header.json" > "$WORKDIR/header.cut"
+  mv -- "$WORKDIR/header.cut" "$WORKDIR/header.json"
 fi
 b64url_decode "$S" > "$WORKDIR/sig.bin"     || die signature_not_base64url "signature is not valid base64url"
 SIG_LEN="$(wc -c < "$WORKDIR/sig.bin" | tr -d ' ')"
@@ -2857,10 +2976,12 @@ done
 # Every jsonq call in this section sits where a failure is a condition or has a
 # fallback: under `set -e` a bare failing call would end the run with exit 2 and
 # no verdict, and a document must never turn a status into "could not check".
-if [ "$STATUS_FAILURES" -eq 0 ] && jsonq shape "$WORKDIR/status.json" >/dev/null 2>&1 \
-   && jsonq sub "$WORKDIR/status.json" statusList > "$WORKDIR/list.json" 2>/dev/null \
-   && STATUS_JWS="$(jsonq raw "$WORKDIR/status.json" signature)"; then
+# One read of the document does the shape check, writes statusList to list.json
+# (compact: nothing reads its layout, and an indented copy of a padded list is
+# many times larger) and returns the signature.
+if [ "$STATUS_FAILURES" -eq 0 ] && STATUS_JWS="$(jsonq split "$WORKDIR/status.json" "$WORKDIR/list.json" 2>/dev/null)"; then
   ok status_shape_valid "status document has the expected {statusList, signature} shape"
+  load_list_fields
 else
   stat_bad status_unknown_malformed_document "malformed_document — expected {statusList, signature, ...}, exactly what \
 GET /api/public/attest/status serves"
@@ -3168,7 +3289,7 @@ fi
 
 # --- Rule S: a list may not revoke its own signer ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  if jsonq sel "$WORKDIR/list.json" keys kid "$LIST_KID" >/dev/null 2>&1; then
+  if [ "$(lf_val selfrev)" = 1 ]; then
     stat_bad status_unknown_self_revocation "self_revocation — the list revokes its own signing key ('$(esc "${LIST_KID}")')"
   else
     ok status_not_self_revoking "the list does not name its own signing key among the revoked keys (Rule S)"
@@ -3178,9 +3299,8 @@ fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
   STATUS_LIST_VALID=1
   printf '        %s revoked key(s), %s revoked subject(s), truncated=%s, seq=%s, iss=%s\n' \
-    "$(jsonq length "$WORKDIR/list.json" keys)" "$(jsonq length "$WORKDIR/list.json" subjects)" \
-    "$(jsonq raw "$WORKDIR/list.json" truncated)" "$(esc "$(jsonq raw "$WORKDIR/list.json" seq)")" \
-    "$(esc "$(jsonq raw "$WORKDIR/list.json" iss)")"
+    "$(lf_val len_keys)" "$(lf_val len_subjects)" "$(lf_val raw_truncated)" \
+    "$(esc "$(lf_val raw_seq)")" "$(esc "$(lf_val raw_iss)")"
   printf '\n%s%sthe status list itself verifies.%s\n' "$GREEN" "$BOLD" "$RESET"
 else
   printf '\n%s%sthe status list does NOT verify%s (%d check(s) failed) — its content is UNKNOWN,\n' \
@@ -3293,7 +3413,7 @@ decide, so UNKNOWN, never 'good'"
         warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'" ;;
     esac
   else
-    if ! truncated="$(jsonq raw "$WORKDIR/list.json" truncated)"; then
+    if ! lf_get truncated raw_truncated; then
       SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
       warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
     elif [ "$truncated" = 'true' ]; then
@@ -3361,7 +3481,7 @@ case "$REVOCATION_STATUS" in
     elif [ "${#SUBJ_NAMES[@]}" -gt 1 ]; then
       printf ', subjects %s, %s carry no earlier withdrawal' "$(esc "${SUBJ_NAMES[0]}")" "$(esc "${SUBJ_NAMES[1]}")"
     fi
-    printf ' (list seq %s).\n' "$(esc "$(jsonq raw "$WORKDIR/list.json" seq 2>/dev/null || printf '?')")"
+    printf ' (list seq %s).\n' "$(esc "$(if lf_get SEQ_V raw_seq; then printf '%s' "$SEQ_V"; else printf '?'; fi)")"
     ;;
   revoked)
     if [ "$REVOCATION_VIA" = key ]; then record revoked_key fail 1; else record revoked_subject fail 1; fi
