@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
 # shellcheck disable=SC2317,SC2329 # cleanup() is invoked only indirectly via
 # `trap cleanup EXIT`, not by a direct call shellcheck can see, so it
 # misreads the function body as unreachable. File-wide, one rule (SC2329 is its name from ShellCheck 0.11), documented.

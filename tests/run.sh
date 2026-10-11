@@ -2562,6 +2562,54 @@ expect 0 "verify-attestation.sh $VER" '--version prints one line with the versio
 if [ "$(wc -l < "$LAST_OUT" | tr -d ' ')" -eq 1 ]; then printf 'ok - --version is one line\n'; PASSED=$((PASSED + 1))
 else printf 'not ok - --version is not one line\n'; FAILED=$((FAILED + 1)); fi
 
+# --- licence headers (tests/spdx-headers.sh, #79) ---------------------------------
+# Every tracked shell script, workflow and Dockerfile carries the SPDX line. The
+# tree check needs git (the CI test container has none; a separate CI job runs it
+# there); the cases below run on a small tree built here and need nothing.
+echo '# licence headers'
+SH="$ROOT/tests/spdx-headers.sh"
+mkdir -p "$T/spdx/scripts" "$T/spdx/.github/workflows" "$T/spdx/.githooks" "$T/spdx/tests/vectors/v1" "$T/spdx/.github/ISSUE_TEMPLATE"
+SPDX_L1='# SPDX-License-Identifier: Apache-2.0'; SPDX_L2='# Copyright 2026 Hodeitek S.L.'
+printf '#!/usr/bin/env bash\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/scripts/a.sh"
+printf '%s\n%s\nname: ci\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/.github/workflows/ci.yml"
+printf '%s\n%s\nFROM scratch\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/Dockerfile"
+printf '#!/usr/bin/env bash\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/.githooks/commit-msg"
+printf '{}\n' > "$T/spdx/tests/vectors/v1/a.json"
+printf '#!/bin/sh\n' > "$T/spdx/tests/vectors/v1/exempt.sh"
+printf 'name: x\n' > "$T/spdx/.github/ISSUE_TEMPLATE/form.yml"
+printf '#!/usr/bin/env python3\n' > "$T/spdx/scripts/tool"
+printf '%s\n' scripts/a.sh .github/workflows/ci.yml Dockerfile .githooks/commit-msg tests/vectors/v1/a.json \
+  tests/vectors/v1/exempt.sh .github/ISSUE_TEMPLATE/form.yml scripts/tool > "$T/spdx.list"
+spdx_case() {   # NAME WANT_EXIT
+  local out="$T/out.$((PASSED + FAILED))" got
+  bash "$SH" --root "$T/spdx" --files "$T/spdx.list" > "$out" 2>&1; got=$?
+  if [ "$got" -eq "$2" ]; then printf 'ok - licence header: %s (exit %s)\n' "$1" "$got"; PASSED=$((PASSED + 1))
+  else printf 'not ok - licence header: %s (exit %s, expected %s)\n' "$1" "$got" "$2"; sed 's/^/    # /' "$out"; FAILED=$((FAILED + 1)); fi
+}
+spdx_case 'every checked file has the header; vectors, issue forms and a python tool are not checked' 0
+for broken in scripts/a.sh .github/workflows/ci.yml Dockerfile .githooks/commit-msg; do
+  cp "$T/spdx/$broken" "$T/spdx.keep"
+  if [ "$broken" = scripts/a.sh ] || [ "$broken" = .githooks/commit-msg ]; then sed -i 2,3d "$T/spdx/$broken"; else sed -i 1,2d "$T/spdx/$broken"; fi
+  spdx_case "$broken without the header" 1
+  cp "$T/spdx.keep" "$T/spdx/$broken"
+done
+sed -i 3d "$T/spdx/scripts/a.sh"
+spdx_case 'a script with the SPDX line but no copyright line' 1
+printf '#!/usr/bin/env bash\n# a comment first\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/scripts/a.sh"
+spdx_case 'a header that is not directly after the shebang' 1
+printf '#!/usr/bin/env bash\n%s\n%s\n' "$SPDX_L1" "$SPDX_L2" > "$T/spdx/scripts/a.sh"
+: > "$T/spdx.empty"
+bash "$SH" --root "$T/spdx" --files "$T/spdx.empty" > "$T/spdx.out" 2>&1; got=$?
+if [ "$got" -ne 0 ]; then printf 'ok - licence header: an empty file list fails (exit %s)\n' "$got"; PASSED=$((PASSED + 1))
+else printf 'not ok - licence header: an empty file list passed\n'; FAILED=$((FAILED + 1)); fi
+if [ -d "$ROOT/.git" ] || [ -f "$ROOT/.git" ]; then
+  bash "$SH" > "$T/spdx.out" 2>&1; got=$?
+  if [ "$got" -eq 0 ]; then printf 'ok - licence header: this tree (%s)\n' "$(cat "$T/spdx.out")"; PASSED=$((PASSED + 1))
+  else printf 'not ok - licence header: this tree\n'; sed 's/^/    # /' "$T/spdx.out"; FAILED=$((FAILED + 1)); fi
+else
+  printf 'skipped - licence header: this tree (not a git checkout)\n'; SKIPPED=$((SKIPPED + 1))
+fi
+
 # --help (#15): a short usage, not the header comment. It must exit 0, stay
 # under 40 lines, carry the exit codes, and list EVERY option the argument
 # parser accepts. The options are read from the parser's own `case` patterns, so
