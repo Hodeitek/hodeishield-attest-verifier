@@ -274,6 +274,28 @@ MAX_STATUS_LIST_VALIDITY_SECONDS=86400
 # House NTP allowance (status-list.ts DEFAULT_CLOCK_SKEW_MS / 1000).
 STATUS_CLOCK_SKEW_SECONDS=300
 
+# Size caps, in bytes, on what is parsed from the other side of a wire. They are
+# defence in depth, so that no document, however it is built, can keep a parser
+# busy: an input over its cap is UNKNOWN (or, for the attestation's header,
+# could-not-check) and is never parsed. They are constants on purpose: no option
+# and no environment variable changes them, so whoever supplies a document cannot
+# raise the bound on it. Measured on 2026-10-11: the live status list is 5,657
+# bytes (no revocation in it), the live status key set 2,697 bytes (one key), the
+# largest document among the published vectors 5,539 bytes, and a protected header
+# 112 bytes ({"alg","kid","typ"}). Each cap is far above that, and still small
+# enough that reading it costs well under a second.
+#   STATUS_DOC_MAX_BYTES   --status: about 880 times the live list (the bound this
+#                          script already put on a download), room for tens of
+#                          thousands of revoked entries
+#   STATUS_KEYS_MAX_BYTES  --status-keys: about 370 times the live key set, room for
+#                          hundreds of keys of 2.7 KB each
+#   HEADER_MAX_BYTES       a decoded protected header (the attestation's and the
+#                          status list's): about 36 times a real one, and the
+#                          bound the envelope puts on any one field
+STATUS_DOC_MAX_BYTES=5000000
+STATUS_KEYS_MAX_BYTES=1000000
+HEADER_MAX_BYTES=4096
+
 # The text --help prints. The header comment above is for whoever reads or audits
 # this script; this is for whoever runs it. Every option the parser below accepts
 # is listed here, and tests/run.sh fails if one is not.
@@ -813,8 +835,10 @@ JWS_NAME="$JWS_FILE"; ATTESTATION_NAME="$ATTESTATION_FILE"; CLAIMS_NAME="$CLAIMS
 POSTURE_NAME="$POSTURE_FILE"; JWKS_NAME="$JWKS_FILE"
 STATUS_NAME="$STATUS_SRC"; STATUS_KEYS_NAME="$STATUS_KEYS_SRC"
 mkdir "$WORKDIR/in"
-read_input() {   # SRC DEST — print the path to read from now on
-  if [ -r "$1" ] && [ ! -d "$1" ] && { cat < "$1" > "$2"; } 2>/dev/null; then
+read_input() {   # SRC DEST [MAX] — print the path to read from now on; with MAX, no more than MAX+1 bytes are read (MAX+1 reads as "over the cap")
+  local lim=''
+  if [ -n "${3:-}" ]; then lim=$(( $3 + 1 )); fi
+  if [ -r "$1" ] && [ ! -d "$1" ] && { if [ -n "$lim" ]; then head -c "$lim" < "$1" > "$2"; else cat < "$1" > "$2"; fi; } 2>/dev/null; then
     printf '%s' "$2"
   else
     rm -f -- "$2"; printf '%s' "$2.unreadable"
@@ -827,11 +851,11 @@ read_input() {   # SRC DEST — print the path to read from now on
 [ -z "$JWKS_FILE" ]        || JWKS_FILE="$(read_input "$JWKS_FILE" "$WORKDIR/in/jwks.json")"
 case "$STATUS_SRC" in
   ''|http://*|https://*) ;;
-  *) STATUS_SRC="$(read_input "$STATUS_SRC" "$WORKDIR/in/status.json")" ;;
+  *) STATUS_SRC="$(read_input "$STATUS_SRC" "$WORKDIR/in/status.json" "$STATUS_DOC_MAX_BYTES")" ;;
 esac
 case "$STATUS_KEYS_SRC" in
   ''|http://*|https://*) ;;
-  *) STATUS_KEYS_SRC="$(read_input "$STATUS_KEYS_SRC" "$WORKDIR/in/status-keys.json")" ;;
+  *) STATUS_KEYS_SRC="$(read_input "$STATUS_KEYS_SRC" "$WORKDIR/in/status-keys.json" "$STATUS_KEYS_MAX_BYTES")" ;;
 esac
 
 # Is a posture attestation being checked at all? `--attestation` carries its own
@@ -1052,7 +1076,10 @@ is_loopback_url() {
   return 0
 }
 
-# fetch_url URL OUT [loopback] — curl URL into OUT; what curl says about a failure
+# fetch_url URL OUT [loopback [MAX]] — curl URL into OUT, MAX+1 bytes at most (curl
+# stops, exit 63, at more; a server need not announce the length of what it sends,
+# so --max-filesize alone is not the check: the caller measures what arrived).
+# What curl says about a failure
 # goes to stderr through esc (it quotes the URL, and the host or the part of the
 # URL it could not read, as given on the command line). --globoff: a {a,b} or
 # [1-9] in the URL is part of the URL, not several fetches into one file. For a
@@ -1061,10 +1088,11 @@ is_loopback_url() {
 # this machine in cleartext. Other URLs keep the user's curl settings, since https
 # may need a proxy.
 fetch_url() {
-  local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=()
+  local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=() lim=0
   if [ "${3:-}" = loopback ]; then curl_q=(-q); curl_np=(--noproxy '*'); fi
-  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize 5000000 -o "$2" "$1" 2> "$errf" || rc=$?
-  if [ "$rc" -ne 0 ] && [ -s "$errf" ]; then
+  lim=$(( ${4:-5000000} + 1 ))
+  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize "$lim" -o "$2" "$1" 2> "$errf" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 63 ] && [ -s "$errf" ]; then
     printf '%s\n' "$(esc "$(cat "$errf")")" >&2
   fi
   return "$rc"
@@ -1102,20 +1130,32 @@ fetch_url() {
 # job, and only if you pass it), and says nothing about whether the key set served
 # is the right one. Redirects are deliberately NOT followed (no `-L`), so a
 # redirect to a file:// or an internal address cannot be chased; a redirecting
-# endpoint fails closed instead. There is also no response-size bound beyond
-# --max-time 15, so a hostile endpoint can stream into the (0700, mktemp -d)
-# work directory for up to 15 seconds.
+# endpoint fails closed instead. A download is bounded in time (--max-time 15) and
+# in size (MAX+1 bytes, see fetch_url); a body over MAX is recorded in
+# FETCH_OVER and the file is emptied, and section 8 reports it as too large.
+FETCH_OVER=''
+# fetch_checked SRC OUT ROLE MAX SHOWN [loopback] — fetch_url, where too much is
+# not a failed fetch.
+fetch_checked() {
+  local rc=0
+  fetch_url "$1" "$2" "${6:-}" "$4" || rc=$?
+  if [ "$rc" -eq 63 ]; then
+    FETCH_OVER+="|${3}|"; : > "$2"
+  elif [ "$rc" -ne 0 ]; then
+    die fetch_failed "failed to fetch ${5}"
+  fi
+}
 fetch_or_read() {
-  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}" shown=''
+  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}" max="${5:-5000000}" shown=''
   shown="$(esc "$src")"
   case "$src" in
     https://*)
-      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
+      fetch_checked "$src" "$out" "$role" "$max" "$shown"
       ;;
     http://*)
       if is_loopback_url "$src"; then
         warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${shown}"
-        fetch_url "$src" "$out" loopback || die fetch_failed "failed to fetch ${shown}"
+        fetch_checked "$src" "$out" "$role" "$max" "$shown" loopback
         return 0
       fi
       if [ "$role" = 'status key set' ]; then
@@ -1135,7 +1175,7 @@ fetch_or_read() {
       warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${shown}"
       warn_more "the list is signed, so tampering shows up as a failed signature (=> unknown),"
       warn_more "but use https:// — a downgrade you did not notice is not a threat model."
-      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
+      fetch_checked "$src" "$out" "$role" "$max" "$shown"
       ;;
     *)
       [ -r "$src" ] || die file_unreadable "cannot read $(esc "$name")"
@@ -1355,6 +1395,10 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 #     (an exponent above 999999999 is the largest double, 1.7976931348623157e+308;
 #     below -1147483646 it rounds to 0E-1147483646), so no number can make it fail;
 #   - invalid UTF-8 is replaced as jq does, one U+FFFD for each bad sequence;
+#   - nesting is limited as jq 1.7 limits it: an array costs 1, an object 1, and an
+#     object member whose value is an array or an object 1 more, and a document
+#     that costs more than 256 at any point is refused (exit 2), so 256 arrays, or
+#     128 objects, deep. Parsing and printing are linear in the size of the file;
 #   - a string is printed escaped as jq does (DEL as \u007f, the rest raw), a
 #     document pretty (two spaces) or compact (-c).
 # argv[1] = mode, argv[2] = file:
@@ -1377,7 +1421,6 @@ sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-
 # Any other failure is exit 2 and nothing on stderr.
 JSONQ_PY='
 import decimal, json, re, sys
-sys.setrecursionlimit(20000)
 class N:
     def __init__(self, t): self.t = t
 CTX = decimal.Context(prec=147483648, Emax=999999999, Emin=-999999999, rounding=decimal.ROUND_HALF_UP, traps=[])
@@ -1389,18 +1432,28 @@ def num(n):
 ESC = {34: "\\\"", 92: "\\\\", 10: "\\n", 13: "\\r", 9: "\\t", 8: "\\b", 12: "\\f"}
 def quote(s):
     return "\"" + "".join(ESC.get(ord(c)) or ("\\u%04x" % ord(c) if ord(c) < 32 or ord(c) == 127 else c) for c in s) + "\""
-def dump(v, pretty=False, lvl=0):
-    if v is None: return "null"
-    if v is True: return "true"
-    if v is False: return "false"
-    if isinstance(v, N): return num(v)
-    if isinstance(v, str): return quote(v)
-    if not v: return "[]" if isinstance(v, list) else "{}"
-    items = [dump(x, pretty, lvl + 1) for x in v] if isinstance(v, list) else [quote(k) + (": " if pretty else ":") + dump(x, pretty, lvl + 1) for k, x in v.items()]
-    o, c = ("[", "]") if isinstance(v, list) else ("{", "}")
-    if not pretty: return o + ",".join(items) + c
-    pad = "  " * (lvl + 1)
-    return o + "\n" + ",\n".join(pad + i for i in items) + "\n" + "  " * lvl + c
+def emit(v, pretty, lvl, out):
+    if v is None: out.append("null")
+    elif v is True: out.append("true")
+    elif v is False: out.append("false")
+    elif isinstance(v, N): out.append(num(v))
+    elif isinstance(v, str): out.append(quote(v))
+    elif not v: out.append("[]" if isinstance(v, list) else "{}")
+    else:
+        isl = isinstance(v, list)
+        out.append("[" if isl else "{")
+        pad = "\n" + "  " * (lvl + 1) if pretty else ""
+        for i, x in enumerate(v if isl else v.items()):
+            out.append(("," if i else "") + pad)
+            if not isl:
+                out.append(quote(x[0]) + (": " if pretty else ":"))
+                x = x[1]
+            emit(x, pretty, lvl + 1, out)
+        out.append(("\n" + "  " * lvl if pretty else "") + ("]" if isl else "}"))
+def dump(v, pretty=False):
+    out = []
+    emit(v, pretty, 0, out)
+    return "".join(out)
 TOKEN = re.compile(r"[ \t\r\n]*(?:([][{},:])|(\"(?:[^\"\\\x00-\x1f]|\\[\"\\/bfnrt]|\\u[0-9a-fA-F]{4})*\")|([^ \t\r\n\][{},:\"]+))")
 NUMBER = re.compile(r"[+-]?(?:(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)", re.I)
 def utf8(b):
@@ -1426,7 +1479,7 @@ def text(s):
     return re.sub("[\udc00-\udfff]", "�", s)
 def parse(raw):
     if raw.startswith(b"\xef\xbb\xbf"): raw = raw[3:]
-    t, i, vals, stack = raw.decode("utf-8", "surrogateescape"), 0, [], []
+    t, i, vals, stack, weight = raw.decode("utf-8", "surrogateescape"), 0, [], [], 0
     while True:
         m = TOKEN.match(t, i)
         if m is None:
@@ -1441,15 +1494,17 @@ def parse(raw):
         if p in (",", ":", "]", "}"):
             if p == "," and f is not None and f[2] == "comma": f[2] = "val" if isinstance(f[0], list) else "key"
             elif p == ":" and f is not None and f[2] == "colon": f[2] = "val"
-            elif p == "]" and f is not None and isinstance(f[0], list) and f[2] in ("val_or_end", "comma"): stack.pop(); v = f[0]; f = None
-            elif p == "}" and f is not None and isinstance(f[0], dict) and f[2] in ("key_or_end", "comma"): stack.pop(); v = f[0]; f = None
+            elif p == "]" and f is not None and isinstance(f[0], list) and f[2] in ("val_or_end", "comma"): weight -= f[3]; stack.pop(); v = f[0]; f = None
+            elif p == "}" and f is not None and isinstance(f[0], dict) and f[2] in ("key_or_end", "comma"): weight -= f[3]; stack.pop(); v = f[0]; f = None
             else: raise ValueError("parse error")
             if f is not None: continue
         else:
             if f is not None and f[2] not in ("val", "val_or_end"): raise ValueError("parse error")
             if p in ("[", "{"):
-                if len(stack) >= 10000: raise ValueError("depth")
-                stack.append([[] if p == "[" else {}, None, "val_or_end" if p == "[" else "key_or_end"])
+                cost = 2 if f is not None and isinstance(f[0], dict) else 1
+                weight += cost
+                if weight > 256: raise ValueError("depth")
+                stack.append([[] if p == "[" else {}, None, "val_or_end" if p == "[" else "key_or_end", cost])
                 continue
             if s is not None: v = text(s)
             elif lit in ("true", "false", "null"): v = {"true": True, "false": False, "null": None}[lit]
@@ -2194,6 +2249,12 @@ else
 fi
 
 b64url_decode "$H" > "$WORKDIR/header.json" || die header_not_base64url "header is not valid base64url"
+HEADER_LEN="$(wc -c < "$WORKDIR/header.json" | tr -d ' ')"
+if [ "$HEADER_LEN" -gt "$HEADER_MAX_BYTES" ]; then
+  # Nothing below reads the header; like a header that is not base64url, this one
+  # ends the run as could-not-check (exit 2).
+  die header_too_large "protected header is ${HEADER_LEN} bytes, over the ${HEADER_MAX_BYTES} a header of this format can have; it was not read"
+fi
 b64url_decode "$S" > "$WORKDIR/sig.bin"     || die signature_not_base64url "signature is not valid base64url"
 SIG_LEN="$(wc -c < "$WORKDIR/sig.bin" | tr -d ' ')"
 if [ "$SIG_LEN" -eq 3309 ]; then
@@ -2758,10 +2819,33 @@ STATUS_PUB_B64URL=''; STATUS_DERIVED_KID=''; STATUS_RETIRED_AT=''
 LIST_KID=''; LIST_ISS=''
 STATUS_LIST_VALID=0
 
-fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list' "$STATUS_NAME"
-fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set' "$STATUS_KEYS_NAME"
+fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list' "$STATUS_NAME" "$STATUS_DOC_MAX_BYTES"
+fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set' "$STATUS_KEYS_NAME" "$STATUS_KEYS_MAX_BYTES"
+
+# The size caps come before the first parse: a document over its cap is UNKNOWN
+# and is not read by anything below (every later step needs STATUS_FAILURES = 0,
+# and the strict-JSON loop skips it). What was fetched or copied is at most one
+# byte over the cap, or empty when curl stopped; a count of bytes is all that is
+# asked of it. A local file was read with the same bound (read_input).
+STATUS_DOC_OVER=0; STATUS_KEYS_OVER=0
+if [ "$(wc -c < "$WORKDIR/status.json" | tr -d ' ')" -gt "$STATUS_DOC_MAX_BYTES" ]; then FETCH_OVER+="|status list|"; fi
+if [ "$(wc -c < "$WORKDIR/status-keys.json" | tr -d ' ')" -gt "$STATUS_KEYS_MAX_BYTES" ]; then FETCH_OVER+="|status key set|"; fi
+case "$FETCH_OVER" in
+  *'|status list|'*)
+    STATUS_DOC_OVER=1
+    stat_bad status_unknown_document_too_large "too_large — the status list is over ${STATUS_DOC_MAX_BYTES} bytes, more than any list \
+this issuer publishes; it was not read" ;;
+esac
+case "$FETCH_OVER" in
+  *'|status key set|'*)
+    STATUS_KEYS_OVER=1
+    stat_bad status_unknown_keys_too_large "too_large — the status key set is over ${STATUS_KEYS_MAX_BYTES} bytes, more than any key set \
+this issuer publishes; it was not read" ;;
+esac
 
 for dup_src in status.json status-keys.json; do
+  if [ "$dup_src" = status.json ] && [ "$STATUS_DOC_OVER" -eq 1 ]; then continue; fi
+  if [ "$dup_src" = status-keys.json ] && [ "$STATUS_KEYS_OVER" -eq 1 ]; then continue; fi
   if ! dup_found="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$WORKDIR/$dup_src" 2>/dev/null)"; then
     stat_bad status_unknown_not_strict_json "malformed_document — ${dup_src} is not strict JSON (UTF-8, no BOM, one value)"
   elif [ -n "$dup_found" ]; then
@@ -2814,6 +2898,13 @@ empty payload segment)"
 fi
 if [ "$STATUS_FAILURES" -eq 0 ] && ! b64url_decode "$SH" > "$WORKDIR/status_header.json" 2>/dev/null; then
   stat_bad status_unknown_header_not_base64url "malformed_document — protected header is not valid base64url"
+fi
+if [ "$STATUS_FAILURES" -eq 0 ]; then
+  SHDR_LEN="$(wc -c < "$WORKDIR/status_header.json" | tr -d ' ')"
+  if [ "$SHDR_LEN" -gt "$HEADER_MAX_BYTES" ]; then
+    stat_bad status_unknown_header_too_large "too_large — the protected header is ${SHDR_LEN} bytes, over the ${HEADER_MAX_BYTES} \
+a header of this format can have; it was not read"
+  fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ] && ! b64url_decode "$SS" > "$WORKDIR/status_sig.bin" 2>/dev/null; then
   stat_bad status_unknown_signature_not_base64url "malformed_document — signature segment is not valid base64url"
@@ -3226,7 +3317,7 @@ else
     if ! KEY_HIT_REASON="$(jsonq sel "$WORKDIR/list.json" keys kid "$k" reason | head -1)"; then
       REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
       warn_unknown status_unknown_list_unverified "the list could not be read for kid '$(esc "${k}")' — UNKNOWN, never 'good'"
-      break
+      continue   # the other kids are still checked: one withdrawal decides ahead of an unknown
     fi
     if [ -n "$KEY_HIT_REASON" ]; then
       REVOCATION_STATUS='revoked'; REVOCATION_REASON="$KEY_HIT_REASON"; REVOCATION_VIA='key'

@@ -86,6 +86,7 @@ cannot emit.
 | `jws_attached` | Attached JWS: the payload segment carries the canonical bytes. | pass | 0 | both |  |
 | `jws_detached_needs_claims` | A detached JWS needs `--claims` or `--attestation`. | fail | 2 | both |  |
 | `header_not_base64url` | The protected header is not base64url. | fail | 2 | both |  |
+| `header_too_large` | The decoded protected header is over 4096 bytes (a real one is about 100). It is not read. | fail | 2 | both |  |
 | `signature_not_base64url` | The signature is not base64url. | fail | 2 | both |  |
 | `signature_size_valid` | The signature is 3309 bytes. | pass | 0 | both |  |
 | `signature_size_invalid` | The signature is not 3309 bytes. | fail | 1 | both | 2: `sig-truncated-3308`, `sig-extended-3310` |
@@ -225,6 +226,8 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | Code | Meaning | Result | Exit | Mode | Vectors |
 |---|---|---|---|---|---|
 | `status_unknown_not_strict_json` | The status list or key set is not strict JSON. | fail | 3 | status-list | 1: `status-bom` |
+| `status_unknown_document_too_large` | The status list is over 5,000,000 bytes (the live one is under 6,000). It is not read. | fail | 3 | status-list |  |
+| `status_unknown_keys_too_large` | The status key set is over 1,000,000 bytes (the live one is under 3,000). It is not read. | fail | 3 | status-list |  |
 | `status_unknown_duplicate_key` | The status list or key set repeats a member. | fail | 3 | status-list | 1: `status-dup-member` |
 | `status_shape_valid` | The document is `{statusList, signature}`. | pass | 0 | status-list |  |
 | `status_unknown_malformed_document` | The document is not `{statusList, signature}`. | fail | 3 | status-list |  |
@@ -235,6 +238,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_unknown_signature_not_detached` | The payload segment is not empty. | fail | 3 | status-list |  |
 | `status_jws_detached` | The payload segment is empty, as required. | pass | 0 | status-list |  |
 | `status_unknown_header_not_base64url` | The protected header is not base64url. | fail | 3 | status-list |  |
+| `status_unknown_header_too_large` | The decoded protected header of the status list is over 4096 bytes. It is not read. | fail | 3 | status-list |  |
 | `status_unknown_signature_not_base64url` | The signature is not base64url. | fail | 3 | status-list |  |
 | `status_signature_size_valid` | The signature is 3309 bytes. | pass | 0 | status-list |  |
 | `status_unknown_signature_size` | The signature is not 3309 bytes. | fail | 3 | status-list | 2: `status-sig-truncated-3308`, `status-sig-extended-3310` |

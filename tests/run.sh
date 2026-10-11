@@ -774,6 +774,107 @@ if ! grep -q 'GET' "$T/other.log"; then
 else
   printf 'not ok - cleartext: a refused URL reached a listener\n'; sed 's/^/    # /' "$T/other.log"; FAILED=$((FAILED + 1))
 fi
+
+# --- nesting depth and size caps -----------------------------------------------
+# jq 1.7 refuses a document nested deeper than 256 (an object member that holds
+# an array or an object counts double), and the reader that replaced it does the
+# same, so a deeply nested member cannot make the reader slow: at 252 arrays inside
+# an unsigned extra member of the list the document is still read, at 253 it is
+# refused (UNKNOWN, not an abort and not a hang). Each case runs under `timeout 20`
+# through a wrapper, so a hang fails it (exit 124) instead of stopping the suite.
+SIZEV="$T/timeout-verifier.sh"
+printf '#!/usr/bin/env bash\nexec timeout 20 bash "%s" "$@"\n' "$VERIFIER" > "$SIZEV"
+VERIFIER_NOTIMEOUT="$VERIFIER"; VERIFIER="$SIZEV"
+for depth in 252 253; do
+  edit_text "$T/list-empty-compact.json" "$T/list-deep.json" "
+t = t.replace('\"truncated\":', '\"x\":' + '[' * $depth + ']' * $depth + ',\"truncated\":', 1)"
+  if [ "$depth" -eq 252 ]; then
+    expect 0 'GOOD — not revoked, per a verified status list' "an extra member nested $depth arrays deep is still read (jq's limit)" -- \
+      "${SL[@]}" --status "$T/list-deep.json"
+  else
+    expect 3 'expected {statusList, signature, ...}' "an extra member nested $depth arrays deep is refused as jq refuses it (UNKNOWN)" -- \
+      "${SL[@]}" --status "$T/list-deep.json"
+  fi
+done
+# The protected header is read before its signature is: 1900 levels (3.8 KB, under
+# the header cap) must be refused at once, not parsed.
+edit_text "$T/list-empty-compact.json" "$T/list-deep-header.json" '
+import base64, re
+hdr = (chr(123) + chr(34) + "alg" + chr(34) + ":" + "[" * 1900 + "]" * 1900 + ",\"kid\":\"k\",\"typ\":\"t\"}").encode()
+h = base64.urlsafe_b64encode(hdr).rstrip(b"=").decode()
+t = re.sub(r"(\"signature\":\")[^.\"]*", lambda m: m.group(1) + h, t, count=1)'
+expect 3 'protected header did not decode to a JSON object' 'a protected header nested 1900 deep is refused at once (UNKNOWN)' -- \
+  "${SL[@]}" --status "$T/list-deep-header.json"
+
+# Size caps (STATUS_DOC_MAX_BYTES 5,000,000, STATUS_KEYS_MAX_BYTES 1,000,000,
+# HEADER_MAX_BYTES 4096): over a cap the input is UNKNOWN and is not parsed; at the
+# cap it is read as before. The files are made here, from spaces after the JSON.
+pad_to() {   # IN OUT BYTES — IN followed by spaces, BYTES long in all
+  python3 -I - "$1" "$2" "$3" <<'PY'
+import sys
+b = open(sys.argv[1], "rb").read().rstrip()
+n = int(sys.argv[3])
+assert len(b) <= n
+open(sys.argv[2], "wb").write(b + b" " * (n - len(b)))
+PY
+}
+pad_to "$T/list-empty-compact.json" "$T/list-at-cap.json" 5000000
+pad_to "$T/list-empty-compact.json" "$T/list-over-cap.json" 5000001
+expect 0 'GOOD — not revoked, per a verified status list' 'a status list of exactly 5000000 bytes is read' -- \
+  "${SL[@]}" --status "$T/list-at-cap.json"
+lacks 'too_large' 'a status list at the size cap is not called too large'
+expect 3 'too_large — the status list is over 5000000 bytes' 'a status list of 5000001 bytes is UNKNOWN, not read' -- \
+  "${SL[@]}" --status "$T/list-over-cap.json"
+lacks 'is not strict JSON' 'an oversized status list is not parsed'
+pad_to "$T/status-keys.json" "$T/keys-at-cap.json" 1000000
+pad_to "$T/status-keys.json" "$T/keys-over-cap.json" 1000001
+expect 0 'GOOD — not revoked, per a verified status list' 'a status key set of exactly 1000000 bytes is read' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/keys-at-cap.json" --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'too_large' 'a status key set at the size cap is not called too large'
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set of 1000001 bytes is UNKNOWN, not read' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/keys-over-cap.json" --attestation "$T/att.json" "${COMMON[@]}"
+# A key set read from a pipe is bounded too (nothing is read past the cap).
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set of 1000001 bytes from a pipe is UNKNOWN' -- \
+  --status-list --status "$T/list-empty.json" --status-keys <(cat "$T/keys-over-cap.json") --attestation "$T/att.json" "${COMMON[@]}"
+# A URL: the server announces a length over the cap (curl stops), or does not.
+mkdir "$T/srv-big"; cp "$T/keys-over-cap.json" "$T/srv-big/k.json"
+pad_to "$T/status-keys.json" "$T/srv-big/k2.json" 2000000
+srv_start big 127.0.0.1 "$T/srv-big"
+# shellcheck disable=SC2154
+PB="$SRV_PORT_big"
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set URL that sends 1000001 bytes is UNKNOWN, not a failed fetch' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "http://127.0.0.1:$PB/k.json" --attestation "$T/att.json" "${COMMON[@]}"
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set URL that sends 2000000 bytes is stopped and is UNKNOWN too' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "http://127.0.0.1:$PB/k2.json" --attestation "$T/att.json" "${COMMON[@]}"
+# Headers: the status list's (UNKNOWN) and the attestation's (could not check).
+edit_text "$T/list-empty-compact.json" "$T/list-big-header.json" '
+import base64, re
+hdr = (chr(123) + chr(34) + "alg" + chr(34) + ":" + chr(34) + "x" * 5000 + "\",\"kid\":\"k\",\"typ\":\"t\"}").encode()
+h = base64.urlsafe_b64encode(hdr).rstrip(b"=").decode()
+t = re.sub(r"(\"signature\":\")[^.\"]*", lambda m: m.group(1) + h, t, count=1)'
+expect 3 'too_large — the protected header is' 'a status list whose protected header is over 4096 bytes is UNKNOWN, not read' -- \
+  "${SL[@]}" --status "$T/list-big-header.json"
+lacks 'did not decode' 'an oversized status header is not parsed'
+edit "$T/att.json" "$T/att-big-header.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["pad"] = "x" * 5000
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 2 'protected header is' 'an attestation whose protected header is over 4096 bytes could not be checked (2)' -- \
+  --attestation "$T/att-big-header.json" "${COMMON[@]}"
+edit "$T/att.json" "$T/att-cap-header.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["pad"] = ""
+hdr["pad"] = "x" * (4096 - len(json.dumps(hdr)))
+assert len(json.dumps(hdr)) == 4096
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 "header members are 'alg,kid,pad,typ'" 'an attestation header of exactly 4096 bytes is read (and refused for its extra member)' -- \
+  --attestation "$T/att-cap-header.json" "${COMMON[@]}"
+lacks 'protected header is' 'an attestation header at the size cap is not called too large'
+VERIFIER="$VERIFIER_NOTIMEOUT"
 # Loopback: fetched, with the loopback warning, and the run goes on to GOOD.
 expect 0 'GOOD — not revoked' 'cleartext, http://localhost:PORT/k.json is loopback: the key set is fetched (0)' -- \
   "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
