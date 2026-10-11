@@ -9,8 +9,8 @@ bundles; see [Verifying a release](README.md#verifying-a-release).
 Every release so far verifies `attest.attestation.v1` documents and
 `attest.statuslist.v1` status lists, and no other format version. A change to
 either format that older verifiers cannot read is announced at least 90 days
-before it takes effect. Only the latest release is supported, as
-[SECURITY.md](SECURITY.md) says.
+before it takes effect. Each major version gets security fixes for five years,
+as [SECURITY.md](SECURITY.md#supported-versions) says.
 
 ## Unreleased
 
@@ -83,6 +83,15 @@ before it takes effect. Only the latest release is supported, as
   next release is the one in its section, as for every release. A new check,
   `tests/spdx-headers.sh`, fails if a tracked shell script, workflow or
   Dockerfile lacks the header (Closes #79).
+- `SECURITY.md` now states the support period: each major version gets security
+  fixes for five years from the release of its first version (1.x until
+  2031-09-29), in a new release of that major version. It gives the
+  end-of-support date of each major version in a table, says that an
+  end-of-support notice is published twelve months before, and that a release
+  that ends support for an older major version says so in its release notes. The
+  README links the section, and the text that said only the latest release is
+  supported now says what the section says
+  ([#77](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/77)).
 
 ## v1.4.2 - 2026-10-12
 
