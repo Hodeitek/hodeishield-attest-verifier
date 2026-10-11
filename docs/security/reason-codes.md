@@ -21,6 +21,8 @@ code, are codes from this file (see
 - **Vectors**: the cases of `tests/vectors/v1/vectors.json` whose `expect.code`
   is this code. A code with no vector is covered by `tests/run.sh` or by no
   published case yet.
+- A row whose description starts with "Retired in" is a code the verifier no
+  longer emits. It stays in the table, and its name is never reused.
 - Codes named in the manifest keep the name it gives them. Where a document
   breaks several rules, the code of the verdict is the one `expect.code` names;
   the list of checks has every one that ran.
@@ -59,6 +61,7 @@ cannot emit.
 | `openssl_mldsa65_missing` | This OpenSSL does not offer ML-DSA-65. | fail | 2 | both |  |
 | `openssl_mldsa65_available` | OpenSSL offers ML-DSA-65. | pass | 0 | both |  |
 | `python3_missing` | `python3` is needed for this step and is not installed. | fail | 2 | both |  |
+| `jq_missing` | Retired in v1.4.1: never emitted, and the code is not reused. It meant `jq` was not installed; `--status-list` no longer needs it. | fail | 2 | status-list |  |
 | `tools_present` | `python3` is present. | pass | 0 | status-list |  |
 | `curl_missing` | `curl` is needed to fetch a URL and is not installed. | fail | 2 | status-list |  |
 | `spki_tool_missing` | Neither `xxd` nor `python3` is available to build the key header. | fail | 2 | both |  |

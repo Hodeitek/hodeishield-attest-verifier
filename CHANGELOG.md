@@ -70,10 +70,11 @@ signed or published.
   printable as `?` and prints other text as UTF-8, while check lines and
   messages use `\xHH` (Closes #72).
 - `--status-list` no longer needs `jq`: python3, which the script already
-  needs, reads the status list and its header, and prints exactly what `jq`
-  printed, so every verdict, reason code and message is unchanged. The
-  `jq_missing` reason code is gone, and the `tools_present` check now reads
-  "python3 present". The README, the container image and the CI jobs no longer
+  needs, reads the status list and its header. It reads them as `jq` did, so no
+  verdict, reason code or message changes for any document in the test suite or
+  the published vectors. The `jq_missing` reason code is retired (it stays in
+  docs/security/reason-codes.md, never emitted, and is not reused), and the
+  `tools_present` check now reads "python3 present". The README, the container image and the CI jobs no longer
   list or install `jq`, and the test suite runs with no `jq` on the PATH (a CI
   job checks that). The one visible difference: with `--raw`, the posture is
   always printed indented, where it was printed as received on a machine
