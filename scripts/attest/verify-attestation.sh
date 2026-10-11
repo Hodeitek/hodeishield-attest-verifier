@@ -1628,8 +1628,6 @@ def member(v, k):
     raise ValueError("cannot index")
 def plain(v):
     return v if isinstance(v, str) else dump(v, True)
-def arg(s):
-    return utf8(s.encode("utf-8", "surrogateescape"))
 def fval(d, f):
     if f == ".docVersion // empty":
         v = member(d, "docVersion")
