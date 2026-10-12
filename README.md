@@ -255,8 +255,9 @@ add a subject to look up and never replace it. `--status`, `--status-keys`, `--c
 a usage error, exit 2. The script reads at most 2,000,000 bytes of the status list,
 1,000,000 of the status key set and 4,096 of a decoded protected header (a real
 one is about 100 bytes, the live list under 6,000 and the key set under 3,000);
-anything larger is not read: UNKNOWN (exit 3) for the status list, exit 2 for the
-attestation's own header. The limits are fixed in the script. What the list can
+a larger status list, key set or status list header is not read: UNKNOWN
+(exit 3). A larger attestation header is a failed check (exit 1,
+`header_too_large`). The limits are fixed in the script. What the list can
 and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 

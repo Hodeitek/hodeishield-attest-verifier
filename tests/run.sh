@@ -1934,6 +1934,10 @@ expect 1 'REVOKED — via key' 'a header kid of 200000 characters does not hide 
   --status-list --status-keys "$T/status-keys.json" --status "$T/list-key.json" --attestation "$T/att-huge-kid.json" --pub-b64url "$PUB" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
 lacks 'could not be read' 'and the list is not reported unreadable'
+# The same header is over the 4,096-byte cap: a failed check (1), as a header with a
+# member beyond alg, kid and typ always was, and not exit 2.
+expect 1 'over the 4096 a header of this format can have' 'an attestation header over 4096 bytes is a failed check (1), not exit 2' -- \
+  --attestation "$T/att-huge-kid.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
 expect 0 "lists kid '$ISSUER_KID' as an attestation key" '--pub-b64url with an anchor: the recomputed kid is listed' -- \
   --attestation "$T/att.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" "${A[@]}"
 expect 1 "anchor_kid_absent — the key bytes derive kid '$ISSUER_KID'" '--pub-b64url with an anchor that does not list the recomputed kid: a failed check (1)' -- \
