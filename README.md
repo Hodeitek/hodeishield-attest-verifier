@@ -182,7 +182,9 @@ The image label `com.hodeitek.verifier.script-sha256` records the same value
 command are the evidence. The release workflow also checks the script against
 the release's signed `SHA256SUMS` before it builds the image, and again inside
 the build. The image carries a signed SBOM; fetch and check it with
-`gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier`.
+`gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier --predicate-type https://spdx.dev/Document/v2.3`.
+The SBOM is the only attestation; without `--predicate-type`, `gh` looks for
+SLSA provenance and reports HTTP 404.
 The signature proves which workflow built the image and when, not that the
 image can be rebuilt bit for bit: the Debian packages are taken from the
 archive on the day of the build.

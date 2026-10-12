@@ -189,7 +189,10 @@ jobs:
           cosign verify "$IMAGE@$DIGEST" \
             --certificate-identity "$IMAGE_IDENTITY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY"
+          # The SBOM is the only attestation; by default gh asks for SLSA
+          # provenance and gets HTTP 404.
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
           docker pull "$IMAGE@$DIGEST"
           inside="$(docker run --rm --entrypoint sha256sum "$IMAGE@$DIGEST" /usr/local/bin/verify-attestation.sh | cut -d' ' -f1)"
           [ "$inside" = "$SCRIPT_SHA256" ] || { echo "the script in the image is $inside, the release says $SCRIPT_SHA256" >&2; exit 1; }
