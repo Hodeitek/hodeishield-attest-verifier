@@ -46,6 +46,15 @@ as [SECURITY.md](SECURITY.md#supported-versions) says.
   for SLSA provenance, which the image does not carry, and got HTTP 404. The
   v1.4.2 image was built, pushed, signed and attested; only that step failed.
   Both now pass `--predicate-type https://spdx.dev/Document/v2.3`.
+- The release job ran the test suite with its own package list, which no pull
+  request runs, so a test needing a package only the pull request job had
+  passed on every pull request and failed first on the tag (v1.4.1 and curl).
+  Both jobs now install from one list, `.github/scripts/install-test-deps.sh`,
+  and `tests/test-deps-parity.sh`, run on every pull request, fails if either
+  job installs packages of its own, the release job lacks one that the pull
+  request job has, or the two run in different containers. The release job now also makes the Latin-1 locale and
+  requires it, as the pull request job does, so the locale tests run before a
+  release is signed instead of being skipped (Closes #84).
 
 ### Changed
 - Input size limits, so that no document can keep a parser busy: at most
