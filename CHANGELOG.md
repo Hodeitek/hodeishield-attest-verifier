@@ -12,7 +12,10 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
-## Unreleased
+## v1.4.1 - 2026-10-12
+
+`verify-attestation.sh` changes. sha256
+`50691c523aaffed00cad8ccdd43337e152874f52bd8ca9be890d75f043bd4e4e`.
 
 ### Security
 - The loopback exception for cleartext `--status-keys` and `--status` URLs
