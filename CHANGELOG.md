@@ -12,6 +12,60 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
+## Unreleased
+
+### Fixed
+- The image job's last step, and the README command for checking the image's
+  SBOM, ran `gh attestation verify` without `--predicate-type`, so `gh` asked
+  for SLSA provenance, which the image does not carry, and got HTTP 404. The
+  v1.4.2 image was built, pushed, signed and attested; only that step failed.
+  Both now pass `--predicate-type https://spdx.dev/Document/v2.3`.
+
+### Changed
+- Input size limits, so that no document can keep a parser busy: at most
+  2,000,000 bytes of the status list (`--status`, a file or a URL), 1,000,000 of
+  the status key set and 4,096 of a decoded protected header (a real header is
+  about 100 bytes, the live list under 6,000 bytes and the key set under 3,000;
+  a revoked subject takes about 170 bytes in a list, so the limit holds some
+  11,800 of them). Padding the list with members the signature does not cover,
+  up to the limit, takes about 10 seconds and 0.9 GB; at the old download limit
+  of 5,000,000 bytes it took 24 seconds and 2.2 GB. Over the limit the input is
+  not read: UNKNOWN (exit 3) with the new reason codes
+  `status_unknown_document_too_large`, `status_unknown_keys_too_large` and
+  `status_unknown_header_too_large` for the status list, its key set and its
+  header, and, for the attestation's own header, a failed check (exit 1,
+  `header_too_large`; only its first 4,096 bytes are parsed, and the kid is
+  still found wherever it lies). That header was
+  already a failed check (exit 1, `header_not_allowed`, for the member beyond
+  alg, kid and typ that made it large): the exit is the same and the reason now
+  reported first is `header_too_large`. The limits are fixed in the script.
+  What changes for a download: its limit was 5,000,000 bytes for both documents
+  and is now 2,000,000 for the list and 1,000,000 for the key set, and a body over
+  the limit gives that UNKNOWN instead of a failed fetch (exit 2). A local list
+  or key set over its limit is UNKNOWN where it used to be read.
+- The status list is read with fewer passes: the scalar fields and every kid
+  and subject asked for (`--check-kid`, `--check-subject`) are read in one pass
+  each, `list.json` is written compact, and a list padded with 2,000,000 bytes
+  that the signature does not cover now takes about 10 seconds, where it took up to three minutes and four
+  gigabytes (Closes #80).
+- A `~/.curlrc` that turns on `compressed` (or `location`) no longer affects a
+  fetch of `--status` or `--status-keys`: the script passes `--no-compressed` and
+  `--no-location` after it, so a few kilobytes of gzip cannot become a file of any
+  size past `--max-filesize`. The rest of the user's curl settings, a proxy for
+  one, still apply to a URL that is not loopback.
+- `--status-list` no longer needs `jq`: python3, which the script already
+  needs, reads the status list and its header. It reads them as `jq` did (including its
+  limit on nesting, 256 levels), so no
+  verdict, reason code or message changes for any document in the test suite or
+  the published vectors. The `jq_missing` reason code is retired (it stays in
+  docs/security/reason-codes.md, never emitted, and is not reused), and the
+  `tools_present` check now reads "python3 present". The README, the container image and the CI jobs no longer
+  list or install `jq`, and the test suite runs with no `jq` on the PATH (a CI
+  job checks that). The one visible difference: with `--raw`, the posture is
+  always printed indented, where it was printed as received on a machine
+  without `jq`; and the usage text no longer tells you to run `jq` to split a
+  document by hand (Closes #18).
+
 ## v1.4.2 - 2026-10-12
 
 `verify-attestation.sh` changes. sha256
@@ -61,37 +115,6 @@ signed or published.
   (Closes #71).
 
 ### Changed
-- Input size limits, so that no document can keep a parser busy: at most
-  2,000,000 bytes of the status list (`--status`, a file or a URL), 1,000,000 of
-  the status key set and 4,096 of a decoded protected header (a real header is
-  about 100 bytes, the live list under 6,000 bytes and the key set under 3,000;
-  a revoked subject takes about 170 bytes in a list, so the limit holds some
-  11,800 of them). Padding the list with members the signature does not cover,
-  up to the limit, takes about 10 seconds and 0.9 GB; at the old download limit
-  of 5,000,000 bytes it took 24 seconds and 2.2 GB. Over the limit the input is
-  not read: UNKNOWN (exit 3) with the new reason codes
-  `status_unknown_document_too_large`, `status_unknown_keys_too_large` and
-  `status_unknown_header_too_large` for the status list, its key set and its
-  header, and, for the attestation's own header, a failed check (exit 1,
-  `header_too_large`; only its first 4,096 bytes are parsed, and the kid is
-  still found wherever it lies). That header was
-  already a failed check (exit 1, `header_not_allowed`, for the member beyond
-  alg, kid and typ that made it large): the exit is the same and the reason now
-  reported first is `header_too_large`. The limits are fixed in the script.
-  What changes for a download: its limit was 5,000,000 bytes for both documents
-  and is now 2,000,000 for the list and 1,000,000 for the key set, and a body over
-  the limit gives that UNKNOWN instead of a failed fetch (exit 2). A local list
-  or key set over its limit is UNKNOWN where it used to be read.
-- The status list is read with fewer passes: the scalar fields and every kid
-  and subject asked for (`--check-kid`, `--check-subject`) are read in one pass
-  each, `list.json` is written compact, and a list padded with 2,000,000 bytes
-  that the signature does not cover now takes about 10 seconds, where it took up to three minutes and four
-  gigabytes (Closes #80).
-- A `~/.curlrc` that turns on `compressed` (or `location`) no longer affects a
-  fetch of `--status` or `--status-keys`: the script passes `--no-compressed` and
-  `--no-location` after it, so a few kilobytes of gzip cannot become a file of any
-  size past `--max-filesize`. The rest of the user's curl settings, a proxy for
-  one, still apply to a URL that is not loopback.
 - The script is parsed by more bash parsers: the `10#` arithmetic (a leading
   zero is never octal) is written without it, and two other constructs that
   Semgrep's bash parser rejected are written another way. No behaviour change.
@@ -100,18 +123,6 @@ signed or published.
 - README.md says that the "Attested content" block shows a character that is not
   printable as `?` and prints other text as UTF-8, while check lines and
   messages use `\xHH` (Closes #72).
-- `--status-list` no longer needs `jq`: python3, which the script already
-  needs, reads the status list and its header. It reads them as `jq` did (including its
-  limit on nesting, 256 levels), so no
-  verdict, reason code or message changes for any document in the test suite or
-  the published vectors. The `jq_missing` reason code is retired (it stays in
-  docs/security/reason-codes.md, never emitted, and is not reused), and the
-  `tools_present` check now reads "python3 present". The README, the container image and the CI jobs no longer
-  list or install `jq`, and the test suite runs with no `jq` on the PATH (a CI
-  job checks that). The one visible difference: with `--raw`, the posture is
-  always printed indented, where it was printed as received on a machine
-  without `jq`; and the usage text no longer tells you to run `jq` to split a
-  document by hand (Closes #18).
 
 ## v1.4.0 - 2026-10-10
 
