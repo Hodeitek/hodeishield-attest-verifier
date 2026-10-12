@@ -65,6 +65,14 @@ before it takes effect. Only the latest release is supported, as
   always printed indented, where it was printed as received on a machine
   without `jq`; and the usage text no longer tells you to run `jq` to split a
   document by hand (Closes #18).
+- `verify-attestation.sh` had no licence header, and the script is the file
+  people download on its own, without `LICENSE` and `NOTICE`. It now starts, after
+  the shebang, with the two lines the other files carry:
+  `SPDX-License-Identifier: Apache-2.0` and `Copyright 2026 Hodeitek S.L.`. Two
+  lines were added at the top, so the script's sha256 changes; the sha256 of the
+  next release is the one in its section, as for every release. A new check,
+  `tests/spdx-headers.sh`, fails if a tracked shell script, workflow or
+  Dockerfile lacks the header (Closes #79).
 
 ## v1.4.2 - 2026-10-12
 

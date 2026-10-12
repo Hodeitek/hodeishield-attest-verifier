@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh
 
   # Semgrep's bash parser is stricter than bash: one construct it does not read
   # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
@@ -59,6 +59,20 @@ jobs:
         run: docker pull "$SEMGREP_IMAGE"
       - name: semgrep --lang bash parses verify-attestation.sh
         run: bash .github/scripts/semgrep-parses.sh scripts/attest/verify-attestation.sh
+
+  # Every tracked shell script, workflow and Dockerfile carries the licence
+  # header. It reads `git ls-files`, so it runs on the runner, not in the
+  # Debian test container, which has no git.
+  spdx:
+    name: licence headers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: tests/spdx-headers.sh
+        run: bash tests/spdx-headers.sh
 
   tests:
     name: offline tests (valid + rejection)
