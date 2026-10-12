@@ -174,7 +174,7 @@ certificate is the one it verified) and compared, number by number, with the ver
 older release is refused (`anchor_statement_older`), and a tag that cannot be
 read strictly is refused too (`anchor_tag_unreadable`), both exit 2 and both
 before the statement is read, because any older statement that was genuinely
-signed would otherwise be accepted. A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why only the latest release is supported ([SECURITY.md](../../SECURITY.md)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
+signed would otherwise be accepted. A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why security fixes ship in a new release, to be run as the latest release of your major version ([SECURITY.md](../../SECURITY.md#supported-versions)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
 
 | Code | Meaning | Result | Exit | Mode | Vectors |
 |---|---|---|---|---|---|

@@ -199,7 +199,7 @@ is nothing to check them against; a reader of an earlier release keeps
 
 ### What the anti-rollback check does not cover
 
-A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why only the latest release is supported ([SECURITY.md](../../SECURITY.md)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
+A reader who runs an OLD verifier can still be served a statement as old as that verifier's own version. That is why security fixes ship in a new release, to be run as the latest release of your major version ([SECURITY.md](../../SECURITY.md#supported-versions)), and why `--status-list`, which revokes a compromised key unconditionally, remains the path for a key compromise.
 
 ### The reason codes
 

@@ -463,7 +463,8 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   script's own version (`--version`), so an old, genuinely signed statement
   cannot stand in for the current one. A tag that cannot be read is exit 2 too.
   The check has a limit: an OLD verifier can still be served a statement as old
-  as itself. That is why only the latest release is supported, and why
+  as itself. That is why security fixes ship in a new release and you should run
+  the latest release of your major version, and why
   `--status-list`, which revokes a compromised key unconditionally, remains the
   path for a key compromise.
 - Exit 1, with a `FAIL` line, when the statement verifies and does not list the
@@ -511,9 +512,11 @@ The verifier checks two document formats, and no other version of either:
 
 - A change to either format that older verifiers cannot read is announced at
   least 90 days before it takes effect.
-- Only the latest release is supported (see [SECURITY.md](SECURITY.md)). Update
-  to it before relying on a result, and see the [changelog](CHANGELOG.md) for
-  what each release changed.
+- Each major version gets security fixes for five years from its first release
+  (1.x until 2031-09-29), in a new release of that major version; see
+  [Supported versions](SECURITY.md#supported-versions). Update to the latest
+  release of your major version before relying on a result, and see the
+  [changelog](CHANGELOG.md) for what each release changed.
 - A document with a format version the verifier does not know is never read as
   an older format, and is never verified. An attestation whose `docVersion` or
   posture version is not the one above stops the run with exit 2 ("could not
