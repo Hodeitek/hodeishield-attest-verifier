@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh
 
   # Semgrep's bash parser is stricter than bash: one construct it does not read
   # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
@@ -83,17 +83,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # No jq: --status-list needs nothing but python3, and the whole suite runs
-      # without it. A step right before tests/run.sh fails the job if jq is on the PATH.
-      - name: Install openssl, python3
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 curl ca-certificates gettext-base locales
-      # A Latin-1 locale, for the test that the verdict does not depend on the
-      # locale (tests/run.sh requires it here: VERIFIER_REQUIRE_LATIN1 below).
-      - name: Generate the en_US.ISO-8859-1 locale
-        run: |
-          # localedef exits 1 on a mere warning; whether the locale exists is what counts.
-          localedef -c -i en_US -f ISO-8859-1 en_US.ISO-8859-1 || true
-          test "$(LC_ALL=en_US.ISO-8859-1 locale charmap)" = ISO-8859-1
+      # The packages and the Latin-1 locale the suite needs, from the one list
+      # release.yml's test job uses too (tests/test-deps-parity.sh checks it).
+      # No jq: a step right before tests/run.sh fails the job if jq is on the PATH.
+      - name: Install the test packages and the Latin-1 locale
+        run: bash .github/scripts/install-test-deps.sh
       - name: Toolchain
         run: |
           openssl version
@@ -124,6 +118,9 @@ jobs:
       # docker, cosign and gh; the check itself needs a published image.
       - name: tests/live-image.sh skips or fails correctly
         run: bash tests/live-image-modes.sh
+      # release.yml's test job installs what this one does (#84).
+      - name: release.yml's test job installs what this one does
+        run: bash tests/test-deps-parity.sh
       - name: jq is not installed
         run: |
           if command -v jq >/dev/null 2>&1; then echo "jq is on the PATH: $(command -v jq)" >&2; exit 1; fi

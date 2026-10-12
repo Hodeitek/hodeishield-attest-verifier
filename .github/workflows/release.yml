@@ -26,12 +26,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # tests/run.sh fetches --status and --status-keys URLs from loopback
-      # listeners, so it needs curl, as in ci.yml's test job.
-      - name: Install openssl, python3, curl, shellcheck
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 curl ca-certificates shellcheck
+      # The same packages and Latin-1 locale as ci.yml's test job, from one
+      # list, plus shellcheck (tests/test-deps-parity.sh checks it on every
+      # pull request; the v1.4.1 tag failed on a package only ci.yml had, #84).
+      - name: Install the test packages, the Latin-1 locale and shellcheck
+        run: bash .github/scripts/install-test-deps.sh shellcheck
       - name: shellcheck
-        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/keys-consistency.sh tests/keys-drift.sh tests/version-consistency.sh tests/sbom.sh .github/scripts/generate-sbom.sh
+        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/keys-consistency.sh tests/keys-drift.sh tests/version-consistency.sh tests/sbom.sh .github/scripts/generate-sbom.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh
       - name: keys.json matches keys.md
         run: bash tests/keys-consistency.sh
       # The release commit sets VERIFIER_VERSION to the tag and dates the
@@ -43,6 +44,8 @@ jobs:
       - name: SBOM generator
         run: bash tests/sbom.sh
       - name: tests/run.sh
+        env:
+          VERIFIER_REQUIRE_LATIN1: "1"
         run: bash tests/run.sh
 
   publish:
