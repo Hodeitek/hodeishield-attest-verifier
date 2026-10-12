@@ -100,6 +100,18 @@ as [SECURITY.md](SECURITY.md#supported-versions) says.
   README links the section, and the text that said only the latest release is
   supported now says what the section says
   ([#77](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/77)).
+- `SECURITY.md` now states how a report is handled: acknowledgement within 3
+  business days, a first assessment within 10 business days, a status update at
+  least every 14 days, and fix targets by severity (critical 7 days, high 30,
+  medium 90, low the next release). It states the disclosure process: a GitHub
+  security advisory published with the fixed release, a CVE requested through
+  GitHub when it applies, an embargo of at most 90 days from the report, an
+  earlier advisory and an expedited fix if the vulnerability is being actively
+  exploited, and public credit for the reporter unless they decline. It adds a
+  safe harbour for good-faith research and says where fixed releases and
+  advisories are announced. Advisories are written from the new
+  [docs/security-advisory-template.md](docs/security-advisory-template.md)
+  ([#76](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/76)).
 
 ## v1.4.2 - 2026-10-12
 
