@@ -12,10 +12,27 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Only the latest release is supported, as
 [SECURITY.md](SECURITY.md) says.
 
-## v1.4.1 - 2026-10-12
+## v1.4.2 - 2026-10-12
 
 `verify-attestation.sh` changes. sha256
-`50691c523aaffed00cad8ccdd43337e152874f52bd8ca9be890d75f043bd4e4e`.
+`23dc7a87ede8a68dad5300eec966e3f73bec1b5badd35aed0db0f1bca54fa4a2`.
+
+v1.4.1 was tagged but never released. The release job runs the test suite
+before it signs anything, and it did not install curl, which the cleartext URL
+tests added in v1.4.1 need; the tag run failed them, so nothing was signed or
+published. v1.4.2 is v1.4.1 with that job fixed. The script differs from
+v1.4.1's only in `VERIFIER_VERSION`. Everything listed under v1.4.1 below is
+released for the first time in v1.4.2.
+
+### Fixed
+- The release job's tests did not install curl, so the v1.4.1 tag failed them
+  and was not released. The job now installs curl as the pull request tests do.
+
+## v1.4.1 - 2026-10-12
+
+Tagged, not released: see v1.4.2. The tag's `verify-attestation.sh` (sha256
+`50691c523aaffed00cad8ccdd43337e152874f52bd8ca9be890d75f043bd4e4e`) was never
+signed or published.
 
 ### Security
 - The loopback exception for cleartext `--status-keys` and `--status` URLs
@@ -35,7 +52,7 @@ before it takes effect. Only the latest release is supported, as
 ### Fixed
 - The container image was not built for v1.4.0: the release job downloaded only
   some of the files that `SHA256SUMS` lists. It now reads the list from the
-  verified `SHA256SUMS`; the first image is v1.4.1.
+  verified `SHA256SUMS`; the first image is v1.4.2.
 - A value given on the command line and printed back (`--expect-slug`,
   `--expect-issuer`, `--expect-nonce`, the URLs of `--status` and
   `--status-keys`, an unknown argument) and what curl says about a failed fetch
