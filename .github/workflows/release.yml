@@ -27,8 +27,8 @@ jobs:
           persist-credentials: false
       # tests/run.sh fetches --status and --status-keys URLs from loopback
       # listeners, so it needs curl, as in ci.yml's test job.
-      - name: Install openssl, python3, jq, curl, shellcheck
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates shellcheck
+      - name: Install openssl, python3, curl, shellcheck
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 curl ca-certificates shellcheck
       - name: shellcheck
         run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/keys-consistency.sh tests/keys-drift.sh tests/version-consistency.sh
       - name: keys.json matches keys.md

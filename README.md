@@ -77,7 +77,6 @@ own starts at [hodeishield.com](https://hodeishield.com).
 | **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier checks this itself, says so and exits 2. If you cannot upgrade, use the [container route](#run-it-without-installing-anything). |
 | **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
-| `jq` | Only for `--status-list` (revocation checking). |
 | `cosign` ≥ 3.1.3 | Only for `--anchor-file` ([Anchor the key](#anchor-the-key)). Optional: nothing else needs it. |
 
 `xxd` is used when present and is not required.
@@ -100,12 +99,12 @@ curl -fsS https://app.hodeishield.com/api/public/attest/keys              -o jwk
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
   debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
-  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --attestation att.json --jwks jwks.json \
   --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
 ```
 
-The container mounts your files read-only, installs OpenSSL, `python3` and `jq`
+The container mounts your files read-only, installs OpenSSL and `python3`
 inside itself, and runs the same script. If that install fails (for example
 because the container has no network), the command exits 2, "could not check",
 so the exit codes are exactly the native ones: the table in
@@ -124,7 +123,7 @@ curl -fsS https://app.hodeishield.com/api/public/attest/status-keys -o status-jw
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
   debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
-  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --status-list --status status.json --status-keys status-jwks.json \
   --attestation att.json --jwks jwks.json \
   --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
@@ -138,7 +137,7 @@ docker run --rm -v "$PWD":/work:ro -w /work \
 
 The image is the upstream Debian 13 image, pinned by digest: the same one CI
 tests on, so a rebuilt tag cannot change what you run. The digest pins the
-base image; `openssl`, `python3` and `jq` come from Debian 13's archive when the
+base image; `openssl` and `python3` come from Debian 13's archive when the
 command runs, so they carry Debian's current security updates.
 
 ### A signed image
@@ -146,7 +145,7 @@ command runs, so they carry Debian's current security updates.
 Releases after v1.4.0 also publish a ready-made image,
 `ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
 (`:vX.Y.Z`). There is no `latest` tag, and v1.4.0 and earlier
-releases have no image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
+releases have no image. It has `openssl` and `python3` built in, runs as a non-root user,
 and its entrypoint is the verifier, so it needs no network to run. Take its
 digest from the release page, and pin that digest, not the tag. Check the
 signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
@@ -253,7 +252,13 @@ never replaces it. In the same way the list is always applied to the document's
 own slug at its own `generatedAt`; `--check-subject` and `--check-generated-at`
 add a subject to look up and never replace it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
 `--check-generated-at` and `--min-seq` need `--status-list`: without it they are
-a usage error, exit 2. What the list can and cannot tell you is in
+a usage error, exit 2. The script reads at most 2,000,000 bytes of the status list,
+1,000,000 of the status key set and 4,096 of a decoded protected header (a real
+one is about 100 bytes, the live list under 6,000 and the key set under 3,000);
+a larger status list, key set or status list header is not read: UNKNOWN
+(exit 3). A larger attestation header is a failed check (exit 1,
+`header_too_large`). The limits are fixed in the script. What the list can
+and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 
 ## What the output shows
@@ -554,7 +559,7 @@ the reason it is a short, single, readable script.
 - `shellcheck` runs on the shell scripts.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
-  printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
+  printed. It needs bash, OpenSSL ≥ 3.5 and `python3`, and no network.
   The anchor cases use a test double in place of cosign.
 - `bash tests/vectors.sh` runs the published, versioned test vectors in
   `tests/vectors/v1/`: fixed documents, TEST-ONLY keys, a fixed `--now` and the

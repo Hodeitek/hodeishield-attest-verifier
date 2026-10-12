@@ -69,8 +69,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install openssl, python3, jq
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base locales
+      # No jq: --status-list needs nothing but python3, and the whole suite runs
+      # without it. A step right before tests/run.sh fails the job if jq is on the PATH.
+      - name: Install openssl, python3
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 curl ca-certificates gettext-base locales
       # A Latin-1 locale, for the test that the verdict does not depend on the
       # locale (tests/run.sh requires it here: VERIFIER_REQUIRE_LATIN1 below).
       - name: Generate the en_US.ISO-8859-1 locale
@@ -83,7 +85,6 @@ jobs:
           openssl version
           openssl list -signature-algorithms | grep -i ml-dsa-65
           python3 --version
-          jq --version
       # cosign, the version and the installer release.yml pins. It is needed by
       # the vectors with real Sigstore bundles (tests/vectors/v1/anchor/), which
       # tests/vectors.sh skips where cosign is missing; the stub-based anchor
@@ -102,6 +103,9 @@ jobs:
       # it covers every file release.yml lists in SHA256SUMS, offline.
       - name: image.yml covers every file in SHA256SUMS
         run: bash tests/image-assets.sh
+      - name: jq is not installed
+        run: |
+          if command -v jq >/dev/null 2>&1; then echo "jq is on the PATH: $(command -v jq)" >&2; exit 1; fi
       - name: tests/run.sh
         env:
           VERIFIER_REQUIRE_LATIN1: "1"

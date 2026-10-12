@@ -23,7 +23,7 @@
 # fails. The mutant check can be skipped locally with VERIFIER_SKIP_MUTANTS=1,
 # but CI always runs it and fails if the variable is set there.
 #
-# Needs: bash >= 4, OpenSSL >= 3.5, python3, jq. No network.
+# Needs: bash >= 4, OpenSSL >= 3.5, python3. No network.
 #   bash tests/run.sh                    # the script in this repository
 #   VERIFIER=/path/to/copy bash tests/run.sh
 # =============================================================================
@@ -32,6 +32,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERIFIER="${VERIFIER:-$ROOT/scripts/attest/verify-attestation.sh}"
 MINT=(python3 -I "$ROOT/tests/lib/mint.py")
+JGET=(python3 -I "$ROOT/tests/lib/jget.py")   # reads a JSON file: what the suite used jq for
 
 T="$(mktemp -d)"; chmod 700 "$T"
 SRV_PIDS=()
@@ -106,15 +107,15 @@ PY
 "${MINT[@]}" keygen --out "$T/issuer.pem"  --jwks "$T/jwks.json"        >/dev/null
 "${MINT[@]}" keygen --out "$T/other.pem"   --jwks "$T/other-jwks.json"  >/dev/null
 "${MINT[@]}" keygen --out "$T/status.pem"  --jwks "$T/status-keys.json" >/dev/null
-ISSUER_KID="$(jq -r '.keys[0].kid' "$T/jwks.json")"
+ISSUER_KID="$("${JGET[@]}" -r "$T/jwks.json" keys 0 kid)"
 
 mint_attest() { "${MINT[@]}" attest --key "$T/issuer.pem" --slug "$SLUG" --iss "$ISS" \
   --generated-at "$GEN" --expires-at "$EXP" \
   --framework iso27001=substantial --framework nis2=basic "$@"; }
 
 mint_attest --out "$T/att.json"
-jq -r '.attestation.signature' "$T/att.json" > "$T/att.jws"
-jq    '.attestation.claims'    "$T/att.json" > "$T/claims.json"
+"${JGET[@]}" -r "$T/att.json" attestation signature > "$T/att.jws"
+"${JGET[@]}" "$T/att.json" attestation claims > "$T/claims.json"
 
 COMMON=(--jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW")
 
@@ -240,7 +241,7 @@ expect 1 'kid mismatch — header says' 'a key published under a kid its bytes d
 # --expect-kid (#13): pin the key that signed. It is compared with the kid
 # recomputed from the key bytes, never with a label. It is a usage error when it
 # is not the shape of a kid, and it is not --check-kid (the status-list lookup).
-OTHER_KID="$(jq -r '.keys[0].kid' "$T/other-jwks.json")"
+OTHER_KID="$("${JGET[@]}" -r "$T/other-jwks.json" keys 0 kid)"
 expect 0 'one of the kids you pinned with --expect-kid' 'a pinned kid that matches the signing key verifies' -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid "$ISSUER_KID"
 expect 0 'one of the kids you pinned with --expect-kid' 'two pinned kids, the first matching, verify (rotation overlap)' -- \
@@ -343,14 +344,14 @@ expect 1 'EXPIRED' 'an attached JWS alone is held to its expiry' -- \
 edit "$T/att.json" "$T/att-garbage.json" '
 h, p, s = d["attestation"]["signature"].split(".")
 d["attestation"]["signature"] = ".".join([h, "QUFBQQ", s])'
-jq -r '.attestation.signature' "$T/att-garbage.json" > "$T/garbage.jws"
+"${JGET[@]}" -r "$T/att-garbage.json" attestation signature > "$T/garbage.jws"
 expect 1 'is not a hodei-shield.attest.attestation.v1' 'an attached payload that is not an envelope is a failure (1), not "could not check" (2)' -- \
   --jws "$T/garbage.jws" "${COMMON[@]}"
 
 # Duplicate members. Every parser the script uses keeps the LAST value, which
 # is the signed one here, so these were never verdict-changing; the point is
 # that a reader who keeps the FIRST would have seen the decoy under a PASS.
-jq -c . "$T/att.json" > "$T/att-compact.json"
+"${JGET[@]}" -c "$T/att.json" > "$T/att-compact.json"
 edit_text "$T/att-compact.json" "$T/dup-posture.json" '
 t = t.replace("\"posture\":{", "\"posture\":{\"slug\":\"another-org\",\"expiresAt\":\"2099-01-01T00:00:00.000Z\",", 1)'
 expect 1 'duplicate_key' 'a duplicated slug/expiresAt inside posture is rejected' -- \
@@ -373,12 +374,12 @@ expect 1 'duplicate_key' 'a duplicated framework band is rejected' -- \
   --attestation "$T/dup-band.json" "${COMMON[@]}"
 expect 0 'every member of the claims JSON is covered by the signature' 'the same document, compact and without duplicates, verifies' -- \
   --attestation "$T/att-compact.json" "${COMMON[@]}"
-jq -c . "$T/claims.json" > "$T/claims-compact.json"
+"${JGET[@]}" -c "$T/claims.json" > "$T/claims-compact.json"
 edit_text "$T/claims-compact.json" "$T/dup-claims-file.json" '
 t = t.replace("{", "{\"iss\":\"https://other-issuer.test\",", 1)'
 expect 1 'duplicate_key' 'a duplicated member in a --claims file is rejected' -- \
   --jws "$T/att.jws" --claims "$T/dup-claims-file.json" "${COMMON[@]}"
-jq -c . "$T/jwks.json" > "$T/jwks-compact.json"
+"${JGET[@]}" -c "$T/jwks.json" > "$T/jwks-compact.json"
 edit_text "$T/jwks-compact.json" "$T/dup-jwks.json" '
 t = t.replace("\"pub\":", "\"pub\":\"AAAA\",\"pub\":", 1)'
 expect 2 'repeats members' 'a key document with duplicated members is "could not check" (2)' -- \
@@ -508,7 +509,14 @@ SL=(--status-list --status-keys "$T/status-keys.json" --attestation "$T/att.json
 expect 0 'GOOD — not revoked, per a verified status list' 'a genuine document on a list that revokes nothing is good' -- \
   "${SL[@]}" --status "$T/list-empty.json"
 
+expect 0 "0 revoked key(s), 0 revoked subject(s), truncated=false, seq=7, iss=$ISS" 'the summary of a good list shows its counts, flag, seq and issuer' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+expect 0 '(list seq 7).' 'a good verdict names the seq of the list' -- \
+  "${SL[@]}" --status "$T/list-empty.json"
+
 expect 1 'REVOKED — via key' 'a document whose signing key is revoked is rejected (Rule K)' -- \
+  "${SL[@]}" --status "$T/list-key.json"
+expect 1 "1 revoked key(s), 0 revoked subject(s), truncated=false, seq=8, iss=$ISS" 'the summary of a list that revokes a key shows its counts' -- \
   "${SL[@]}" --status "$T/list-key.json"
 
 expect 1 'REVOKED — via subject' 'a document minted before its subject was withdrawn is rejected (Rule B)' -- \
@@ -657,7 +665,7 @@ edit "$T/list-empty.json" "$T/list-truthy.json" 'd["statusList"]["truncated"] = 
 expect 3 'truncated must be a boolean' 'a list whose truncated flag is not a boolean is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-truthy.json"
 
-jq -c . "$T/list-key.json" > "$T/list-key-compact.json"
+"${JGET[@]}" -c "$T/list-key.json" > "$T/list-key-compact.json"
 edit_text "$T/list-key-compact.json" "$T/list-dup.json" '
 t = t.replace("\"keys\":", "\"keys\":[],\"keys\":", 1)'
 expect 3 'duplicate_key' 'a status list with a duplicated member is UNKNOWN' -- \
@@ -665,6 +673,30 @@ expect 3 'duplicate_key' 'a status list with a duplicated member is UNKNOWN' -- 
 printf '\xef\xbb\xbf' > "$T/list-bom.json"; cat "$T/list-dup.json" >> "$T/list-bom.json"
 expect 3 'is not strict JSON' 'a status list jq accepts but a strict parser does not is UNKNOWN' -- \
   "${SL[@]}" --status "$T/list-bom.json"
+
+# A number whose exponent no double (and no 64-bit exponent) holds is still a
+# number: the strict reader takes it, and it must neither stop the run nor turn
+# a verdict into "could not check" (exit 2). json.dumps would write Infinity, so
+# the documents are edited as text. The member is not signed, so the list still
+# verifies; in the signature position it is just not a compact JWS.
+"${JGET[@]}" -c "$T/list-empty.json" > "$T/list-empty-compact.json"
+"${JGET[@]}" -c "$T/list-subj-after.json" > "$T/list-subj-after-compact.json"
+for bigexp in 1e9999999999999999999 -1e9999999999999999999 0e9999999999999999999 \
+              1e-9999999999999999999 0e-9999999999999999999 1e-1147483700; do
+  edit_text "$T/list-empty-compact.json" "$T/list-bigexp.json" "
+t = t.replace('\"truncated\":', '\"x\":$bigexp,\"truncated\":', 1)"
+  expect 0 'GOOD — not revoked, per a verified status list' "a status list with the number $bigexp as an extra member is still good" -- \
+    "${SL[@]}" --status "$T/list-bigexp.json"
+  edit_text "$T/list-subj-after-compact.json" "$T/list-bigexp-subj.json" "
+t = t.replace('\"subjectHash\":', '\"x\":$bigexp,\"subjectHash\":', 1)"
+  expect 1 'REVOKED — via subject' "a revoked subject entry with the number $bigexp as an extra member is still revoked" -- \
+    "${SL[@]}" --status "$T/list-bigexp-subj.json"
+  edit_text "$T/list-empty-compact.json" "$T/list-bigexp-sig.json" "
+import re
+t = re.sub(r'\"signature\":\"[^\"]*\"', '\"signature\":$bigexp', t)"
+  expect 3 'is not a 3-segment compact JWS' "the number $bigexp as the signature is UNKNOWN, not an abort" -- \
+    "${SL[@]}" --status "$T/list-bigexp-sig.json"
+done
 
 # Expired under a good list says so; expired under a revocation reports the
 # revocation, because "request a new one" is the wrong advice for a withdrawn
@@ -749,6 +781,183 @@ if ! grep -q 'GET' "$T/other.log"; then
 else
   printf 'not ok - cleartext: a refused URL reached a listener\n'; sed 's/^/    # /' "$T/other.log"; FAILED=$((FAILED + 1))
 fi
+
+# --- nesting depth and size caps -----------------------------------------------
+# jq 1.7 refuses a document nested deeper than 256 (an object member that holds
+# an array or an object counts double), and the reader that replaced it does the
+# same, so a deeply nested member cannot make the reader slow: at 252 arrays inside
+# an unsigned extra member of the list the document is still read, at 253 it is
+# refused (UNKNOWN, not an abort and not a hang). Each case runs under `timeout 20`
+# through a wrapper, so a hang fails it (exit 124) instead of stopping the suite.
+SIZEV="$T/timeout-verifier.sh"
+printf '#!/usr/bin/env bash\nexec timeout 20 bash "%s" "$@"\n' "$VERIFIER" > "$SIZEV"
+VERIFIER_NOTIMEOUT="$VERIFIER"; VERIFIER="$SIZEV"
+for depth in 252 253; do
+  edit_text "$T/list-empty-compact.json" "$T/list-deep.json" "
+t = t.replace('\"truncated\":', '\"x\":' + '[' * $depth + ']' * $depth + ',\"truncated\":', 1)"
+  if [ "$depth" -eq 252 ]; then
+    expect 0 'GOOD — not revoked, per a verified status list' "an extra member nested $depth arrays deep is still read (jq's limit)" -- \
+      "${SL[@]}" --status "$T/list-deep.json"
+  else
+    expect 3 'expected {statusList, signature, ...}' "an extra member nested $depth arrays deep is refused as jq refuses it (UNKNOWN)" -- \
+      "${SL[@]}" --status "$T/list-deep.json"
+  fi
+done
+# The protected header is read before its signature is: 1900 levels (3.8 KB, under
+# the header cap) must be refused at once, not parsed.
+edit_text "$T/list-empty-compact.json" "$T/list-deep-header.json" '
+import base64, re
+hdr = (chr(123) + chr(34) + "alg" + chr(34) + ":" + "[" * 1900 + "]" * 1900 + ",\"kid\":\"k\",\"typ\":\"t\"}").encode()
+h = base64.urlsafe_b64encode(hdr).rstrip(b"=").decode()
+t = re.sub(r"(\"signature\":\")[^.\"]*", lambda m: m.group(1) + h, t, count=1)'
+expect 3 'protected header did not decode to a JSON object' 'a protected header nested 1900 deep is refused at once (UNKNOWN)' -- \
+  "${SL[@]}" --status "$T/list-deep-header.json"
+
+# Size caps (STATUS_DOC_MAX_BYTES 2,000,000, STATUS_KEYS_MAX_BYTES 1,000,000,
+# HEADER_MAX_BYTES 4096): over a cap the input is UNKNOWN and is not parsed; at the
+# cap it is read as before. The files are made here, from spaces after the JSON.
+pad_to() {   # IN OUT BYTES — IN followed by spaces, BYTES long in all
+  python3 -I - "$1" "$2" "$3" <<'PY'
+import sys
+b = open(sys.argv[1], "rb").read().rstrip()
+n = int(sys.argv[3])
+assert len(b) <= n
+open(sys.argv[2], "wb").write(b + b" " * (n - len(b)))
+PY
+}
+pad_to "$T/list-empty-compact.json" "$T/list-at-cap.json" 2000000
+pad_to "$T/list-empty-compact.json" "$T/list-over-cap.json" 2000001
+expect 0 'GOOD — not revoked, per a verified status list' 'a status list of exactly 2000000 bytes is read' -- \
+  "${SL[@]}" --status "$T/list-at-cap.json"
+lacks 'too_large' 'a status list at the size cap is not called too large'
+expect 3 'too_large — the status list is over 2000000 bytes' 'a status list of 2000001 bytes is UNKNOWN, not read' -- \
+  "${SL[@]}" --status "$T/list-over-cap.json"
+lacks 'is not strict JSON' 'an oversized status list is not parsed'
+# The worst a list under the cap can cost is padding that the signature does not
+# cover (statusList may carry any member): 2,000,000 bytes of it, flat or nested
+# 250 deep (the deepest jq allows), must still be read in the time the wrapper
+# allows, and give the verdict of the list underneath.
+for filler in flat nested; do
+  edit_text "$T/list-empty-compact.json" "$T/list-pad-$filler.json" "
+if '$filler' == 'flat':
+    fill = '[' + '0,' * 900000 + '0]'
+else:
+    fill = '[' * 250 + '0,' * 900000 + '0' + ']' * 250
+t = t.replace('\"truncated\":', '\"x\":' + fill + ',\"truncated\":', 1)"
+  pad_to "$T/list-pad-$filler.json" "$T/list-pad-$filler.json" 2000000
+  expect 0 'GOOD — not revoked, per a verified status list' "a status list padded to the cap with $filler filler under an unsigned member is still read" -- \
+    "${SL[@]}" --status "$T/list-pad-$filler.json"
+  # Every kid and subject asked for is looked up in the same pass over the list, so
+  # asking for more costs next to nothing.
+  expect 0 'subjects fixture-org, other-org carry no earlier withdrawal' "the same list with --check-kid and --check-subject ($filler filler) is read in time too" -- \
+    "${SL[@]}" --status "$T/list-pad-$filler.json" --check-kid "$OTHER_KID" --check-subject other-org --check-generated-at "$GEN"
+done
+pad_to "$T/status-keys.json" "$T/keys-at-cap.json" 1000000
+pad_to "$T/status-keys.json" "$T/keys-over-cap.json" 1000001
+expect 0 'GOOD — not revoked, per a verified status list' 'a status key set of exactly 1000000 bytes is read' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/keys-at-cap.json" --attestation "$T/att.json" "${COMMON[@]}"
+lacks 'too_large' 'a status key set at the size cap is not called too large'
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set of 1000001 bytes is UNKNOWN, not read' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "$T/keys-over-cap.json" --attestation "$T/att.json" "${COMMON[@]}"
+# A key set read from a pipe is bounded too (nothing is read past the cap).
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set of 1000001 bytes from a pipe is UNKNOWN' -- \
+  --status-list --status "$T/list-empty.json" --status-keys <(cat "$T/keys-over-cap.json") --attestation "$T/att.json" "${COMMON[@]}"
+# A URL: the server announces a length over the cap (curl stops), or does not.
+mkdir "$T/srv-big"; cp "$T/keys-over-cap.json" "$T/srv-big/k.json"
+pad_to "$T/status-keys.json" "$T/srv-big/k2.json" 2000000
+srv_start big 127.0.0.1 "$T/srv-big"
+# shellcheck disable=SC2154
+PB="$SRV_PORT_big"
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set URL that sends 1000001 bytes is UNKNOWN, not a failed fetch' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "http://127.0.0.1:$PB/k.json" --attestation "$T/att.json" "${COMMON[@]}"
+expect 3 'too_large — the status key set is over 1000000 bytes' 'a status key set URL that sends 2000000 bytes is stopped and is UNKNOWN too' -- \
+  --status-list --status "$T/list-empty.json" --status-keys "http://127.0.0.1:$PB/k2.json" --attestation "$T/att.json" "${COMMON[@]}"
+# A ~/.curlrc with `compressed` must not let a few kilobytes of gzip become a huge
+# file past --max-filesize: the fetch asks for no decoding (--no-compressed), so the
+# body stays what was sent, the gzip bytes, and is not strict JSON. ulimit -f makes a
+# file over 2.1 MB fail at once, so a regression cannot fill the disk either. The
+# URL is on 127.0.0.2, which is not loopback (loopback fetches ignore ~/.curlrc).
+cat > "$T/gzsrv.py" <<'PY'
+import gzip, http.server, sys
+body = gzip.compress(b"0" * 50_000_000)
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args): pass
+http.server.HTTPServer((sys.argv[2], int(sys.argv[1])), H).serve_forever()
+PY
+if GZPORT="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.2", 0)); print(s.getsockname()[1])' 2>/dev/null)" && [ -n "$GZPORT" ]; then
+  python3 -I "$T/gzsrv.py" "$GZPORT" 127.0.0.2 > "$T/gzsrv.log" 2>&1 &
+  SRV_PIDS+=("$!")
+  for (( gzi = 0; gzi < 100; gzi++ )); do
+    if (exec 3<> "/dev/tcp/127.0.0.2/$GZPORT") 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  mkdir "$T/curlhome"; printf 'compressed\n' > "$T/curlhome/.curlrc"
+  ULIMITV="$T/ulimit-verifier.sh"
+  printf '#!/usr/bin/env bash\nulimit -f 2100\nexec timeout 20 bash "%s" "$@"\n' "$VERIFIER_NOTIMEOUT" > "$ULIMITV"
+  VERIFIER="$ULIMITV"
+  CURL_HOME="$T/curlhome" expect 3 'status.json is not strict JSON' 'a gzip body that unpacks to 50 MB is read as it was sent, despite a curlrc with compressed (UNKNOWN)' -- \
+    --status-list --status "http://127.0.0.2:$GZPORT/list.json" --status-keys "$T/status-keys.json" --attestation "$T/att.json" "${COMMON[@]}"
+  VERIFIER="$SIZEV"
+else
+  # macOS has no 127.0.0.2: the test needs a non-loopback address, so it is skipped.
+  printf 'skipped - a gzip body under a curlrc with compressed (127.0.0.2 cannot be bound here)\n'; SKIPPED=$((SKIPPED + 1))
+fi
+VERIFIER="$SIZEV"
+# Headers: the status list's (UNKNOWN) and the attestation's (could not check).
+edit_text "$T/list-empty-compact.json" "$T/list-big-header.json" '
+import base64, re
+hdr = (chr(123) + chr(34) + "alg" + chr(34) + ":" + chr(34) + "x" * 5000 + "\",\"kid\":\"k\",\"typ\":\"t\"}").encode()
+h = base64.urlsafe_b64encode(hdr).rstrip(b"=").decode()
+t = re.sub(r"(\"signature\":\")[^.\"]*", lambda m: m.group(1) + h, t, count=1)'
+expect 3 'too_large — the protected header is' 'a status list whose protected header is over 4096 bytes is UNKNOWN, not read' -- \
+  "${SL[@]}" --status "$T/list-big-header.json"
+lacks 'did not decode' 'an oversized status header is not parsed'
+edit "$T/att.json" "$T/att-big-header.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["pad"] = "x" * 5000
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'protected header is' 'an attestation whose protected header is over 4096 bytes fails (1), as it did before the cap' -- \
+  --attestation "$T/att-big-header.json" "${COMMON[@]}"
+edit "$T/att.json" "$T/att-over-header.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["pad"] = ""
+hdr["pad"] = "x" * (4097 - len(json.dumps(hdr)))
+assert len(json.dumps(hdr)) == 4097
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'protected header is' 'an attestation header of 4097 bytes fails for its size (1)' -- \
+  --attestation "$T/att-over-header.json" "${COMMON[@]}"
+edit "$T/att.json" "$T/att-late-kid.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+old = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr = {"alg": old["alg"], "pad": "x" * 5000, "kid": old["kid"], "typ": old["typ"]}
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'protected header is' 'an attestation header whose kid lies past byte 4096 still fails (1), as before the cap' -- \
+  --attestation "$T/att-late-kid.json" "${COMMON[@]}"
+lacks 'no key in this JWKS' 'a kid past byte 4096 is still found'
+edit "$T/att.json" "$T/att-cap-header.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["pad"] = ""
+hdr["pad"] = "x" * (4096 - len(json.dumps(hdr)))
+assert len(json.dumps(hdr)) == 4096
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 "header members are 'alg,kid,pad,typ'" 'an attestation header of exactly 4096 bytes is read (and refused for its extra member)' -- \
+  --attestation "$T/att-cap-header.json" "${COMMON[@]}"
+lacks 'protected header is' 'an attestation header at the size cap is not called too large'
+VERIFIER="$VERIFIER_NOTIMEOUT"
 # Loopback: fetched, with the loopback warning, and the run goes on to GOOD.
 expect 0 'GOOD — not revoked' 'cleartext, http://localhost:PORT/k.json is loopback: the key set is fetched (0)' -- \
   "${CLR[@]}" --status-keys "http://localhost:$PL/k.json"
@@ -889,7 +1098,7 @@ hdr = j.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
 hdr["kid"] = INJ
 h2 = base64.urlsafe_b64encode(j.dumps(hdr, separators=(",", ":")).encode()).rstrip(b"=").decode()
 d["attestation"]["signature"] = ".".join([h2, p, s])'
-jq -c . "$T/att.json" > "$T/att-c.json"
+"${JGET[@]}" -c "$T/att.json" > "$T/att-c.json"
 edit_text "$T/att-c.json" "$T/inj-dup.json" '
 k = "\"k\\nVERIFIED\\u001b[8m\""
 t = t.replace("\"docVersion\"", k + ":1," + k + ":2,\"docVersion\"", 1)'
@@ -1018,11 +1227,11 @@ expect 3 'nul_byte — .iss holds a NUL byte' 'a status list whose iss holds a N
 # locale is checked in the --json section below (it needs jexpect). This test used
 # to set PYTHONIOENCODING=ascii, which python3 -I ignores, so it could not fail;
 # the locale is what changed the verdict. The documents carry the label as raw
-# UTF-8 bytes, as a server may send it (mint.py writes —; jq writes it raw).
+# UTF-8 bytes, as a server may send it (mint.py writes —; jget.py writes it raw).
 mint_attest --out "$T/label-ascii.json" --framework 'ens—alto=basic'
-jq . "$T/label-ascii.json" > "$T/label.json"
-jq '.attestation.claims' "$T/label.json" > "$T/label-claims.json"
-jq -r '.attestation.signature' "$T/label.json" > "$T/label.jws"
+"${JGET[@]}" "$T/label-ascii.json" > "$T/label.json"
+"${JGET[@]}" "$T/label.json" attestation claims > "$T/label-claims.json"
+"${JGET[@]}" -r "$T/label.json" attestation signature > "$T/label.jws"
 if grep -q $'\xe2\x80\x94' "$T/label.json" && grep -q $'\xe2\x80\x94' "$T/label-claims.json"; then
   printf 'ok - the label documents carry the label as raw UTF-8\n'; PASSED=$((PASSED + 1))
 else
@@ -1115,7 +1324,7 @@ expect 0 'is retired (at 2026-07-31T18:53:58Z), but this document was generated 
 expect 1 'retired_key' '--expect-kid pinned to the retired kid does not rescue a post-retirement document' -- \
   --attestation "$T/ret-after.json" "${RET_COMMON[@]}" --expect-kid "$ISSUER_KID"
 expect 0 'VERIFIED — this document was signed' '--pub-b64url has no JWK, so retirement does not apply' -- \
-  --attestation "$T/ret-after.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --attestation "$T/ret-after.json" --pub-b64url "$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
 # Same retirement, a document generated later on the clock but with a lexically
 # smaller string would be the trap of a string comparison; instants are compared.
@@ -1126,7 +1335,7 @@ expect 0 'before the retirement' 'an offset form of 18:53:57.999Z is compared as
 # No claims JSON to read generatedAt from (an attached JWS whose payload is not
 # an envelope): a retired key cannot be shown to predate its retirement, so the
 # run fails closed (1) with retired_key, besides the failures it already has.
-IFS=. read -r UH _ US < <(jq -r '.attestation.signature' "$T/ret-before.json")
+IFS=. read -r UH _ US < <("${JGET[@]}" -r "$T/ret-before.json" attestation signature)
 printf '%s.AAAA.%s\n' "$UH" "$US" > "$T/ret-undecodable.jws"
 set_retired '"2026-07-31T18:53:58Z"'
 expect 1 "retired_key — key $ISSUER_KID is retired (at $RET_AT_S) and without the claims JSON there is no generatedAt" \
@@ -1172,7 +1381,7 @@ expect 2 '\x1b[31m\x0aPASS  forged' 'the control characters are shown as visible
   --issued-at '2026-07-31T18:53:58.000Z' --next-update '2026-07-31T20:53:58.000Z' >/dev/null
 "${MINT[@]}" status --key "$T/status.pem" --out "$T/list-ret-before.json" --iss "$ISS" --seq 9 \
   --issued-at '2026-07-31T18:53:57.999Z' --next-update '2026-07-31T20:53:57.999Z' >/dev/null
-SKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+SKID="$("${JGET[@]}" -r "$T/status-keys.json" keys 0 kid)"
 RETS=(--status-list --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW")
 edit "$T/status-keys.json" "$T/status-keys-ret.json" "d['keys'][0]['hs_retired_at'] = '$RET_AT_S'"
 expect 3 "retired_key — this status list was issued at 2026-07-31T18:53:58.000Z, at or after the retirement of key $SKID at $RET_AT_S" \
@@ -1217,10 +1426,10 @@ done
 
 # --pub-b64url and --jwks are two sources for the same key.
 expect 2 'cannot be combined with --jwks' '--pub-b64url together with --jwks is a usage error (2)' -- \
-  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --attestation "$T/ret-before.json" --jwks /nonexistent --pub-b64url "$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
 expect 2 'cannot be combined with --jwks' '--pub-b64url together with a readable --jwks is a usage error too' -- \
-  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$(jq -r '.keys[0].pub' "$T/jwks.json")" \
+  --attestation "$T/ret-before.json" --jwks "$T/jwks.json" --pub-b64url "$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)" \
   --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$RET_NOW"
 
 # --- anchor (--anchor-file), with a cosign test double -------------------------
@@ -1251,7 +1460,7 @@ STUBEOF
 chmod +x "$STUB/cosign"
 # A PATH with the tools the verifier needs and no cosign.
 NOCOSIGN="$T/nocosign"; mkdir -p "$NOCOSIGN"
-for tool in bash env openssl python3 jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
+for tool in bash env openssl python3 awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
   tool_path="$(command -v "$tool" 2>/dev/null || true)"
   if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then ln -sf "$tool_path" "$NOCOSIGN/$tool"; fi
 done
@@ -1262,7 +1471,7 @@ ANCHOR_ISSUER_URL='https://token.actions.githubusercontent.com'
 
 # The statement: the issuer, the attestation key and the status-list key of the
 # fixtures, minted from their kids as the key sets above are.
-ASKID="$(jq -r '.keys[0].kid' "$T/status-keys.json")"
+ASKID="$("${JGET[@]}" -r "$T/status-keys.json" keys 0 kid)"
 python3 -I - "$T/stmt-base.json" "$ISSUER_KID" "$ASKID" "$ISS" <<'PY'
 import json, sys
 out, akid, skid, iss = sys.argv[1:5]
@@ -1301,7 +1510,7 @@ ANCHOR_SIGNED="is signed by ${ANCHOR_WF}v${VER}"
 mint_bundle "$T/stmt.json.sigstore.json" "URI:${ANCHOR_WF}v${VER}"
 cp "$T/stmt-base.json" "$T/stmt.json"
 A=(--anchor-file "$T/stmt.json")                         # the bundle: stmt.json.sigstore.json, by default
-PUB="$(jq -r '.keys[0].pub' "$T/jwks.json")"
+PUB="$("${JGET[@]}" -r "$T/jwks.json" keys 0 pub)"
 
 export PATH="$STUB:$PATH_BEFORE_STUB"
 
@@ -1713,6 +1922,22 @@ expect 1 'retired_key — this document was generated at 2026-07-31T18:53:58.000
   --attestation "$T/ret-after.json" "${RETC[@]}" --anchor-file "$T/stmt-ret2.json"
 
 # --- --pub-b64url: no JWK, but the kid is recomputed from the key bytes ------------------------
+# A header kid longer than one argument may be (200,000 characters) must not stop the
+# revoked key from being found: the kids are looked up through standard input.
+edit "$T/att.json" "$T/att-huge-kid.json" '
+import base64, json
+h, rest = d["attestation"]["signature"].split(".", 1)
+hdr = json.loads(base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)))
+hdr["kid"] = "K" * 200000
+d["attestation"]["signature"] = base64.urlsafe_b64encode(json.dumps(hdr).encode()).rstrip(b"=").decode() + "." + rest'
+expect 1 'REVOKED — via key' 'a header kid of 200000 characters does not hide that the recomputed kid is revoked' -- \
+  --status-list --status-keys "$T/status-keys.json" --status "$T/list-key.json" --attestation "$T/att-huge-kid.json" --pub-b64url "$PUB" \
+  --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
+lacks 'could not be read' 'and the list is not reported unreadable'
+# The same header is over the 4,096-byte cap: a failed check (1), as a header with a
+# member beyond alg, kid and typ always was, and not exit 2.
+expect 1 'over the 4096 a header of this format can have' 'an attestation header over 4096 bytes is a failed check (1), not exit 2' -- \
+  --attestation "$T/att-huge-kid.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW"
 expect 0 "lists kid '$ISSUER_KID' as an attestation key" '--pub-b64url with an anchor: the recomputed kid is listed' -- \
   --attestation "$T/att.json" --pub-b64url "$PUB" --expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW" "${A[@]}"
 expect 1 "anchor_kid_absent — the key bytes derive kid '$ISSUER_KID'" '--pub-b64url with an anchor that does not list the recomputed kid: a failed check (1)' -- \
@@ -2176,7 +2401,7 @@ fi
 
 # Without python3 a smaller, still valid object is written (nothing attested).
 NOPY="$T/nopy"; mkdir -p "$NOPY"
-for tool in bash env openssl jq awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
+for tool in bash env openssl awk sed grep tr cat head cut wc date mktemp rm cp mkdir chmod sort tee dirname basename xxd uname; do
   tool_path="$(command -v "$tool" 2>/dev/null || true)"
   if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then ln -sf "$tool_path" "$NOPY/$tool"; fi
 done
@@ -2560,19 +2785,25 @@ RC_SCRIPT="$T/rc.script"; RC_DOCS="$T/rc.docs"; RC_MANIFEST="$T/rc.manifest"
 } | sort -u > "$RC_SCRIPT"
 # A table row starts with the code between two backticks (any character below).
 sed -nE 's/^\| [^A-Za-z0-9 ]([a-z][a-z0-9_]*)[^A-Za-z0-9 ] \|.*/\1/p' "$RC_DOC" | sort -u > "$RC_DOCS"
+# A code the verifier no longer emits stays in the table as "Retired in vX.Y.Z"
+# (codes are never removed); it is not stale, but it must not be emitted again.
+RC_RETIRED="$T/rc.retired"
+sed -nE 's/^\| [^A-Za-z0-9 ]([a-z][a-z0-9_]*)[^A-Za-z0-9 ] \| Retired in v[0-9.]+: .*/\1/p' "$RC_DOC" | sort -u > "$RC_RETIRED"
 python3 -I -c 'import json,sys
 for c in json.load(open(sys.argv[1]))["cases"]: print(c["expect"]["code"])' \
   "$ROOT/tests/vectors/v1/vectors.json" | sort -u > "$RC_MANIFEST"
 rc_missing="$(comm -23 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"
-rc_stale="$(comm -13 "$RC_SCRIPT" "$RC_DOCS" | tr '\n' ' ')"
+rc_stale="$(comm -13 "$RC_SCRIPT" "$RC_DOCS" | comm -23 - "$RC_RETIRED" | tr '\n' ' ')"
+rc_revived="$(comm -12 "$RC_SCRIPT" "$RC_RETIRED" | tr '\n' ' ')"
 rc_unknown="$(comm -13 "$RC_SCRIPT" "$RC_MANIFEST" | tr '\n' ' ')"
-if [ -s "$RC_SCRIPT" ] && [ -z "$rc_missing" ] && [ -z "$rc_stale" ] && [ -z "$rc_unknown" ]; then
+if [ -s "$RC_SCRIPT" ] && [ -z "$rc_missing" ] && [ -z "$rc_stale" ] && [ -z "$rc_revived" ] && [ -z "$rc_unknown" ]; then
   printf 'ok - reason codes: %d in the script, all documented; every vectors expect.code is emitted\n' "$(wc -l < "$RC_SCRIPT")"
   PASSED=$((PASSED + 1))
 else
   printf 'not ok - reason codes\n'
   [ -z "$rc_missing" ] || printf '    # used by the script, not in reason-codes.md: %s\n' "$rc_missing"
   [ -z "$rc_stale" ]   || printf '    # in reason-codes.md, never emitted by the script: %s\n' "$rc_stale"
+  [ -z "$rc_revived" ] || printf '    # retired in reason-codes.md, but emitted by the script: %s\n' "$rc_revived"
   [ -z "$rc_unknown" ] || printf '    # expect.code in vectors.json that the script cannot emit: %s\n' "$rc_unknown"
   FAILED=$((FAILED + 1))
 fi
