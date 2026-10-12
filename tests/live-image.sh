@@ -21,7 +21,8 @@
 #     unavailable (no connection, timeout, HTTP 5xx or 429 after retries), is
 #     NOT a finding. It is a warning and the script exits 0.
 #     The cut is made by version, never by "the pull failed": images exist for
-#     v1.4.1 and later (v1.4.0 and earlier have none).
+#     v1.4.2 and later (v1.4.1 was tagged but never released; v1.4.0 and
+#     earlier have none).
 #   * Everything else fails. In particular a registry answer of 401, 403 or 404
 #     for a release that has an image is a finding (the image is missing or the
 #     package is private), as is a signature or attestation that does not
@@ -29,7 +30,7 @@
 #     than the expected one, and a version inside the image that is not the
 #     release's.
 #
-# Needs: curl, jq, docker, cosign, gh (GH_TOKEN or GITHUB_TOKEN for gh). Without
+# Needs: curl, python3, docker, cosign, gh (GH_TOKEN or GITHUB_TOKEN for gh). Without
 # cosign or gh here it skips with a warning, as tests/live.sh does, unless
 # GITHUB_ACTIONS is set, where a missing tool fails.
 #
@@ -46,8 +47,11 @@ REPO_API='https://api.github.com/repos/Hodeitek/hodeishield-attest-verifier'
 IMAGE_REPO='hodeitek/hodeishield-attest-verifier'
 IMAGE="ghcr.io/$IMAGE_REPO"
 OIDC_ISSUER='https://token.actions.githubusercontent.com'
+# The image's only attestation is its SBOM; without --predicate-type, gh asks
+# for SLSA provenance and gets HTTP 404.
+SBOM_PREDICATE='https://spdx.dev/Document/v2.3'
 # The first release with an image.
-FIRST_IMAGE_VERSION='1.4.1'
+FIRST_IMAGE_VERSION='1.4.2'
 
 T="$(mktemp -d)"; chmod 700 "$T"
 trap 'rm -rf -- "$T"' EXIT
@@ -70,13 +74,25 @@ version_ge() {
   [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -n1)" = "$2" ]
 }
 
+# json_str KEY FILE — the top-level string member KEY of the JSON object in FILE,
+# or nothing when it is absent, not a string, or the file is not JSON.
+json_str() {
+  python3 -c 'import json, sys
+try:
+    v = json.load(open(sys.argv[2])).get(sys.argv[1])
+except Exception:
+    v = None
+if isinstance(v, str):
+    print(v)' "$1" "$2" 2>/dev/null || true
+}
+
 # need TOOL — a missing tool is a skip here, a failure in CI.
 need() {
   if command -v "$1" >/dev/null 2>&1; then return 0; fi
   if [ -n "${GITHUB_ACTIONS:-}" ]; then fail "$1 is not installed on the runner"; fi
   skip "$1 is not installed here"
 }
-for tool in curl jq docker; do
+for tool in curl python3 docker; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
 done
 
@@ -90,6 +106,8 @@ grep -qF -- "--certificate-identity \"https://github.com/Hodeitek/hodeishield-at
   || fail "README.md's cosign command does not use the certificate identity this check uses"
 grep -qF -- "--certificate-oidc-issuer $OIDC_ISSUER" "$ROOT/README.md" \
   || fail "README.md's cosign command does not use the OIDC issuer this check uses"
+grep -qF -- "--predicate-type $SBOM_PREDICATE" "$ROOT/README.md" \
+  || fail "README.md's gh attestation verify command does not use --predicate-type $SBOM_PREDICATE"
 
 # --- 1. the latest release, and the version cut ------------------------------
 GH_AUTH=()
@@ -101,7 +119,7 @@ case "$code" in
   404) skip 'the repository has no published release yet' ;;
   *) skip "could not read the latest release (HTTP $code: outage)" ;;
 esac
-TAG="$(jq -r '.tag_name // empty' "$T/release.json" 2>/dev/null || true)"
+TAG="$(json_str tag_name "$T/release.json")"
 VERSION="${TAG#v}"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "the latest release has an unreadable tag: '$TAG'"
 if ! version_ge "$VERSION" "$FIRST_IMAGE_VERSION"; then
@@ -127,7 +145,7 @@ CURL_TRY=(--max-time 20 --retry 3 --retry-delay 5 --retry-connrefused)
 code="$(curl -sS "${CURL_TRY[@]}" -o "$T/token.json" -w '%{http_code}' \
           "https://ghcr.io/token?service=ghcr.io&scope=repository:$IMAGE_REPO:pull" 2>/dev/null)" || code=000
 registry_status 'the anonymous pull token' "$code"
-TOKEN="$(jq -r '.token // empty' "$T/token.json" 2>/dev/null || true)"
+TOKEN="$(json_str token "$T/token.json")"
 [ -n "$TOKEN" ] || fail 'ghcr.io gave no anonymous pull token'
 code="$(curl -sS "${CURL_TRY[@]}" -o /dev/null -D "$T/manifest.headers" -w '%{http_code}' \
           -H "Authorization: Bearer $TOKEN" \
@@ -165,7 +183,7 @@ if [ -z "${GH_TOKEN:-}" ]; then
   if [ -n "${GITHUB_ACTIONS:-}" ]; then fail 'no GH_TOKEN for gh attestation verify'; fi
   skip 'no GH_TOKEN for gh attestation verify'
 fi
-gh attestation verify "oci://$REF" --repo Hodeitek/hodeishield-attest-verifier > "$T/gh.out" 2>&1
+gh attestation verify "oci://$REF" --repo Hodeitek/hodeishield-attest-verifier --predicate-type "$SBOM_PREDICATE" > "$T/gh.out" 2>&1
 check_tool "gh attestation verify of $REF" "$T/gh.out" $?
 ok "the SBOM attestation of $REF verifies"
 

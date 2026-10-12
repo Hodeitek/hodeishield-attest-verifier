@@ -7,16 +7,16 @@
 # tests/live-image.sh can only run end to end against a published image. This
 # runs it offline with stubbed curl, docker, cosign and gh, and checks the one
 # distinction it exists to keep:
-#   a. a release that predates images (< 1.4.1, by version) skips with a
+#   a. a release that predates images (< 1.4.2, by version) skips with a
 #      warning, exit 0, and touches neither the registry nor docker;
 #   b. 401, 403 and 404 from the registry for a release with an image FAIL;
 #      an unreachable registry, 429 and 5xx are a warning, exit 0;
-#   c. the version order is numeric (1.4.10 and 1.10.0 are after 1.4.1);
+#   c. the version order is numeric (1.4.10 and 1.10.0 are after 1.4.2);
 #   d. a good run uses IMAGE@sha256:... only (never the tag), with the
 #      certificate identity of README.md, and runs both README examples;
 #   e. a cosign or gh failure is a failure, unless its output names an outage;
 #      a wrong verdict, exit code or version inside the image fails.
-# Offline: the stubs only print. Needs bash, coreutils and jq.
+# Offline: the stubs only print. Needs bash, coreutils and python3.
 # =============================================================================
 set -uo pipefail
 
@@ -89,7 +89,7 @@ scenario() {
   local name="$1" want="$2" pattern="$3" got; shift 3
   : > "$LOG"
   env PATH="$T/bin:$PATH" LOG="$LOG" GH_TOKEN=x GITHUB_ACTIONS= \
-    STUB_API_CODE=200 STUB_TAG=v1.4.1 STUB_TOKEN_CODE=200 STUB_MANIFEST_CODE=200 \
+    STUB_API_CODE=200 STUB_TAG=v1.4.2 STUB_TOKEN_CODE=200 STUB_MANIFEST_CODE=200 \
     STUB_DIGEST="$DIGEST" STUB_DATA_CODE=200 STUB_PULL_RC=0 STUB_PULL_MSG=pulled \
     STUB_COSIGN_RC=0 STUB_COSIGN_MSG=verified STUB_GH_RC=0 STUB_GH_MSG=verified \
     STUB_RUN_RC=0 STUB_RUN_OUT=VERIFIED STUB_STATUS_RC=0 \
@@ -109,7 +109,7 @@ had_call() {
 }
 
 # --- a. releases that predate images skip, by version ------------------------
-for tag in v1.4.0 v1.3.9 v0.9.9 v1.0.0; do
+for tag in v1.4.1 v1.4.0 v1.3.9 v0.9.9 v1.0.0; do
   scenario "$tag predates images: warning, exit 0" 0 'predates images' STUB_TAG="$tag" \
     && no_call 'ghcr.io\|^docker\|^cosign' "$tag: neither the registry nor docker was touched"
 done
@@ -131,18 +131,18 @@ scenario 'the GitHub API unreachable: warning, exit 0' 0 'could not read the lat
 scenario 'the GitHub API 503: warning, exit 0' 0 'could not read the latest release' STUB_API_CODE=503
 scenario 'no release yet: warning, exit 0' 0 'no published release' STUB_API_CODE=404
 scenario 'an unreadable tag fails' 1 'unreadable tag' STUB_TAG=latest
-scenario 'a tag with a suffix fails' 1 'unreadable tag' STUB_TAG=v1.4.1-rc1
+scenario 'a tag with a suffix fails' 1 'unreadable tag' STUB_TAG=v1.4.2-rc1
 
 # --- c. the version order is numeric -----------------------------------------
-for tag in v1.4.1 v1.4.10 v1.5.0 v1.10.0 v2.0.0; do
+for tag in v1.4.2 v1.4.10 v1.5.0 v1.10.0 v2.0.0; do
   scenario "$tag has an image: it is checked" 0 "ok    posture attestation" STUB_TAG="$tag" STUB_IMG_VERSION="${tag#v}" \
     && had_call '^cosign' "$tag: cosign ran"
 done
 
 # --- d. a good run -----------------------------------------------------------
-scenario 'a good run' 0 'ok    posture attestation' STUB_IMG_VERSION=1.4.1
-had_call "^cosign verify ghcr.io/hodeitek/hodeishield-attest-verifier@$DIGEST --certificate-identity https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/image.yml@refs/tags/v1.4.1 --certificate-oidc-issuer https://token.actions.githubusercontent.com\$" 'cosign verify: the digest, README.md identity and issuer'
-had_call "^gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@$DIGEST --repo Hodeitek/hodeishield-attest-verifier\$" 'gh attestation verify: the digest'
+scenario 'a good run' 0 'ok    posture attestation' STUB_IMG_VERSION=1.4.2
+had_call "^cosign verify ghcr.io/hodeitek/hodeishield-attest-verifier@$DIGEST --certificate-identity https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/image.yml@refs/tags/v1.4.2 --certificate-oidc-issuer https://token.actions.githubusercontent.com\$" 'cosign verify: the digest, README.md identity and issuer'
+had_call "^gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@$DIGEST --repo Hodeitek/hodeishield-attest-verifier --predicate-type https://spdx.dev/Document/v2.3\$" 'gh attestation verify: the digest and the SBOM predicate type'
 had_call '^docker pull ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:' 'docker pull by digest'
 no_call 'hodeishield-attest-verifier:v' 'the tag is never given to docker or cosign'
 no_call '^docker run.*hodeishield-attest-verifier[^@]' 'docker run uses the digest only'
@@ -162,11 +162,11 @@ scenario 'docker pull denied: FAIL' 1 'not readable' STUB_PULL_RC=1 STUB_PULL_MS
 scenario 'docker pull timeout: warning, exit 0' 0 'looks unavailable' STUB_PULL_RC=1 STUB_PULL_MSG='net/http: TLS handshake timeout'
 scenario 'production unreachable: warning, exit 0' 0 'answered HTTP 503' STUB_DATA_CODE=503
 scenario 'production example 404 fails' 1 'HTTP 404' STUB_DATA_CODE=404
-scenario 'posture example exits 1 in the image: FAIL' 1 'exited 1, expected 0' STUB_RUN_RC=1 STUB_RUN_OUT='VERIFICATION FAILED' STUB_IMG_VERSION=1.4.1
-scenario 'posture example exits 0 without VERIFIED: FAIL' 1 "no 'VERIFIED'" STUB_RUN_OUT='nothing' STUB_IMG_VERSION=1.4.1
-scenario 'status example exits 1 (revoked): FAIL' 1 'exited 1, expected 0' STUB_STATUS_RC=1 STUB_IMG_VERSION=1.4.1
-scenario 'status example without GOOD: FAIL' 1 "no 'GOOD" STUB_STATUS_OUT=unknown STUB_IMG_VERSION=1.4.1
-scenario 'the image reports another version: FAIL' 1 "expected 'verify-attestation.sh 1.4.1'" STUB_IMG_VERSION=1.4.0
+scenario 'posture example exits 1 in the image: FAIL' 1 'exited 1, expected 0' STUB_RUN_RC=1 STUB_RUN_OUT='VERIFICATION FAILED' STUB_IMG_VERSION=1.4.2
+scenario 'posture example exits 0 without VERIFIED: FAIL' 1 "no 'VERIFIED'" STUB_RUN_OUT='nothing' STUB_IMG_VERSION=1.4.2
+scenario 'status example exits 1 (revoked): FAIL' 1 'exited 1, expected 0' STUB_STATUS_RC=1 STUB_IMG_VERSION=1.4.2
+scenario 'status example without GOOD: FAIL' 1 "no 'GOOD" STUB_STATUS_OUT=unknown STUB_IMG_VERSION=1.4.2
+scenario 'the image reports another version: FAIL' 1 "expected 'verify-attestation.sh 1.4.2'" STUB_IMG_VERSION=1.4.0
 
 printf '\n%s passed, %s failed\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

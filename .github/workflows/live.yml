@@ -11,9 +11,9 @@ name: Live check
 #
 # A second job, live-image, verifies and runs the latest release's signed image
 # the same way (tests/live-image.sh). It skips, with a warning, while the latest
-# release predates images (before v1.4.1) and during an outage; a missing or
-# private image for a release that has one, a signature that does not verify
-# and a wrong verdict fail.
+# release predates images (before v1.4.2; v1.4.1 was never released) and during
+# an outage; a missing or private image for a release that has one, a signature
+# or SBOM attestation that does not verify and a wrong verdict fail.
 on:
   push:
     branches: [dev, main]
