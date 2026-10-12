@@ -188,6 +188,11 @@ The signature proves which workflow built the image and when, not that the
 image can be rebuilt bit for bit: the Debian packages are taken from the
 archive on the day of the build.
 
+The [live check](.github/workflows/live.yml) does what this section says on
+every push and daily: it takes the digest of the latest release's image, runs
+`cosign verify` and `gh attestation verify` on it, and runs the production
+example above in it.
+
 ## Exit codes — the distinction matters
 
 Posture mode (the default, as above):
