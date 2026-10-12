@@ -143,10 +143,10 @@ command runs, so they carry Debian's current security updates.
 
 ### A signed image
 
-From v1.4.0 on, each release also publishes a ready-made image,
+Releases after v1.4.0 also publish a ready-made image,
 `ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
-(`:v1.4.0`). There is no `latest` tag, and releases before v1.4.0 have no
-image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
+(`:vX.Y.Z`). There is no `latest` tag, and v1.4.0 and earlier
+releases have no image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
 and its entrypoint is the verifier, so it needs no network to run. Take its
 digest from the release page, and pin that digest, not the tag. Check the
 signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
@@ -283,9 +283,18 @@ failure reasons, not attested content:
 - the visibility `gated`, in a redaction failure message;
 - the words "nothing is attested", in the `PASS` line for a null `overallBand`.
 
-Every value taken from a document, key set or status list is printed with
+Every value taken from a document, key set or status list, and every value
+given on the command line that a message prints back (`--expect-slug`,
+`--expect-issuer`, `--expect-nonce`, the URLs of `--status` and `--status-keys`,
+an unknown argument), and what curl says about a failed fetch, is printed with
 control characters, and any byte outside printable ASCII, as a visible `\xHH`
 escape, so an edited document cannot forge lines such as a `VERIFIED` verdict.
+
+The "Attested content" block is the one place that shows text another way,
+because it is only printed for a document that verified: a character that is not
+printable is shown as `?` (not as `\xHH`), and any other text, such as a label
+with a non-ASCII character, is printed as UTF-8, whatever the terminal encoding.
+The check lines and messages above never do that.
 
 ## Machine-readable output
 

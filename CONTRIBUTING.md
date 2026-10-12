@@ -145,5 +145,9 @@ No third-party bot with write access runs on this repository.
   pins `anchore/sbom-action` and `actions/attest` by commit SHA; Dependabot
   moves both with the other actions. The SBOM tool (Syft) is the version the
   pinned `anchore/sbom-action` runs.
+- **The Semgrep image** in the `semgrep-parse` job of `ci.yml`
+  (`semgrep/semgrep`, version and index digest) is bumped by hand under the same
+  7-day rule as the other image digests. The job only checks that Semgrep's bash
+  parser reads `verify-attestation.sh` completely.
 - **The `alpine:3.22` digest** in `ci.yml` (the LibreSSL job) follows the same
   rules: bumped by hand, at least 7 days old.
