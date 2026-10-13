@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
+[package]
+name = "mldsa-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "The ML-DSA-65 verify primitive of aws-lc-rs as a WebAssembly module (wasm32-unknown-emscripten), built reproducibly by build.sh."
+
+[[bin]]
+name = "mldsa_wasm"
+path = "src/main.rs"
+
+[dependencies]
+# Exact versions, the same as tools/mldsa-vectors: the trust path does not move
+# without a commit. default-features = false: only the AWS-LC backend.
+aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys"] }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = false
+debug = false
+strip = "none"
+panic = "abort"
