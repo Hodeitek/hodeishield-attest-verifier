@@ -307,6 +307,79 @@ from `127.0.0.1`, and open it with the browsers listed, with a new profile each.
 For path 2 call `crypto.subtle.importKey("raw-public", pk, {name: "ML-DSA-65"},
 false, ["verify"])` and `crypto.subtle.verify({name: "ML-DSA-65"}, key, sig, msg)`.
 
+### Update 2026-10-14: maintainer decision and reproducible build
+
+**Maintainer decision, 2026-10-14.** The maintainers accept a pre-1.0
+`aws-lc-sys` and the Emscripten-generated JavaScript loader in the trust path of
+the in-browser verifier. This answers the first open question under "Updated
+recommendation for #25". The conditions that remain are the ones stated in this
+document: exact versions in a committed `Cargo.lock`, and a module that anyone
+can rebuild to the same bytes (below).
+
+**Reproducible build.** The recipe is [`tools/mldsa-wasm`](../../tools/mldsa-wasm/README.md):
+the crate of path 1 (`mldsa_verify`, `aws-lc-rs` 1.18.1, `aws-lc-sys` 0.45.0,
+the same `Cargo.lock` versions as `tools/mldsa-vectors`), a `Dockerfile` and
+`build.sh`. Pins:
+
+- base image `emscripten/emsdk:6.0.12@sha256:77638e6c215a65f25a704c0c831d5c2463a8c0468a58c6cb82489dbe621dfa05`
+  (Emscripten 6.0.12);
+- rustup 1.28.2 (SHA-256 `20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c`,
+  checked in the `Dockerfile`), Rust 1.97.1, target `wasm32-unknown-emscripten`;
+- crates from `Cargo.lock`, `cargo build --locked`.
+
+Method. Each build runs in a fresh container (empty cargo home, empty target
+directory, empty Emscripten cache; sources mounted read-only). The build sets
+`SOURCE_DATE_EPOCH`, `TZ=UTC`, `LC_ALL=C`, `-C codegen-units=1`, and maps the
+source, cargo, target and toolchain paths to fixed names with
+`--remap-path-prefix` (rustc) and `-ffile-prefix-map` (the C compiler). These
+were all in the recipe from the first build; the build without them was not
+measured, so this document does not say which of them are needed.
+
+Two builds were made on 2026-10-13, about two and a half minutes apart, on the
+same host and the same Docker engine, and differed in:
+
+| | Build A | Build B |
+|---|---|---|
+| Sources in the container at | `/src/mldsa-wasm` | `/other/place/checkout/x` |
+| Build user | the invoking user | uid 12345, gid 23456 |
+| Output directory on the host | a different one | a different one |
+| Start time (UTC) | 22:18 | 22:20 |
+
+Result: **identical**, on the first attempt, with no further fix.
+
+| File | Bytes | SHA-256 (build A and build B) |
+|---|---|---|
+| `mldsa_wasm.wasm` | 777,724 | `4a3c6a43c63a406894a463db0af2b60042d3476035712640ca068a2b238987da` |
+| `mldsa_wasm.js` | 56,028 | `312b3551851de31c7fc5402a3af86a7738ba967fbf5cfdda087289f023c2e5e1` |
+
+`cmp` reported no difference for either file. The `.wasm` file contains no
+build path other than the fixed names (`/build/...`, `/aws-lc/...`, and the
+`/rustc/<commit>/` paths of the standard library); the loader names none of the
+builder's. The sizes differ slightly from the 2026-10-13 spike (778,381 and
+56,046 bytes) because the recipe adds `codegen-units=1`, path mapping and
+`panic = "abort"`.
+
+What this does not show. Both builds ran on one host with one Docker engine and
+one CPU architecture (linux/amd64); a different host, a different engine or an
+arm64 machine was not tried. The time differed by minutes, not by days, and
+the clock was not set to a different date; the build also fixes
+`SOURCE_DATE_EPOCH`, so the date is not expected to matter. The base image and
+the toolchain download are pinned by digest and version, but the build still
+fetches the crates and the toolchain from the network.
+
+Verdicts. The module from this recipe was run under Node 24.15.0 on the same 50
+signature inputs as the spike (rebuilt from `tools/mldsa-vectors` with the same
+small, uncommitted patch that writes them out; 118 cases, 47 checked): 50 of 50
+signature verdicts and 47 of 47 checked cases agree with the reference, for build
+A and for build B. Chrome and Firefox were not re-run on this build (its bytes
+differ from the spike's); a browser run on the final artefact remains to be done
+with the page.
+
+Reproducing. `bash tools/mldsa-wasm/build.sh OUT_DIR` twice, the second time with
+`RUN_USER=12345:23456 SRC_MOUNT=/other/place/checkout`, then compare the files
+with `cmp` or `sha256sum` (full commands in the README of the recipe). Needs
+docker and network access.
+
 ## Not confirmed
 
 - Any external audit report for any candidate's ML-DSA code.
@@ -314,8 +387,10 @@ false, ["verify"])` and `crypto.subtle.verify({name: "ML-DSA-65"}, key, sig, msg
 - `wasm32-unknown-unknown` support as a stated claim by any project.
 - The ML-DSA-65 API of `pqcrypto-*` and `oqs` at the docs.rs level; both are
   excluded for other reasons.
-- Added 2026-10-13: whether two builds of the Emscripten module of `aws-lc-rs`
-  give the same bytes; any Safari result; which library Chrome uses for ML-DSA
+- Added 2026-10-13: any Safari result; which library Chrome uses for ML-DSA
   in WebCrypto; the first Chrome version that ships it; whether Firefox has a
   preference that enables ML-DSA in WebCrypto (none was found in the 153 ESR
   build).
+- Updated 2026-10-14: two builds of the Emscripten module of `aws-lc-rs` gave
+  the same bytes (above). Not confirmed: the same on another host, another
+  container engine or arm64; a Chrome or Firefox run on the reproducible build.
