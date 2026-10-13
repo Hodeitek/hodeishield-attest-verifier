@@ -575,6 +575,8 @@ that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
 the reason it is a short, single, readable script.
 
+Planned: an in-browser verifier page, published from this repository only from signed release tags, so that you can check its bytes against the release. See [the decision record](docs/security/browser-verifier.md).
+
 ## Tests and CI
 
 - `shellcheck` runs on the shell scripts.
