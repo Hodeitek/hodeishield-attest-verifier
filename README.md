@@ -75,9 +75,8 @@ own starts at [hodeishield.com](https://hodeishield.com).
 |---|---|
 | `bash` ≥ 4 | This is bash, not POSIX `sh`. |
 | **`openssl` ≥ 3.5** | ML-DSA (FIPS 204) support landed in 3.5. Check with `openssl list -signature-algorithms \| grep -i ml-dsa-65`. If that prints nothing, upgrade — a failure there is a limit of your tooling, not evidence against the document. LibreSSL (the `openssl` on macOS, or Homebrew's `libressl`) has no ML-DSA whatever its version number; the verifier checks this itself, says so and exits 2. If you cannot upgrade, use the [container route](#run-it-without-installing-anything). |
-| **`python3`** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
+| **`python3` ≥ 3.7** | Required in practice. The endpoint serves a *detached* JWS, so the signed bytes must be re-derived from the JSON you can read. Standard library only. |
 | `curl` | Only to fetch the two files above. Verification itself is offline. |
-| `jq` | Only for `--status-list` (revocation checking). |
 | `cosign` ≥ 3.1.3 | Only for `--anchor-file` ([Anchor the key](#anchor-the-key)). Optional: nothing else needs it. |
 
 `xxd` is used when present and is not required.
@@ -99,13 +98,13 @@ curl -fsS https://app.hodeishield.com/api/public/attest/keys              -o jwk
 <!-- container-route -->
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
-  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
-  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --attestation att.json --jwks jwks.json \
   --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
 ```
 
-The container mounts your files read-only, installs OpenSSL, `python3` and `jq`
+The container mounts your files read-only, installs OpenSSL and `python3`
 inside itself, and runs the same script. If that install fails (for example
 because the container has no network), the command exits 2, "could not check",
 so the exit codes are exactly the native ones: the table in
@@ -123,8 +122,8 @@ curl -fsS https://app.hodeishield.com/api/public/attest/status-keys -o status-jw
 <!-- container-route-status -->
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
-  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
-  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 jq >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
+  debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f \
+  bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --status-list --status status.json --status-keys status-jwks.json \
   --attestation att.json --jwks jwks.json \
   --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
@@ -138,7 +137,7 @@ docker run --rm -v "$PWD":/work:ro -w /work \
 
 The image is the upstream Debian 13 image, pinned by digest: the same one CI
 tests on, so a rebuilt tag cannot change what you run. The digest pins the
-base image; `openssl`, `python3` and `jq` come from Debian 13's archive when the
+base image; `openssl` and `python3` come from Debian 13's archive when the
 command runs, so they carry Debian's current security updates.
 
 ### A signed image
@@ -146,7 +145,7 @@ command runs, so they carry Debian's current security updates.
 Releases after v1.4.0 also publish a ready-made image,
 `ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
 (`:vX.Y.Z`). There is no `latest` tag, and v1.4.0 and earlier
-releases have no image. It has `openssl`, `python3` and `jq` built in, runs as a non-root user,
+releases have no image. It has `openssl` and `python3` built in, runs as a non-root user,
 and its entrypoint is the verifier, so it needs no network to run. Take its
 digest from the release page, and pin that digest, not the tag. Check the
 signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
@@ -182,10 +181,17 @@ The image label `com.hodeitek.verifier.script-sha256` records the same value
 command are the evidence. The release workflow also checks the script against
 the release's signed `SHA256SUMS` before it builds the image, and again inside
 the build. The image carries a signed SBOM; fetch and check it with
-`gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier`.
+`gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier --predicate-type https://spdx.dev/Document/v2.3`.
+The SBOM is the only attestation; without `--predicate-type`, `gh` looks for
+SLSA provenance and reports HTTP 404.
 The signature proves which workflow built the image and when, not that the
 image can be rebuilt bit for bit: the Debian packages are taken from the
 archive on the day of the build.
+
+The [live check](.github/workflows/live.yml) does what this section says on
+every push and daily: it takes the digest of the latest release's image, runs
+`cosign verify` and `gh attestation verify` on it, and runs the production
+example above in it.
 
 ## Exit codes — the distinction matters
 
@@ -251,7 +257,13 @@ never replaces it. In the same way the list is always applied to the document's
 own slug at its own `generatedAt`; `--check-subject` and `--check-generated-at`
 add a subject to look up and never replace it. `--status`, `--status-keys`, `--check-kid`, `--check-subject`,
 `--check-generated-at` and `--min-seq` need `--status-list`: without it they are
-a usage error, exit 2. What the list can and cannot tell you is in
+a usage error, exit 2. The script reads at most 2,000,000 bytes of the status list,
+1,000,000 of the status key set and 4,096 of a decoded protected header (a real
+one is about 100 bytes, the live list under 6,000 and the key set under 3,000);
+a larger status list, key set or status list header is not read: UNKNOWN
+(exit 3). A larger attestation header is a failed check (exit 1,
+`header_too_large`). The limits are fixed in the script. What the list can
+and cannot tell you is in
 [§7.1 of the verification document](docs/security/attest-verification.md#71-checking-key-or-subject-revocation-yourself).
 
 ## What the output shows
@@ -456,7 +468,8 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   script's own version (`--version`), so an old, genuinely signed statement
   cannot stand in for the current one. A tag that cannot be read is exit 2 too.
   The check has a limit: an OLD verifier can still be served a statement as old
-  as itself. That is why only the latest release is supported, and why
+  as itself. That is why security fixes ship in a new release and you should run
+  the latest release of your major version, and why
   `--status-list`, which revokes a compromised key unconditionally, remains the
   path for a key compromise.
 - Exit 1, with a `FAIL` line, when the statement verifies and does not list the
@@ -504,9 +517,11 @@ The verifier checks two document formats, and no other version of either:
 
 - A change to either format that older verifiers cannot read is announced at
   least 90 days before it takes effect.
-- Only the latest release is supported (see [SECURITY.md](SECURITY.md)). Update
-  to it before relying on a result, and see the [changelog](CHANGELOG.md) for
-  what each release changed.
+- Each major version gets security fixes for five years from its first release
+  (1.x until 2031-09-29), in a new release of that major version; see
+  [Supported versions](SECURITY.md#supported-versions). Update to the latest
+  release of your major version before relying on a result, and see the
+  [changelog](CHANGELOG.md) for what each release changed.
 - A document with a format version the verifier does not know is never read as
   an older format, and is never verified. An attestation whose `docVersion` or
   posture version is not the one above stops the run with exit 2 ("could not
@@ -515,10 +530,11 @@ The verifier checks two document formats, and no other version of either:
 
 ## Verifying a release
 
-Download these six files from the GitHub release you are using:
-`verify-attestation.sh`, `keys-statement.json`, `SHA256SUMS`,
-`SHA256SUMS.sigstore.json`, `verify-attestation.sh.sigstore.json` and
-`keys-statement.json.sigstore.json`. Then:
+Download these eight files from the GitHub release you are using:
+`verify-attestation.sh`, `keys-statement.json`, `verify-attestation.sh.spdx.json`,
+`SHA256SUMS`, `SHA256SUMS.sigstore.json`, `verify-attestation.sh.sigstore.json`,
+`keys-statement.json.sigstore.json` and `verify-attestation.sh.spdx.json.sigstore.json`.
+Then:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -537,11 +553,23 @@ cosign verify-blob --bundle keys-statement.json.sigstore.json \
   --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   keys-statement.json
+
+cosign verify-blob --bundle verify-attestation.sh.spdx.json.sigstore.json \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  verify-attestation.sh.spdx.json
 ```
 
 Replace `<TAG>` with the release tag. `keys-statement.json` is the signed list of
 the issuer's signing keys; see the
-[key anchor decision](docs/security/key-anchor.md). What changed in each release is in
+[key anchor decision](docs/security/key-anchor.md).
+`verify-attestation.sh.spdx.json` is the SBOM of the script, in SPDX 2.3 JSON:
+the script's name, version, sha256, licence and supplier, and what it needs to
+run (bash 4, OpenSSL 3.5, python3 3.7, and optionally curl and cosign, with the minimum
+versions from [What you need installed](#what-you-need-installed)). It is listed
+in `SHA256SUMS`, so the signature above covers it, and it is generated by
+[`.github/scripts/generate-sbom.sh`](.github/scripts/generate-sbom.sh) with its
+date taken from the tagged commit, so the same tag gives the same file. What changed in each release is in
 [CHANGELOG.md](CHANGELOG.md). This proves that the file was built from
 that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
@@ -552,8 +580,11 @@ the reason it is a short, single, readable script.
 - `shellcheck` runs on the shell scripts.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
-  printed. It needs bash, OpenSSL ≥ 3.5, `python3` and `jq`, and no network.
+  printed. It needs bash, OpenSSL ≥ 3.5 and `python3` ≥ 3.7, and no network.
   The anchor cases use a test double in place of cosign.
+- `bash tests/sbom.sh` generates the release SBOM for the current script and
+  checks it: valid SPDX JSON, the script's sha256 and version, the licence, the
+  requirements with the minimums above, and identical bytes on a second run.
 - `bash tests/vectors.sh` runs the published, versioned test vectors in
   `tests/vectors/v1/`: fixed documents, TEST-ONLY keys, a fixed `--now` and the
   expected exit code and reason for each, so you can check another verifier
@@ -569,6 +600,10 @@ the reason it is a short, single, readable script.
   signature check cannot pass the suite. `tests/run.sh` runs it too;
   `VERIFIER_SKIP_MUTANTS=1 bash tests/run.sh` skips it locally. CI always runs
   it and fails if that variable is set there.
+- A separate workflow runs `tools/mldsa-vectors`, a Rust harness that checks the
+  ML-DSA-65 primitive of `aws-lc-rs` against the signature verdicts in the test
+  vectors, when it, the vectors or the script change. It is a test of a candidate library for
+  a future port, not part of the verifier; see its README.
 - Two jobs check that the verifier exits 2 ("could not check"), never 1, when
   its `openssl` cannot do ML-DSA: one with an OpenSSL older than 3.5, one with
   real LibreSSL in a digest-pinned Alpine image.

@@ -25,7 +25,7 @@ jobs:
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
-    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+    container: debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh
 
   # Semgrep's bash parser is stricter than bash: one construct it does not read
   # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
@@ -60,30 +60,39 @@ jobs:
       - name: semgrep --lang bash parses verify-attestation.sh
         run: bash .github/scripts/semgrep-parses.sh scripts/attest/verify-attestation.sh
 
-  tests:
-    name: offline tests (valid + rejection)
+  # Every tracked shell script, workflow and Dockerfile carries the licence
+  # header. It reads `git ls-files`, so it runs on the runner, not in the
+  # Debian test container, which has no git.
+  spdx:
+    name: licence headers
     runs-on: ubuntu-latest
-    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install openssl, python3, jq
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates gettext-base locales
-      # A Latin-1 locale, for the test that the verdict does not depend on the
-      # locale (tests/run.sh requires it here: VERIFIER_REQUIRE_LATIN1 below).
-      - name: Generate the en_US.ISO-8859-1 locale
-        run: |
-          # localedef exits 1 on a mere warning; whether the locale exists is what counts.
-          localedef -c -i en_US -f ISO-8859-1 en_US.ISO-8859-1 || true
-          test "$(LC_ALL=en_US.ISO-8859-1 locale charmap)" = ISO-8859-1
+      - name: tests/spdx-headers.sh
+        run: bash tests/spdx-headers.sh
+
+  tests:
+    name: offline tests (valid + rejection)
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The packages and the Latin-1 locale the suite needs, from the one list
+      # release.yml's test job uses too (tests/test-deps-parity.sh checks it).
+      # No jq: a step right before tests/run.sh fails the job if jq is on the PATH.
+      - name: Install the test packages and the Latin-1 locale
+        run: bash .github/scripts/install-test-deps.sh
       - name: Toolchain
         run: |
           openssl version
           openssl list -signature-algorithms | grep -i ml-dsa-65
           python3 --version
-          jq --version
       # cosign, the version and the installer release.yml pins. It is needed by
       # the vectors with real Sigstore bundles (tests/vectors/v1/anchor/), which
       # tests/vectors.sh skips where cosign is missing; the stub-based anchor
@@ -102,6 +111,19 @@ jobs:
       # it covers every file release.yml lists in SHA256SUMS, offline.
       - name: image.yml covers every file in SHA256SUMS
         run: bash tests/image-assets.sh
+      # The SPDX SBOM that release.yml attaches to each release.
+      - name: SBOM generator
+        run: bash tests/sbom.sh
+      # The skip-or-fail logic of the live image check, with stubbed curl,
+      # docker, cosign and gh; the check itself needs a published image.
+      - name: tests/live-image.sh skips or fails correctly
+        run: bash tests/live-image-modes.sh
+      # release.yml's test job installs what this one does (#84).
+      - name: release.yml's test job installs what this one does
+        run: bash tests/test-deps-parity.sh
+      - name: jq is not installed
+        run: |
+          if command -v jq >/dev/null 2>&1; then echo "jq is on the PATH: $(command -v jq)" >&2; exit 1; fi
       - name: tests/run.sh
         env:
           VERIFIER_REQUIRE_LATIN1: "1"

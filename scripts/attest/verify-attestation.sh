@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
 # shellcheck disable=SC2317,SC2329 # cleanup() is invoked only indirectly via
 # `trap cleanup EXIT`, not by a direct call shellcheck can see, so it
 # misreads the function body as unreachable. File-wide, one rule (SC2329 is its name from ShellCheck 0.11), documented.
@@ -9,9 +11,10 @@
 # sh), OpenSSL >= 3.5, and python3. python3 is NOT optional on the path the
 # endpoint actually serves: `GET /api/public/attest/<slug>` returns a DETACHED
 # JWS, so the canonical bytes must be re-derived from the claims JSON, and that
-# needs a JSON parser. `--status-list` additionally needs jq, and curl if you
-# hand it URLs rather than files. Everything else is coreutils. No npm, no Node,
-# no HodeiShield code, no network access at verification time. If you can read this script you can audit
+# needs a JSON parser. `--status-list` additionally needs curl if you hand it
+# URLs rather than files, and nothing beyond python3 to read the status list.
+# Everything else is coreutils. No npm, no Node, no HodeiShield code, no network
+# access at verification time. If you can read this script you can audit
 # the whole check; docs/security/attest-verification.md §4 spells out the same
 # commands by hand so you can satisfy yourself the script does nothing else.
 #
@@ -55,8 +58,8 @@
 #   --attestation      the whole document, exactly as `GET /api/public/attest/
 #                      <slug>` serves it: {"attestation":{"claims",...,
 #                      "signature",...}}. A bare {"claims","signature"} is
-#                      accepted too. This is the no-jq path — the signature and
-#                      the claims are pulled out of the one file for you.
+#                      accepted too. The signature and the claims are pulled
+#                      out of the one file for you.
 #   --jws              the compact JWS, attached or detached. Only needed when
 #                      the signature travels separately from the claims;
 #                      --attestation carries both.
@@ -205,7 +208,7 @@ set -euo pipefail
 # The version this script is released as. --anchor-file refuses a key statement
 # from an older release than this (anti-rollback); tests/version-consistency.sh
 # keeps it in step with CHANGELOG.md and, on a release, with the tag.
-VERIFIER_VERSION="1.4.2"
+VERIFIER_VERSION="1.5.0"
 
 JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
@@ -272,6 +275,44 @@ MAX_STATUS_LIST_VALIDITY_SECONDS=86400
 
 # House NTP allowance (status-list.ts DEFAULT_CLOCK_SKEW_MS / 1000).
 STATUS_CLOCK_SKEW_SECONDS=300
+
+# Size caps, in bytes, on what is parsed from the other side of a wire. They bound
+# what a document can cost, so that no document, however it is built, can keep a
+# parser busy: an input over its cap is UNKNOWN (or, for the attestation's header,
+# a failed check) and is never parsed. They are constants on purpose: no option
+# and no environment variable changes them, so whoever supplies a document cannot
+# raise the bound on it.
+#
+# Measured on 2026-10-11: the live status list is 5,657 bytes (no revocation in
+# it), the live status key set 2,697 bytes (one key), the largest document among
+# the published vectors 5,539 bytes, and a protected header 112 bytes
+# ({"alg","kid","typ"}). A revoked subject takes 169 bytes in a list and a revoked
+# key 98.
+#
+# The status list is the one that costs: the cost is the time and the memory of
+# reading it, and the unsigned members of a signed list (statusList may carry any
+# member the signature does not cover) are the worst padding. A fully signed run on
+# a list padded to N bytes took, on the development machine (one run, wall clock,
+# peak memory, the floor of a small list being 1.5 s):
+#     N         flat padding   nested 250 deep    long string
+#     0.5 MB       3.4 s          3.7 s / 232 MB   1.8 s
+#     1   MB       5.5 s          5.7 s / 457 MB   2.3 s
+#     2   MB       9.4 s         10.3 s / 906 MB   3.1 s
+#     5   MB      21.1 s         23.7 s / 2.2 GB   4.1 s
+# and 20,000 genuine revoked subjects (3.4 MB) took 4.7 s, 10,000 (1.7 MB) 3.2 s,
+# 20,000 revoked keys (2 MB) 3.8 s, all under 100 MB. 2,000,000 bytes keeps the
+# worst padding at about 10 seconds and 0.9 GB, and still holds some 11,800 revoked
+# subjects or 20,400 revoked keys, 350 times the live list.
+#   STATUS_DOC_MAX_BYTES   --status
+#   STATUS_KEYS_MAX_BYTES  --status-keys: about 370 times the live key set, room for
+#                          hundreds of keys of 2.7 KB each; it is read by the C JSON
+#                          reader only, so its worst case is far below the list's
+#   HEADER_MAX_BYTES       a decoded protected header (the attestation's and the
+#                          status list's): about 36 times a real one, and the
+#                          bound the envelope puts on any one field
+STATUS_DOC_MAX_BYTES=2000000
+STATUS_KEYS_MAX_BYTES=1000000
+HEADER_MAX_BYTES=4096
 
 # The text --help prints. The header comment above is for whoever reads or audits
 # this script; this is for whoever runs it. Every option the parser below accepts
@@ -812,8 +853,10 @@ JWS_NAME="$JWS_FILE"; ATTESTATION_NAME="$ATTESTATION_FILE"; CLAIMS_NAME="$CLAIMS
 POSTURE_NAME="$POSTURE_FILE"; JWKS_NAME="$JWKS_FILE"
 STATUS_NAME="$STATUS_SRC"; STATUS_KEYS_NAME="$STATUS_KEYS_SRC"
 mkdir "$WORKDIR/in"
-read_input() {   # SRC DEST — print the path to read from now on
-  if [ -r "$1" ] && [ ! -d "$1" ] && { cat < "$1" > "$2"; } 2>/dev/null; then
+read_input() {   # SRC DEST [MAX] — print the path to read from now on; with MAX, no more than MAX+1 bytes are read (MAX+1 reads as "over the cap")
+  local lim=''
+  if [ -n "${3:-}" ]; then lim=$(( $3 + 1 )); fi
+  if [ -r "$1" ] && [ ! -d "$1" ] && { if [ -n "$lim" ]; then head -c "$lim" < "$1" > "$2"; else cat < "$1" > "$2"; fi; } 2>/dev/null; then
     printf '%s' "$2"
   else
     rm -f -- "$2"; printf '%s' "$2.unreadable"
@@ -826,11 +869,11 @@ read_input() {   # SRC DEST — print the path to read from now on
 [ -z "$JWKS_FILE" ]        || JWKS_FILE="$(read_input "$JWKS_FILE" "$WORKDIR/in/jwks.json")"
 case "$STATUS_SRC" in
   ''|http://*|https://*) ;;
-  *) STATUS_SRC="$(read_input "$STATUS_SRC" "$WORKDIR/in/status.json")" ;;
+  *) STATUS_SRC="$(read_input "$STATUS_SRC" "$WORKDIR/in/status.json" "$STATUS_DOC_MAX_BYTES")" ;;
 esac
 case "$STATUS_KEYS_SRC" in
   ''|http://*|https://*) ;;
-  *) STATUS_KEYS_SRC="$(read_input "$STATUS_KEYS_SRC" "$WORKDIR/in/status-keys.json")" ;;
+  *) STATUS_KEYS_SRC="$(read_input "$STATUS_KEYS_SRC" "$WORKDIR/in/status-keys.json" "$STATUS_KEYS_MAX_BYTES")" ;;
 esac
 
 # Is a posture attestation being checked at all? `--attestation` carries its own
@@ -931,9 +974,7 @@ fi
 
 if [ "$STATUS_LIST_MODE" -eq 1 ]; then
   command -v python3 >/dev/null 2>&1 || die python3_missing "python3 is needed for the status-list canonical encoder."
-  command -v jq >/dev/null 2>&1 || die jq_missing "jq is needed for --status-list — the document nests arrays \
-(keys[], subjects[]) that plain sed cannot safely extract."
-  ok tools_present "python3 and jq present"
+  ok tools_present "python3 present"
   case "$STATUS_SRC$STATUS_KEYS_SRC" in
     *http://*|*https://*) command -v curl >/dev/null 2>&1 || die curl_missing "curl is needed to fetch --status/--status-keys URLs." ;;
   esac
@@ -1053,19 +1094,26 @@ is_loopback_url() {
   return 0
 }
 
-# fetch_url URL OUT [loopback] — curl URL into OUT; what curl says about a failure
+# fetch_url URL OUT [loopback [MAX]] — curl URL into OUT, MAX+1 bytes at most (curl
+# stops, exit 63, at more; a server need not announce the length of what it sends,
+# so --max-filesize alone is not the check: the caller measures what arrived).
+# What curl says about a failure
 # goes to stderr through esc (it quotes the URL, and the host or the part of the
 # URL it could not read, as given on the command line). --globoff: a {a,b} or
 # [1-9] in the URL is part of the URL, not several fetches into one file. For a
 # loopback URL, curl ignores ~/.curlrc (-q, which must be its first argument) and
 # every proxy setting (--noproxy '*'): through a proxy, "loopback" would leave
 # this machine in cleartext. Other URLs keep the user's curl settings, since https
-# may need a proxy.
+# may need a proxy, except that a ~/.curlrc cannot switch on `compressed` (curl
+# would then write a body of any size from a few kilobytes of gzip, past
+# --max-filesize) or `location` (redirects are not followed, see fetch_or_read):
+# --no-compressed and --no-location come after it, on every fetch.
 fetch_url() {
-  local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=()
+  local errf="$WORKDIR/curl.err" rc=0 curl_q=() curl_np=() lim=0
   if [ "${3:-}" = loopback ]; then curl_q=(-q); curl_np=(--noproxy '*'); fi
-  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize 5000000 -o "$2" "$1" 2> "$errf" || rc=$?
-  if [ "$rc" -ne 0 ] && [ -s "$errf" ]; then
+  lim=$(( ${4:-5000000} + 1 ))
+  curl "${curl_q[@]+"${curl_q[@]}"}" -fsS --globoff --no-compressed --no-location "${curl_np[@]+"${curl_np[@]}"}" --max-time 15 --max-filesize "$lim" -o "$2" "$1" 2> "$errf" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 63 ] && [ -s "$errf" ]; then
     printf '%s\n' "$(esc "$(cat "$errf")")" >&2
   fi
   return "$rc"
@@ -1103,20 +1151,32 @@ fetch_url() {
 # job, and only if you pass it), and says nothing about whether the key set served
 # is the right one. Redirects are deliberately NOT followed (no `-L`), so a
 # redirect to a file:// or an internal address cannot be chased; a redirecting
-# endpoint fails closed instead. There is also no response-size bound beyond
-# --max-time 15, so a hostile endpoint can stream into the (0700, mktemp -d)
-# work directory for up to 15 seconds.
+# endpoint fails closed instead. A download is bounded in time (--max-time 15) and
+# in size (MAX+1 bytes, see fetch_url); a body over MAX is recorded in
+# FETCH_OVER and the file is emptied, and section 8 reports it as too large.
+FETCH_OVER=''
+# fetch_checked SRC OUT ROLE MAX SHOWN [loopback] — fetch_url, where too much is
+# not a failed fetch.
+fetch_checked() {
+  local rc=0
+  fetch_url "$1" "$2" "${6:-}" "$4" || rc=$?
+  if [ "$rc" -eq 63 ]; then
+    FETCH_OVER+="|${3}|"; : > "$2"
+  elif [ "$rc" -ne 0 ]; then
+    die fetch_failed "failed to fetch ${5}"
+  fi
+}
 fetch_or_read() {
-  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}" shown=''
+  local src="$1" out="$2" role="${3:-document}" name="${4:-$1}" max="${5:-5000000}" shown=''
   shown="$(esc "$src")"
   case "$src" in
     https://*)
-      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
+      fetch_checked "$src" "$out" "$role" "$max" "$shown"
       ;;
     http://*)
       if is_loopback_url "$src"; then
         warn fetch_cleartext_loopback "fetching the ${role} over cleartext HTTP from loopback: ${shown}"
-        fetch_url "$src" "$out" loopback || die fetch_failed "failed to fetch ${shown}"
+        fetch_checked "$src" "$out" "$role" "$max" "$shown" loopback
         return 0
       fi
       if [ "$role" = 'status key set' ]; then
@@ -1136,7 +1196,7 @@ fetch_or_read() {
       warn fetch_cleartext_http "fetching the ${role} over cleartext HTTP: ${shown}"
       warn_more "the list is signed, so tampering shows up as a failed signature (=> unknown),"
       warn_more "but use https:// — a downgrade you did not notice is not a threat model."
-      fetch_url "$src" "$out" || die fetch_failed "failed to fetch ${shown}"
+      fetch_checked "$src" "$out" "$role" "$max" "$shown"
       ;;
     *)
       [ -r "$src" ] || die file_unreadable "cannot read $(esc "$name")"
@@ -1145,20 +1205,83 @@ fetch_or_read() {
   esac
 }
 
-# list_field VAR FILE FILTER — set VAR to what the jq FILTER selects in FILE, as
-# `jq -r` prints it but EXACTLY: read with a sentinel after it, removed, because
+# jsonq MODE FILE [ARGS...] — read a JSON document with JSONQ_PY (below): what
+# `jq` did before this script needed nothing but python3. The modes are listed
+# there.
+jsonq() { python3 -I -X utf8 -c "$JSONQ_PY" "$@"; }
+
+# The scalar fields of the status list are read once, by one jsonq process, after
+# list.json is written (load_list_fields): LF_V_<name> holds the value and LF_R_<name>
+# the exit status of the read (0, 2 for a read that failed, 3 for a NUL byte),
+# exactly what separate reads of the same fields gave. A name that was not loaded
+# reads as failed. This keeps the number of times a large list is parsed small.
+LF_NAMES=(docVersion kid iss issuedAt nextUpdate seq raw_iss raw_seq raw_truncated len_keys len_subjects selfrev)
+load_list_fields() {
+  local name='' rc='' val='' n=''
+  for n in "${LF_NAMES[@]}"; do printf -v "LF_R_$n" '%s' 2; printf -v "LF_V_$n" '%s' ''; done
+  while IFS= read -r -d '' name && IFS= read -r -d '' rc && IFS= read -r -d '' val; do
+    printf -v "LF_R_$name" '%s' "$rc"; printf -v "LF_V_$name" '%s' "$val"
+  done < <(jsonq list "$WORKDIR/list.json" 2>/dev/null)
+  return 0
+}
+# lf_get VAR NAME — VAR is the loaded value; the status is that of the read.
+lf_get() {
+  local lf_v_="LF_V_$2" lf_r_="LF_R_$2"   # names no caller uses for VAR
+  printf -v "$1" '%s' "${!lf_v_-}"
+  return "${!lf_r_:-2}"
+}
+
+# lf_val NAME — print the loaded value (nothing when the read failed).
+lf_val() { local lf_out_=''; lf_get lf_out_ "$1" || true; printf '%s' "$lf_out_"; }
+
+# The kids and subjects to look up are read in one pass too, after the fields
+# (load_lookups KIND VALUE ...): LK_RC[i] and LK_VAL[i] are the status and the
+# result of the i-th query. They go to the reader on standard input, NUL-separated
+# (a kid from a header can be longer than the system allows one argument to be, and
+# an argument list that cannot be passed would make every query fail). A query that was not answered reads as failed, which
+# every user of it turns into UNKNOWN.
+LK_RC=(); LK_VAL=()
+load_lookups() {
+  local rc='' val='' n=0
+  LK_RC=(); LK_VAL=()
+  if [ $# -eq 0 ]; then return 0; fi
+  while IFS= read -r -d '' rc && IFS= read -r -d '' val; do
+    LK_RC[n]="$rc"; LK_VAL[n]="$val"; n=$(( n + 1 ))
+  done < <(printf '%s\0' "$@" | jsonq lookup "$WORKDIR/list.json" 2>/dev/null)
+  return 0
+}
+
+# list_field VAR FILE FILTER — set VAR to what FILTER (one of the few jsonq
+# `field` filters, written as the jq filter it replaces) selects in FILE, as
+# `jq -r` printed it but EXACTLY: read with a sentinel after it, removed, because
 # $(...) strips trailing newlines (see claims_field). A string holding a NUL byte
 # is a failed check that leaves the status UNKNOWN (status_unknown_nul_byte), and
-# VAR shows each NUL as \x00.
+# VAR shows each NUL as \x00. The fields of list.json come from load_list_fields.
 list_field() {
-  local out='' rc=''
-  out="$(jq -j "($3) | if type == \"string\" then (explode | map(if . == 0 then (92, 120, 48, 48) else . end) | implode) else . end" "$2"; printf 'x%s' "$?")"
-  rc="${out##*x}"
-  printf -v "$1" '%s' "${out%x*}"
-  [ "$rc" -eq 0 ] || { printf -v "$1" '%s' ''; stat_bad status_unknown_malformed_document "malformed_document — $3 cannot be read"; return 0; }
-  if jq -e "($3) | strings | explode | any(. == 0)" "$2" >/dev/null 2>&1; then
-    stat_bad status_unknown_nul_byte "nul_byte — $3 holds a NUL byte (shown as \\x00): no comparison can read it exactly"
+  local out='' rc='' name=''
+  if [ "$2" = "$WORKDIR/list.json" ]; then
+    case "$3" in
+      '.docVersion // empty') name=docVersion ;;
+      '.kid') name=kid ;;
+      '.iss') name=iss ;;
+      '.issuedAt') name=issuedAt ;;
+      '.nextUpdate') name=nextUpdate ;;
+      '.seq') name=seq ;;
+    esac
   fi
+  if [ -n "$name" ]; then
+    rc=0; lf_get out "$name" || rc=$?
+  else
+    out="$(jsonq field "$2" "$3"; printf 'x%s' "$?")"
+    rc="${out##*x}"
+    out="${out%x*}"
+  fi
+  printf -v "$1" '%s' "$out"
+  case "$rc" in
+    0) ;;
+    3) stat_bad status_unknown_nul_byte "nul_byte — $3 holds a NUL byte (shown as \\x00): no comparison can read it exactly" ;;
+    *) printf -v "$1" '%s' ''; stat_bad status_unknown_malformed_document "malformed_document — $3 cannot be read"; return 0 ;;
+  esac
 }
 
 # PYTHON AND THE LOCALE. Every python3 in this script runs as
@@ -1290,8 +1413,8 @@ json.dump(c, sys.stdout, indent=2)
 '
 
 # Duplicate object members, anywhere in a JSON file: one path per line, nothing
-# when there are none. Every python json.load in this script keeps the LAST of
-# a duplicated member and so does jq, which is why the verdict was never
+# when there are none. Every JSON reader in this script (python json.load and
+# jsonq) keeps the LAST of a duplicated member, which is why the verdict was never
 # decided by a duplicate. But a reader or another program that keeps the FIRST
 # sees a value nobody signed, printed under this script's own PASS lines. RFC
 # 8259 leaves duplicates undefined, so a signed document must not carry any.
@@ -1327,6 +1450,268 @@ def vis(t):
     return "".join(c if c.isprintable() else ("\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)) for c in str(t))
 # Member names come from the document; they are shown, so they are escaped here.
 sys.stdout.buffer.write("\n".join(sorted(set(vis(x) for x in out))).encode("utf-8", "backslashreplace"))
+'
+
+# The JSON reader of --status-list (jsonq, above): the few things the status
+# list and its header needed `jq` for, done with python3, which this script
+# needs anyway. For the documents this script reads it gives what jq (1.7)
+# gave, because the checks compare it and some of it is shown. It was compared
+# with jq on generated and mutated documents; two things are known to differ:
+# `length` of a number (an error here; the status list is checked to hold lists
+# before it is asked), and the error text jq printed for a document it refused
+# (nothing here). Otherwise:
+#   - it parses like jq: one or more values in a row, a UTF-8 BOM, invalid UTF-8
+#     replaced, number tokens as jq reads them (01, .5, nan, Infinity), raw
+#     control characters in a string refused, a lone high surrogate escape
+#     refused and a lone low one read as U+FFFD, a duplicated member keeping its
+#     last value. The documents it is used on have already passed the strict
+#     reader (DUPKEY_PY), except the protected header at the one place that asks
+#     `object`, which comes first and must judge it as jq did;
+#   - a number is printed as written, in the form jq gives a literal (1.0 stays
+#     1.0, 1e2 is 1E+2, 01 is 1, nan is null), through the same decimal limits
+#     (an exponent above 999999999 is the largest double, 1.7976931348623157e+308;
+#     below -1147483646 it rounds to 0E-1147483646), so no number can make it fail;
+#   - invalid UTF-8 is replaced as jq does, one U+FFFD for each bad sequence;
+#   - nesting is limited as jq 1.7 limits it: an array costs 1, an object 1, and an
+#     object member whose value is an array or an object 1 more, and a document
+#     that costs more than 256 at any point is refused (exit 2), so 256 arrays, or
+#     128 objects, deep. Parsing and printing are linear in the size of the file;
+#   - a string is printed escaped as jq does (DEL as \u007f, the rest raw), a
+#     document pretty (two spaces) or compact (-c).
+# argv[1] = mode, argv[2] = file:
+#   object                 exit 0 when the last value of the file is an object
+#                          (jq -e 'type=="object"')
+#   crit                   exit 0 for an object with a member crit (has("crit"))
+#   field FILTER           what `jq -j FILTER` prints, NUL bytes shown as \x00 (exit 3
+#                          when a string held one); FILTER is exactly one of
+#                          '.docVersion // empty', 'keys_unsorted | sort | join(",")'
+#                          or .name; exit 2 when the read failed
+#   raw NAME               `jq -r .NAME`
+#   split OUT              for a status document: exit 1 unless it is an object with
+#                          statusList and signature; else write statusList to OUT
+#                          (compact) and print the signature as `raw` does
+#   list                   the scalar fields of a status list in one read, as
+#                          NAME NUL STATUS NUL VALUE NUL records: docVersion, kid,
+#                          iss, issuedAt, nextUpdate and seq as `field` gives them
+#                          (STATUS is its exit status), raw_iss, raw_seq and
+#                          raw_truncated as `raw` gives them (NUL bytes dropped,
+#                          trailing newlines cut: what $(...) keeps), len_keys and
+#                          len_subjects (the number of keys and subjects), and
+#                          selfrev (1 when a revoked key has the list's own kid)
+#   lookup                the pairs KIND NUL VALUE NUL ... on standard input (a kid can be
+#                          longer than one argument may be); for each, one STATUS NUL VALUE
+#                          NUL record: KIND k, the
+#                          reason of the first revoked key whose kid is VALUE (its
+#                          first line, NUL bytes dropped); KIND s, the first revoked
+#                          subject whose subjectHash is VALUE, compact; empty when
+#                          there is none. STATUS 2 (and an empty value) when the
+#                          list could not be read, as `jq ... | head -1` failing did
+#   pretty                 `jq .` of every value in the file
+# Any other failure is exit 2 and nothing on stderr.
+JSONQ_PY='
+import decimal, json, re, sys
+class N:
+    def __init__(self, t): self.t = t
+CTX = decimal.Context(prec=147483648, Emax=999999999, Emin=-999999999, rounding=decimal.ROUND_HALF_UP, traps=[])
+def num(n):
+    d = CTX.create_decimal(n.t)
+    if d.is_nan(): return "null"
+    if d.is_infinite(): return ("-" if d.is_signed() else "") + "1.7976931348623157e+308"
+    return str(d)
+ESC = {34: "\\\"", 92: "\\\\", 10: "\\n", 13: "\\r", 9: "\\t", 8: "\\b", 12: "\\f"}
+PLAIN = re.compile("[^\\x00-\\x1f\"\\\\\\x7f]*")
+def quote(s):
+    if PLAIN.fullmatch(s): return "\"" + s + "\""
+    return "\"" + "".join(ESC.get(ord(c)) or ("\\u%04x" % ord(c) if ord(c) < 32 or ord(c) == 127 else c) for c in s) + "\""
+def emit(v, pretty, lvl, out):
+    if v is None: out.append("null")
+    elif v is True: out.append("true")
+    elif v is False: out.append("false")
+    elif isinstance(v, N): out.append(num(v))
+    elif isinstance(v, str): out.append(quote(v))
+    elif not v: out.append("[]" if isinstance(v, list) else "{}")
+    else:
+        isl = isinstance(v, list)
+        out.append("[" if isl else "{")
+        pad = "\n" + "  " * (lvl + 1) if pretty else ""
+        for i, x in enumerate(v if isl else v.items()):
+            out.append(("," if i else "") + pad)
+            if not isl:
+                out.append(quote(x[0]) + (": " if pretty else ":"))
+                x = x[1]
+            emit(x, pretty, lvl + 1, out)
+        out.append(("\n" + "  " * lvl if pretty else "") + ("]" if isl else "}"))
+NUMC = {}
+def scalar(x):
+    if x is None: return "null"
+    if x is True: return "true"
+    if x is False: return "false"
+    if type(x) is N:
+        r = NUMC.get(x.t)
+        if r is None: r = NUMC[x.t] = num(x)
+        return r
+    return quote(x)
+def compact(v):
+    if type(v) is list:
+        return "[" + ",".join([compact(x) if type(x) is list or type(x) is dict else scalar(x) for x in v]) + "]"
+    if type(v) is dict:
+        return "{" + ",".join([quote(k) + ":" + (compact(x) if type(x) is list or type(x) is dict else scalar(x)) for k, x in v.items()]) + "}"
+    return scalar(v)
+def dump(v, pretty=False):
+    if not pretty: return compact(v)
+    out = []
+    emit(v, pretty, 0, out)
+    return "".join(out)
+TOKEN = re.compile(r"[ \t\r\n]*(?:([][{},:])|(\"(?:[^\"\\\x00-\x1f]|\\[\"\\/bfnrt]|\\u[0-9a-fA-F]{4})*\")|([^ \t\r\n\][{},:\"]+))")
+NUMBER = re.compile(r"[+-]?(?:(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)", re.I)
+def utf8(b):
+    try: return b.decode("utf-8")
+    except UnicodeDecodeError: pass
+    out, i = [], 0
+    while i < len(b):
+        c = b[i]
+        n = 1 if c < 0x80 else 2 if 0xC2 <= c <= 0xDF else 3 if 0xE0 <= c <= 0xEF else 4 if 0xF0 <= c <= 0xF4 else 0
+        k = 1
+        while 1 < n and k < n and i + k < len(b) and b[i + k] & 0xC0 == 0x80: k += 1
+        if n == 0: out.append("\ufffd"); i += 1
+        elif i + n > len(b): out.append("\ufffd"); break
+        elif k < n: out.append("\ufffd"); i += k
+        else:
+            try: out.append(b[i:i + n].decode("utf-8"))
+            except UnicodeDecodeError: out.append("\ufffd")
+            i += n
+    return "".join(out)
+def text(s):
+    s = json.loads("\"" + utf8(s[1:-1].encode("utf-8", "surrogateescape")) + "\"")
+    if re.search("[\ud800-\udbff]", s): raise ValueError("lone high surrogate")
+    return re.sub("[\udc00-\udfff]", "�", s)
+def parse(raw):
+    if raw.startswith(b"\xef\xbb\xbf"): raw = raw[3:]
+    t, i, vals, stack, weight = raw.decode("utf-8", "surrogateescape"), 0, [], [], 0
+    while True:
+        m = TOKEN.match(t, i)
+        if m is None:
+            if t[i:].strip(" \t\r\n") == "" and not stack: return vals
+            raise ValueError("parse error")
+        i = m.end()
+        p, s, lit = m.groups()
+        f = stack[-1] if stack else None
+        if s is not None and f is not None and f[2] in ("key", "key_or_end"):
+            f[1], f[2] = text(s), "colon"
+            continue
+        if p in (",", ":", "]", "}"):
+            if p == "," and f is not None and f[2] == "comma": f[2] = "val" if isinstance(f[0], list) else "key"
+            elif p == ":" and f is not None and f[2] == "colon": f[2] = "val"
+            elif p == "]" and f is not None and isinstance(f[0], list) and f[2] in ("val_or_end", "comma"): weight -= f[3]; stack.pop(); v = f[0]; f = None
+            elif p == "}" and f is not None and isinstance(f[0], dict) and f[2] in ("key_or_end", "comma"): weight -= f[3]; stack.pop(); v = f[0]; f = None
+            else: raise ValueError("parse error")
+            if f is not None: continue
+        else:
+            if f is not None and f[2] not in ("val", "val_or_end"): raise ValueError("parse error")
+            if p in ("[", "{"):
+                cost = 2 if f is not None and isinstance(f[0], dict) else 1
+                weight += cost
+                if weight > 256: raise ValueError("depth")
+                stack.append([[] if p == "[" else {}, None, "val_or_end" if p == "[" else "key_or_end", cost])
+                continue
+            if s is not None: v = text(s)
+            elif lit in ("true", "false", "null"): v = {"true": True, "false": False, "null": None}[lit]
+            elif NUMBER.fullmatch(lit.split("\0")[0]): v = N(lit.split("\0")[0])
+            else: raise ValueError("parse error")
+        if not stack: vals.append(v)
+        else:
+            g = stack[-1]
+            if isinstance(g[0], list): g[0].append(v)
+            else: g[0][g[1]] = v
+            g[2] = "comma"
+def member(v, k):
+    if isinstance(v, dict): return v.get(k)
+    if v is None: return None
+    raise ValueError("cannot index")
+def plain(v):
+    return v if isinstance(v, str) else dump(v, True)
+def fval(d, f):
+    if f == ".docVersion // empty":
+        v = member(d, "docVersion")
+        if v is None or v is False: return "", 0
+    elif f == "keys_unsorted | sort | join(\",\")":
+        if isinstance(d, dict): v = ",".join(sorted(d))
+        elif isinstance(d, list): v = ",".join(str(i) for i in range(len(d)))
+        else: raise ValueError("no keys")
+    elif re.fullmatch(r"\.[A-Za-z]+", f): v = member(d, f[1:])
+    else: raise ValueError("filter")
+    return plain(v).replace("\0", "\\x00"), (3 if isinstance(v, str) and "\0" in v else 0)
+def main(a):
+    w = sys.stdout.buffer.write
+    mode = a[0]
+    docs = parse(open(a[1], "rb").read())
+    if mode == "object": return 0 if docs and isinstance(docs[-1], dict) else 1
+    if mode == "pretty":
+        for v in docs: w((dump(v, True) + "\n").encode("utf-8"))
+        return 0
+    if len(docs) != 1: raise ValueError("expected one document")
+    d = docs[0]
+    if mode == "crit": return 0 if isinstance(d, dict) and "crit" in d else 1
+    if mode == "field":
+        text_, rc = fval(d, a[2])
+        w(text_.encode("utf-8"))
+        return rc
+    if mode == "list":
+        recs = []
+        for name, f in (("docVersion", ".docVersion // empty"), ("kid", ".kid"), ("iss", ".iss"), ("issuedAt", ".issuedAt"), ("nextUpdate", ".nextUpdate"), ("seq", ".seq")):
+            try: text_, rc = fval(d, f)
+            except Exception: text_, rc = "", 2
+            recs.append((name, rc, text_))
+        for name, key in (("raw_iss", "iss"), ("raw_seq", "seq"), ("raw_truncated", "truncated")):
+            try: recs.append((name, 0, plain(member(d, key)).replace("\0", "").rstrip("\n")))
+            except Exception: recs.append((name, 2, ""))
+        for name, key in (("len_keys", "keys"), ("len_subjects", "subjects")):
+            try:
+                v = member(d, key)
+                recs.append((name, 0, str(0 if v is None else len(v))))
+            except Exception: recs.append((name, 2, ""))
+        try:
+            kid, items = member(d, "kid"), member(d, "keys")
+            items = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else []
+            recs.append(("selfrev", 0, "1" if isinstance(kid, str) and any(member(e, "kid") == kid for e in items) else "0"))
+        except Exception: recs.append(("selfrev", 2, ""))
+        w("".join("%s\0%d\0%s\0" % r for r in recs).encode("utf-8"))
+        return 0
+    if mode == "split":
+        if not (isinstance(d, dict) and "statusList" in d and "signature" in d): return 1
+        sig = plain(d["signature"])
+        with open(a[2], "wb") as fh: fh.write((dump(d["statusList"]) + "\n").encode("utf-8"))
+        w((sig + "\n").encode("utf-8"))
+        return 0
+    if mode == "raw": w((plain(member(d, a[2])) + "\n").encode("utf-8"))
+    elif mode == "lookup":
+        # stdin = KIND NUL VALUE NUL ...: k = the first revoked key with this kid, s = the
+        # first revoked subject with this hash (stdin, not arguments: a kid can be longer
+        # than the system allows one argument to be). One record per query: STATUS NUL VALUE NUL,
+        # the value being the first line of the reason of the key (NUL bytes dropped, as
+        # command substitution drops them) or the entry of the subject, compact; empty when there is none.
+        out = []
+        q = sys.stdin.buffer.read().split(b"\0")[:-1]
+        for i in range(0, len(q) - 1, 2):
+            lst, mem = ("keys", "kid") if q[i] == b"k" else ("subjects", "subjectHash")
+            want = utf8(q[i + 1])
+            try:
+                items = member(d, lst)
+                items = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else []
+                first = None
+                for e in items:
+                    if member(e, mem) == want and first is None: first = e
+                if first is None: val = ""
+                elif lst == "keys": val = plain(member(first, "reason")).split("\n")[0].replace("\0", "")
+                else: val = dump(first)
+                out.append("0\0%s\0" % val)
+            except Exception: out.append("2\0\0")
+        w("".join(out).encode("utf-8"))
+    else: raise ValueError(mode)
+    return 0
+try: rc = main(sys.argv[1:])
+except Exception: rc = 2
+sys.exit(rc)
 '
 
 # Key selection and retirement of a signing key (the JWK member
@@ -1597,7 +1982,7 @@ def rs(s):
 
 L = json.load(open(sys.argv[1], encoding="utf-8"))
 if L.get("docVersion") != "attest.statuslist.v1": raise SystemExit("canonical: unsupported docVersion")
-# Typed strictly, because sections 8-9 read these with jq and bash: a truncated
+# Typed strictly, because sections 8-9 read these with jsonq and bash: a truncated
 # flag that is truthy but not true would skip the truncated => unknown rule, and
 # a seq that bash cannot compare would skip the --min-seq rollback check.
 if not isinstance(L.get("truncated"), bool): raise SystemExit("canonical: truncated must be a boolean")
@@ -1921,9 +2306,8 @@ if [ -n "$POSTURE_FILE" ] && [ -z "$CLAIMS_FILE" ]; then
        Pass the whole document instead:
          curl -fsS https://<origin>/api/public/attest/<slug> -o att.json
          verify-attestation.sh --attestation att.json --jwks jwks.json
-       or, if you are splitting it yourself:
-         jq -r '.attestation.signature' att.json > att.jws
-         jq   '.attestation.claims'     att.json > att.claims.json
+       or, if you are splitting it yourself (att.jws holds the string
+       .attestation.signature, att.claims.json the object .attestation.claims):
          verify-attestation.sh --jws att.jws --claims att.claims.json --jwks jwks.json"
       ;;
     *)
@@ -2007,6 +2391,18 @@ else
 fi
 
 b64url_decode "$H" > "$WORKDIR/header.json" || die header_not_base64url "header is not valid base64url"
+HEADER_LEN="$(wc -c < "$WORKDIR/header.json" | tr -d ' ')"
+if [ "$HEADER_LEN" -gt "$HEADER_MAX_BYTES" ]; then
+  # A failed check (exit 1), as the same document was before the cap (it had a
+  # member beyond alg, kid, typ). The members are looked up with sed in the whole
+  # header (header.full, see header_field: one pass, as before, so the key is found
+  # wherever the kid lies); the JSON reader, grep and the display see only the first
+  # HEADER_MAX_BYTES bytes, so what the cap bounds is the parsing.
+  bad header_too_large "protected header is ${HEADER_LEN} bytes, over the ${HEADER_MAX_BYTES} a header of this format can have; \
+only the first ${HEADER_MAX_BYTES} are read"
+  cp -- "$WORKDIR/header.json" "$WORKDIR/header.full"
+  head -c "$HEADER_MAX_BYTES" "$WORKDIR/header.full" > "$WORKDIR/header.json"
+fi
 b64url_decode "$S" > "$WORKDIR/sig.bin"     || die signature_not_base64url "signature is not valid base64url"
 SIG_LEN="$(wc -c < "$WORKDIR/sig.bin" | tr -d ' ')"
 if [ "$SIG_LEN" -eq 3309 ]; then
@@ -2020,7 +2416,13 @@ printf '\n%s[2] Header%s\n' "$BOLD" "$RESET"
 # In the C locale: under a UTF-8 locale, sed's . and [^"] do not match a byte
 # that is not valid UTF-8, so a header kid holding one read as empty, and what
 # the run then reported depended on the locale.
-header_field() { LC_ALL=C sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1; }
+# An oversized header was cut to HEADER_MAX_BYTES in header.json; the members are
+# looked up in the whole of it (header.full), the one linear pass there ever was.
+header_field() {
+  local f="$1"
+  if [ -e "${f%.json}.full" ]; then f="${f%.json}.full"; fi
+  LC_ALL=C sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$f" | head -1
+}
 ALG="$(header_field "$WORKDIR/header.json" alg)"
 KID="$(header_field "$WORKDIR/header.json" kid)"
 TYP="$(header_field "$WORKDIR/header.json" typ)"
@@ -2571,10 +2973,33 @@ STATUS_PUB_B64URL=''; STATUS_DERIVED_KID=''; STATUS_RETIRED_AT=''
 LIST_KID=''; LIST_ISS=''
 STATUS_LIST_VALID=0
 
-fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list' "$STATUS_NAME"
-fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set' "$STATUS_KEYS_NAME"
+fetch_or_read "$STATUS_SRC" "$WORKDIR/status.json" 'status list' "$STATUS_NAME" "$STATUS_DOC_MAX_BYTES"
+fetch_or_read "$STATUS_KEYS_SRC" "$WORKDIR/status-keys.json" 'status key set' "$STATUS_KEYS_NAME" "$STATUS_KEYS_MAX_BYTES"
+
+# The size caps come before the first parse: a document over its cap is UNKNOWN
+# and is not read by anything below (every later step needs STATUS_FAILURES = 0,
+# and the strict-JSON loop skips it). What was fetched or copied is at most one
+# byte over the cap, or empty when curl stopped; a count of bytes is all that is
+# asked of it. A local file was read with the same bound (read_input).
+STATUS_DOC_OVER=0; STATUS_KEYS_OVER=0
+if [ "$(wc -c < "$WORKDIR/status.json" | tr -d ' ')" -gt "$STATUS_DOC_MAX_BYTES" ]; then FETCH_OVER+="|status list|"; fi
+if [ "$(wc -c < "$WORKDIR/status-keys.json" | tr -d ' ')" -gt "$STATUS_KEYS_MAX_BYTES" ]; then FETCH_OVER+="|status key set|"; fi
+case "$FETCH_OVER" in
+  *'|status list|'*)
+    STATUS_DOC_OVER=1
+    stat_bad status_unknown_document_too_large "too_large — the status list is over ${STATUS_DOC_MAX_BYTES} bytes, more than any list \
+this issuer publishes; it was not read" ;;
+esac
+case "$FETCH_OVER" in
+  *'|status key set|'*)
+    STATUS_KEYS_OVER=1
+    stat_bad status_unknown_keys_too_large "too_large — the status key set is over ${STATUS_KEYS_MAX_BYTES} bytes, more than any key set \
+this issuer publishes; it was not read" ;;
+esac
 
 for dup_src in status.json status-keys.json; do
+  if [ "$dup_src" = status.json ] && [ "$STATUS_DOC_OVER" -eq 1 ]; then continue; fi
+  if [ "$dup_src" = status-keys.json ] && [ "$STATUS_KEYS_OVER" -eq 1 ]; then continue; fi
   if ! dup_found="$(python3 -I -X utf8 -c "$DUPKEY_PY" "$WORKDIR/$dup_src" 2>/dev/null)"; then
     stat_bad status_unknown_not_strict_json "malformed_document — ${dup_src} is not strict JSON (UTF-8, no BOM, one value)"
   elif [ -n "$dup_found" ]; then
@@ -2583,10 +3008,15 @@ $(printf '%s' "$dup_found" | tr '\n' ' ')— which value counts depends on the p
   fi
 done
 
-if [ "$STATUS_FAILURES" -eq 0 ] && jq -e 'type=="object" and has("statusList") and has("signature")' "$WORKDIR/status.json" >/dev/null 2>&1; then
+# Every jsonq call in this section sits where a failure is a condition or has a
+# fallback: under `set -e` a bare failing call would end the run with exit 2 and
+# no verdict, and a document must never turn a status into "could not check".
+# One read of the document does the shape check, writes statusList to list.json
+# (compact: nothing reads its layout, and an indented copy of a padded list is
+# many times larger) and returns the signature.
+if [ "$STATUS_FAILURES" -eq 0 ] && STATUS_JWS="$(jsonq split "$WORKDIR/status.json" "$WORKDIR/list.json" 2>/dev/null)"; then
   ok status_shape_valid "status document has the expected {statusList, signature} shape"
-  jq '.statusList' "$WORKDIR/status.json" > "$WORKDIR/list.json"
-  STATUS_JWS="$(jq -r '.signature' "$WORKDIR/status.json")"
+  load_list_fields
 else
   stat_bad status_unknown_malformed_document "malformed_document — expected {statusList, signature, ...}, exactly what \
 GET /api/public/attest/status serves"
@@ -2625,6 +3055,13 @@ fi
 if [ "$STATUS_FAILURES" -eq 0 ] && ! b64url_decode "$SH" > "$WORKDIR/status_header.json" 2>/dev/null; then
   stat_bad status_unknown_header_not_base64url "malformed_document — protected header is not valid base64url"
 fi
+if [ "$STATUS_FAILURES" -eq 0 ]; then
+  SHDR_LEN="$(wc -c < "$WORKDIR/status_header.json" | tr -d ' ')"
+  if [ "$SHDR_LEN" -gt "$HEADER_MAX_BYTES" ]; then
+    stat_bad status_unknown_header_too_large "too_large — the protected header is ${SHDR_LEN} bytes, over the ${HEADER_MAX_BYTES} \
+a header of this format can have; it was not read"
+  fi
+fi
 if [ "$STATUS_FAILURES" -eq 0 ] && ! b64url_decode "$SS" > "$WORKDIR/status_sig.bin" 2>/dev/null; then
   stat_bad status_unknown_signature_not_base64url "malformed_document — signature segment is not valid base64url"
 fi
@@ -2636,7 +3073,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
     stat_bad status_unknown_signature_size "signature is ${SSIG_LEN} bytes, expected 3309 for ML-DSA-65"
   fi
 fi
-if [ "$STATUS_FAILURES" -eq 0 ] && ! jq -e 'type=="object"' "$WORKDIR/status_header.json" >/dev/null 2>&1; then
+if [ "$STATUS_FAILURES" -eq 0 ] && ! jsonq object "$WORKDIR/status_header.json" >/dev/null 2>&1; then
   stat_bad status_unknown_header_not_object "malformed_document — protected header did not decode to a JSON object"
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
@@ -2647,7 +3084,7 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  if jq -e 'has("crit")' "$WORKDIR/status_header.json" >/dev/null 2>&1; then
+  if jsonq crit "$WORKDIR/status_header.json" >/dev/null 2>&1; then
     stat_bad status_unknown_unsupported_crit "unsupported_crit — header carries 'crit' (RFC 7515 §4.1.11 requires rejection)"
   else
     ok status_header_crit_absent "no 'crit' header extension"
@@ -2887,7 +3324,7 @@ fi
 
 # --- Rule S: a list may not revoke its own signer ---
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  if jq -e --arg kid "$LIST_KID" '.keys[]? | select(.kid==$kid)' "$WORKDIR/list.json" >/dev/null 2>&1; then
+  if [ "$(lf_val selfrev)" = 1 ]; then
     stat_bad status_unknown_self_revocation "self_revocation — the list revokes its own signing key ('$(esc "${LIST_KID}")')"
   else
     ok status_not_self_revoking "the list does not name its own signing key among the revoked keys (Rule S)"
@@ -2897,9 +3334,8 @@ fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
   STATUS_LIST_VALID=1
   printf '        %s revoked key(s), %s revoked subject(s), truncated=%s, seq=%s, iss=%s\n' \
-    "$(jq '.keys | length' "$WORKDIR/list.json")" "$(jq '.subjects | length' "$WORKDIR/list.json")" \
-    "$(jq -r '.truncated' "$WORKDIR/list.json")" "$(esc "$(jq -r '.seq' "$WORKDIR/list.json")")" \
-    "$(esc "$(jq -r '.iss' "$WORKDIR/list.json")")"
+    "$(lf_val len_keys)" "$(lf_val len_subjects)" "$(lf_val raw_truncated)" \
+    "$(esc "$(lf_val raw_seq)")" "$(esc "$(lf_val raw_iss)")"
   printf '\n%s%sthe status list itself verifies.%s\n' "$GREEN" "$BOLD" "$RESET"
 else
   printf '\n%s%sthe status list does NOT verify%s (%d check(s) failed) — its content is UNKNOWN,\n' \
@@ -2969,18 +3405,20 @@ REVOCATION_UNKNOWN_BECAUSE=''
 # Rule B for one subject: sets SUBJ_OUTCOME to revoked, unknown or good, and
 # SUBJ_REASON (revoked) or SUBJ_BECAUSE (unknown). The hash is printed once per slug.
 SUBJ_HASHED=' '
-subject_rule() {   # SLUG GENERATED_AT
-  local slug="$1" genat="$2" entry='' notbefore='' truncated='' hash=''
+subject_rule() {   # SLUG GENERATED_AT INDEX
+  local slug="$1" genat="$2" entry='' notbefore='' truncated='' hash="${SUBJ_HASHES[$3]}" q=0
+  q=$(( ${#CHECK_KIDS[@]} + $3 ))   # its place among the lookups
   SUBJ_OUTCOME=good; SUBJ_REASON=''; SUBJ_BECAUSE=''
-  { printf 'hodei-shield.attest.subject.v1'; printf '%s' "$slug"; } \
-    | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
-  hash="$(b64url_encode "$WORKDIR/subject_hash.bin")"
   case "$SUBJ_HASHED" in
     *" $hash "*) ;;
     *) printf '        subjectHash(%s) = %s\n' "$(esc "$slug")" "$hash"; SUBJ_HASHED+="$hash " ;;
   esac
-  entry="$(jq -c --arg h "$hash" \
-    '.subjects[]? | select(.subjectHash==$h)' "$WORKDIR/list.json" | head -1)"
+  if [ "${LK_RC[q]:-2}" -ne 0 ]; then
+    SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+    warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
+    return 0
+  fi
+  entry="${LK_VAL[q]}"
   if [ -n "$entry" ]; then
     printf '%s' "$entry" > "$WORKDIR/subject_entry.json"
     list_field notbefore "$WORKDIR/subject_entry.json" '.notBefore'
@@ -2997,15 +3435,22 @@ decide, so UNKNOWN, never 'good'"
     # second before a fractional notBefore was not revoked.
     case "$(LC_ALL=C python3 -I -X utf8 -c "$RETIRED_PY" cmp "$genat" "$notbefore" 2>/dev/null)" in
       before)
-        SUBJ_OUTCOME=revoked; SUBJ_REASON="$(printf '%s' "$entry" | jq -r '.reason')" ;;
+        if SUBJ_REASON="$(jsonq raw "$WORKDIR/subject_entry.json" reason)"; then
+          SUBJ_OUTCOME=revoked
+        else
+          SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'; SUBJ_REASON=''
+          warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
+        fi ;;
       equal|after) ;;
       *)
         SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
         warn_unknown status_unknown_subject_dates_unparseable "could not parse generatedAt/notBefore as RFC 3339 — UNKNOWN, never 'good'" ;;
     esac
   else
-    truncated="$(jq -r '.truncated' "$WORKDIR/list.json")"
-    if [ "$truncated" = 'true' ]; then
+    if ! lf_get truncated raw_truncated; then
+      SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='list_unverified'
+      warn_unknown status_unknown_list_unverified "the list could not be read for subject '$(esc "${slug}")' — UNKNOWN, never 'good'"
+    elif [ "$truncated" = 'true' ]; then
       SUBJ_OUTCOME=unknown; SUBJ_BECAUSE='truncated'
       warn_unknown status_unknown_truncated "subject not found, but truncated=true: entries were dropped for the cap, so \
 'not found' does not mean 'not listed' — UNKNOWN on the subject dimension, fail-safe"
@@ -3020,11 +3465,28 @@ elif [ -z "$EFFECTIVE_KID" ] && [ "${#SUBJ_SLUGS[@]}" -eq 0 ]; then
   REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='no_subject'
   warn_unknown status_unknown_no_subject "nothing to check (no kid or subject given) — list contents printed above only"
 else
+  # Every kid and every subject is looked up in one pass over the list (a large
+  # list is parsed once, however many are asked for).
+  LOOKUPS=(); SUBJ_HASHES=()
+  for k in "${CHECK_KIDS[@]+"${CHECK_KIDS[@]}"}"; do LOOKUPS+=(k "$k"); done
+  for i in "${!SUBJ_SLUGS[@]}"; do
+    { printf 'hodei-shield.attest.subject.v1'; printf '%s' "${SUBJ_SLUGS[i]}"; } \
+      | openssl dgst -sha256 -binary > "$WORKDIR/subject_hash.bin"
+    SUBJ_HASHES[i]="$(b64url_encode "$WORKDIR/subject_hash.bin")"
+    LOOKUPS+=(s "${SUBJ_HASHES[i]}")
+  done
+  load_lookups "${LOOKUPS[@]}"
+
   # Rule K — UNCONDITIONAL. revokedAt is deliberately never compared: it is a
   # field the compromised key itself could sign, so a rule over it is decoration.
-  for k in "${CHECK_KIDS[@]+"${CHECK_KIDS[@]}"}"; do
-    KEY_HIT_REASON="$(jq -r --arg kid "$k" \
-      '.keys[]? | select(.kid==$kid) | .reason' "$WORKDIR/list.json" | head -1)"
+  for j in "${!CHECK_KIDS[@]}"; do
+    k="${CHECK_KIDS[j]}"
+    if [ "${LK_RC[j]:-2}" -ne 0 ]; then
+      REVOCATION_STATUS='unknown'; REVOCATION_UNKNOWN_BECAUSE='list_unverified'
+      warn_unknown status_unknown_list_unverified "the list could not be read for kid '$(esc "${k}")' — UNKNOWN, never 'good'"
+      continue   # the other kids are still checked: one withdrawal decides ahead of an unknown
+    fi
+    KEY_HIT_REASON="${LK_VAL[j]}"
     if [ -n "$KEY_HIT_REASON" ]; then
       REVOCATION_STATUS='revoked'; REVOCATION_REASON="$KEY_HIT_REASON"; REVOCATION_VIA='key'
       break
@@ -3038,7 +3500,7 @@ else
   if [ "$REVOCATION_STATUS" != 'revoked' ]; then
     SUBJ_FIRST_UNKNOWN=''
     for i in "${!SUBJ_SLUGS[@]}"; do
-      subject_rule "${SUBJ_SLUGS[i]}" "${SUBJ_GENATS[i]}"
+      subject_rule "${SUBJ_SLUGS[i]}" "${SUBJ_GENATS[i]}" "$i"
       if [ "$SUBJ_OUTCOME" = revoked ]; then
         REVOCATION_STATUS='revoked'; REVOCATION_REASON="$SUBJ_REASON"; REVOCATION_VIA='subject'
         break
@@ -3067,7 +3529,7 @@ case "$REVOCATION_STATUS" in
     elif [ "${#SUBJ_NAMES[@]}" -gt 1 ]; then
       printf ', subjects %s, %s carry no earlier withdrawal' "$(esc "${SUBJ_NAMES[0]}")" "$(esc "${SUBJ_NAMES[1]}")"
     fi
-    printf ' (list seq %s).\n' "$(esc "$(jq -r '.seq' "$WORKDIR/list.json" 2>/dev/null || printf '?')")"
+    printf ' (list seq %s).\n' "$(esc "$(if lf_get SEQ_V raw_seq; then printf '%s' "$SEQ_V"; else printf '?'; fi)")"
     ;;
   revoked)
     if [ "$REVOCATION_VIA" = key ]; then record revoked_key fail 1; else record revoked_subject fail 1; fi
@@ -3097,11 +3559,7 @@ if [ -n "$JWS_FILE" ]; then
       python3 -I -X utf8 -c "$DOCX_PY" "$CLAIMS_FILE" summary || printf '        (the summary could not be rendered)\n'
       if [ "$SHOW_RAW" -eq 1 ]; then
         printf '\n        posture (E7, the frozen v1 bytes):\n'
-        if command -v jq >/dev/null 2>&1; then
-          jq . < "$POSTURE_FILE" | sed 's/^/        /'
-        else
-          sed 's/^/        /' "$POSTURE_FILE"
-        fi
+        jsonq pretty "$POSTURE_FILE" | sed 's/^/        /' || printf '        (the posture could not be rendered)\n'
       fi
     fi
   else

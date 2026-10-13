@@ -27,7 +27,7 @@ name: Container image
 #
 # The base image digest in container/Dockerfile must match README.md and the
 # other workflows; tests/container.sh checks:
-# debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+# debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 on:
   release:
     types: [published]
@@ -189,7 +189,10 @@ jobs:
           cosign verify "$IMAGE@$DIGEST" \
             --certificate-identity "$IMAGE_IDENTITY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
-          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY"
+          # The SBOM is the only attestation; by default gh asks for SLSA
+          # provenance and gets HTTP 404.
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
           docker pull "$IMAGE@$DIGEST"
           inside="$(docker run --rm --entrypoint sha256sum "$IMAGE@$DIGEST" /usr/local/bin/verify-attestation.sh | cut -d' ' -f1)"
           [ "$inside" = "$SCRIPT_SHA256" ] || { echo "the script in the image is $inside, the release says $SCRIPT_SHA256" >&2; exit 1; }

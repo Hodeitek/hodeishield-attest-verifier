@@ -4,8 +4,9 @@
 name: Release
 
 # A pushed v* tag builds a DRAFT release: the verifier script, the key statement
-# (docs/security/keys.json, as keys-statement.json), SHA256SUMS, and a Sigstore
-# keyless signature bundle for each. The owner reviews and publishes
+# (docs/security/keys.json, as keys-statement.json), the SPDX SBOM of the script
+# (verify-attestation.sh.spdx.json), SHA256SUMS, and a Sigstore keyless
+# signature bundle for each. The owner reviews and publishes
 # the draft by hand; this workflow never publishes a non-draft release.
 on:
   push:
@@ -19,18 +20,19 @@ jobs:
   tests:
     name: offline tests (valid + rejection)
     runs-on: ubuntu-latest
-    container: debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+    container: debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # tests/run.sh fetches --status and --status-keys URLs from loopback
-      # listeners, so it needs curl, as in ci.yml's test job.
-      - name: Install openssl, python3, jq, curl, shellcheck
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl python3 jq curl ca-certificates shellcheck
+      # The same packages and Latin-1 locale as ci.yml's test job, from one
+      # list, plus shellcheck (tests/test-deps-parity.sh checks it on every
+      # pull request; the v1.4.1 tag failed on a package only ci.yml had, #84).
+      - name: Install the test packages, the Latin-1 locale and shellcheck
+        run: bash .github/scripts/install-test-deps.sh shellcheck
       - name: shellcheck
-        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/keys-consistency.sh tests/keys-drift.sh tests/version-consistency.sh
+        run: shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/keys-consistency.sh tests/keys-drift.sh tests/version-consistency.sh tests/sbom.sh .github/scripts/generate-sbom.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh
       - name: keys.json matches keys.md
         run: bash tests/keys-consistency.sh
       # The release commit sets VERIFIER_VERSION to the tag and dates the
@@ -39,7 +41,11 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: bash tests/version-consistency.sh --tag "$TAG"
+      - name: SBOM generator
+        run: bash tests/sbom.sh
       - name: tests/run.sh
+        env:
+          VERIFIER_REQUIRE_LATIN1: "1"
         run: bash tests/run.sh
 
   publish:
@@ -55,14 +61,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Stage the artefact and SHA256SUMS
+      # The SBOM is made from the staged script, and its date is the tagged
+      # commit's, not the clock, so the same tag gives the same bytes. An empty
+      # or missing SBOM stops the release here, before anything is signed.
+      - name: Stage the artefact, the SBOM and SHA256SUMS
         run: |
           set -euo pipefail
           mkdir dist
           cp scripts/attest/verify-attestation.sh dist/
           cp docs/security/keys.json dist/keys-statement.json
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            bash .github/scripts/generate-sbom.sh dist/verify-attestation.sh > dist/verify-attestation.sh.spdx.json
+          [ -s dist/verify-attestation.sh.spdx.json ] || { echo "the SBOM is empty" >&2; exit 1; }
           cd dist
-          sha256sum verify-attestation.sh keys-statement.json > SHA256SUMS
+          sha256sum verify-attestation.sh keys-statement.json verify-attestation.sh.spdx.json > SHA256SUMS
           cat SHA256SUMS
 
       - name: Install cosign
@@ -73,11 +85,11 @@ jobs:
       # Keyless: cosign gets a short-lived Fulcio certificate for this job's
       # GitHub OIDC identity and records the signature in the public Rekor log.
       # No signing key or secret exists anywhere.
-      - name: Sign the script, the key statement and SHA256SUMS
+      - name: Sign the script, the key statement, the SBOM and SHA256SUMS
         working-directory: dist
         run: |
           set -euo pipefail
-          for f in verify-attestation.sh keys-statement.json SHA256SUMS; do
+          for f in verify-attestation.sh keys-statement.json verify-attestation.sh.spdx.json SHA256SUMS; do
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
 
@@ -90,7 +102,8 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum -c SHA256SUMS
-          for f in verify-attestation.sh keys-statement.json SHA256SUMS; do
+          grep -q '  verify-attestation.sh.spdx.json$' SHA256SUMS || { echo "SHA256SUMS does not list the SBOM" >&2; exit 1; }
+          for f in verify-attestation.sh keys-statement.json verify-attestation.sh.spdx.json SHA256SUMS; do
             cosign verify-blob --bundle "${f}.sigstore.json" \
               --certificate-identity "$IDENTITY" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \

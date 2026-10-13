@@ -20,7 +20,7 @@
 # vector set against the mutant (tests/vectors.sh) and reports how many cases
 # the mutant fails; every signature_only case must be among them.
 #
-# Needs: bash >= 4, OpenSSL >= 3.5, python3, jq. No network.
+# Needs: bash >= 4, OpenSSL >= 3.5, python3. No network.
 #   bash tests/mutants.sh
 #   VERIFIER=/path/to/copy bash tests/mutants.sh
 # =============================================================================

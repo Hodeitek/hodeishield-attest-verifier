@@ -41,6 +41,12 @@ for w in "${words[@]}"; do
 done
 [ "${#files[@]}" -ge 2 ] || fail "release.yml lists fewer than 2 files"
 printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh || fail "release.yml does not list verify-attestation.sh"
+# The SPDX SBOM of the script is part of every release (issue #78): it must be
+# in SHA256SUMS, which puts it under the same keyless signature, and the
+# staging step must generate it.
+printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh.spdx.json \
+  || fail "release.yml does not list verify-attestation.sh.spdx.json (the SBOM) in SHA256SUMS"
+grep -qF '.github/scripts/generate-sbom.sh' "$RELEASE" || fail "release.yml does not run the SBOM generator"
 ok "release.yml lists: ${files[*]}"
 
 # release.yml's two per-file loops (sign, verify as a reader) must cover every
