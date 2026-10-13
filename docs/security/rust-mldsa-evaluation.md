@@ -371,14 +371,38 @@ Verdicts. The module from this recipe was run under Node 24.15.0 on the same 50
 signature inputs as the spike (rebuilt from `tools/mldsa-vectors` with the same
 small, uncommitted patch that writes them out; 118 cases, 47 checked): 50 of 50
 signature verdicts and 47 of 47 checked cases agree with the reference, for build
-A and for build B. Chrome and Firefox were not re-run on this build (its bytes
-differ from the spike's); a browser run on the final artefact remains to be done
-with the page.
+A and for build B. Chrome and Firefox were not re-run on this build at that point (its bytes
+differ from the spike's); the browser run on this artefact is the "Result" below.
 
 Reproducing. `bash tools/mldsa-wasm/build.sh OUT_DIR` twice, the second time with
 `RUN_USER=12345:23456 SRC_MOUNT=/other/place/checkout`, then compare the files
 with `cmp` or `sha256sum` (full commands in the README of the recipe). Needs
 docker and network access.
+
+### Result, 2026-10-14: the module inside the page
+
+The module of `tools/mldsa-wasm` (`mldsa_wasm.wasm` SHA-256 `4a3c6a43...87da`,
+`mldsa_wasm.js` `312b3551...e5e1`, the same bytes as the two builds above) is
+the signature engine of the in-browser verifier page (`web/`,
+[browser-verifier.md](browser-verifier.md)). The page, not the bare primitive, was run over all 118 cases
+of `tests/vectors/v1` with `tests/web-vectors.sh`, in headless Chrome 155.0.8059.39
+and Firefox 153.4.0esr on Linux, from `http://127.0.0.1` and from disk
+(`file://`), with the fixed time of each case:
+
+| Browser | From | Cases | Result |
+|---|---|---|---|
+| Chrome 155 | http | 118 of 118 | verdict, exit code and reason code as the case says (one documented exception) |
+| Chrome 155 | disk | 118 of 118 | the same |
+| Firefox 153 ESR | http | 118 of 118 | the same |
+| Firefox 153 ESR | disk | 118 of 118 | the same |
+
+In Firefox from disk the browser gives every file its own origin, so the runner cannot look into a frame of the page: there the 118 cases ran on the page's scripts and module loaded from disk, and a screenshot of the real `index.html` showed that it starts under its policy.
+
+The one exception is a reason code, not a verdict: the case
+`anchor-statement-older-than-verifier` needs cosign and the network, which the page
+does not have; it gives exit 2 as the case does, with `anchor_unverified` instead of
+`anchor_statement_older`. The 47 signature-checked cases and their 50 signature
+verdicts are among the 118. Safari: not tested.
 
 ## Not confirmed
 
@@ -393,4 +417,5 @@ docker and network access.
   build).
 - Updated 2026-10-14: two builds of the Emscripten module of `aws-lc-rs` gave
   the same bytes (above). Not confirmed: the same on another host, another
-  container engine or arm64; a Chrome or Firefox run on the reproducible build.
+  container engine or arm64. A Chrome and Firefox run on the reproducible build
+  was made on 2026-10-14 (above); Safari was not tested.

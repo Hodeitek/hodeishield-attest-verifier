@@ -12,6 +12,51 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Each major version gets security fixes for five years,
 as [SECURITY.md](SECURITY.md#supported-versions) says.
 
+## Unreleased
+
+The verifier gains an in-browser page, built and tested but not deployed.
+`verify-attestation.sh` changes only its version number, to 1.6.0, which is what
+`tests/version-consistency.sh` requires of an Unreleased section.
+
+### Added
+- The in-browser verifier page, [`web/`](web/): the same checks as the script,
+  in plain JavaScript (classic scripts, so it also works opened from disk), with
+  no framework, no runtime dependency and no network request. The signature is
+  checked by the reproducible WebAssembly build of `aws-lc-rs`
+  ([`tools/mldsa-wasm`](tools/mldsa-wasm/README.md)), never by the browser's own
+  WebCrypto; the module is asked three known questions at start-up and the page
+  gives no verdict if it answers wrongly. It gives the verdicts of the script
+  (verified, failed, could not check, expired, revoked, unknown) with the reason
+  codes of `docs/security/reason-codes.md`, a result a non-technical reader can
+  act on, and the technical details behind a disclosure. Six interface languages
+  (Spanish, English, German, French, Italian, Basque; the Basque text awaits
+  native review), light and dark, keyboard and screen-reader support. A strict
+  Content-Security-Policy (`default-src 'none'`, scripts from the page itself and
+  `'wasm-unsafe-eval'` only). It cannot check a signed key statement
+  (`--anchor-file`), which needs Sigstore. Safari is not tested. See
+  [docs/security/browser-verifier.md](docs/security/browser-verifier.md)
+  (Refs #25).
+- `tests/web-vectors.sh`: all 118 cases of `tests/vectors/v1` on the page as it
+  ships, in headless Google Chrome and Firefox, from http and from disk, with the
+  verdict, exit code and reason code of each case (one reason code differs by
+  design and is named); `tests/web-static.sh` (the policy, the code and the six
+  languages) and `tests/web-bundle.sh` (the bundle is reproducible). CI runs them
+  on every pull request (`wasm-build`, `web-static`, `web-vectors`).
+- `release.yml` builds `verify-page-<tag>.tar.gz` from `web/` and the module built
+  by `tools/mldsa-wasm/build.sh` (sorted names, owner 0:0, fixed modes, mtime of
+  the tagged commit, `gzip -n`, a SHA-256 manifest inside), lists it in
+  `SHA256SUMS`, signs it with Sigstore, checks it as a reader would and prints its
+  SHA-256 in the release notes. The draft needs the web tests to pass first. The
+  page is not served anywhere until the deployment described in
+  `docs/security/browser-verifier.md` is enabled.
+- `tools/mldsa-wasm/expected.sha256` pins the bytes of the module; the CI and
+  release builds fail if a build gives other bytes.
+
+### Changed
+- `VERIFIER_VERSION` is 1.6.0 (the page carries the same number).
+- Differences between the script and its documentation, found while porting it,
+  are written down in `docs/security/browser-verifier.md`; neither was changed.
+
 ## v1.5.0 - 2026-10-13
 
 `verify-attestation.sh` changes. sha256
