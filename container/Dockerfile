@@ -9,7 +9,7 @@
 # The base is debian:trixie-slim, pinned by digest. The same digest is pinned in
 # README.md and the workflows; change them all in the same commit
 # (tests/container.sh fails if they differ).
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 ARG SCRIPT_SHA256
 ARG VERSION=unknown

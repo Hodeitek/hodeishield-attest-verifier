@@ -98,7 +98,7 @@ curl -fsS https://app.hodeishield.com/api/public/attest/keys              -o jwk
 <!-- container-route -->
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
-  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+  debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f \
   bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --attestation att.json --jwks jwks.json \
   --expect-slug talmaren-payments --expect-issuer https://app.hodeishield.com
@@ -122,7 +122,7 @@ curl -fsS https://app.hodeishield.com/api/public/attest/status-keys -o status-jw
 <!-- container-route-status -->
 ```bash
 docker run --rm -v "$PWD":/work:ro -w /work \
-  debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+  debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f \
   bash -c 'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends openssl python3 >/dev/null || exit 2; exec bash scripts/attest/verify-attestation.sh "$@"' _ \
   --status-list --status status.json --status-keys status-jwks.json \
   --attestation att.json --jwks jwks.json \

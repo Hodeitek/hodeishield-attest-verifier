@@ -129,6 +129,11 @@ as [SECURITY.md](SECURITY.md#supported-versions) says.
   advisories are announced. Advisories are written from the new
   [docs/security-advisory-template.md](docs/security-advisory-template.md)
   ([#76](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/76)).
+- The Debian 13 base image (`debian:trixie-slim`) is pinned to a newer digest,
+  `sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f`,
+  published on 2026-10-06 and taken a week after its publication. The README's
+  container commands, the container image and every CI job use it. The script
+  is unchanged.
 
 ## v1.4.2 - 2026-10-12
 
