@@ -12,7 +12,10 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Each major version gets security fixes for five years,
 as [SECURITY.md](SECURITY.md#supported-versions) says.
 
-## Unreleased
+## v1.5.0 - 2026-10-13
+
+`verify-attestation.sh` changes. sha256
+`4e9360ae341cab2a5e1a1bebbd7262385a99bf7bcf116cbd909ee9195d721ba5`.
 
 ### Added
 - Each release now publishes `verify-attestation.sh.spdx.json`, an SPDX 2.3 JSON
@@ -52,9 +55,10 @@ as [SECURITY.md](SECURITY.md#supported-versions) says.
   Both jobs now install from one list, `.github/scripts/install-test-deps.sh`,
   and `tests/test-deps-parity.sh`, run on every pull request, fails if either
   job installs packages of its own, the release job lacks one that the pull
-  request job has, or the two run in different containers. The release job now also makes the Latin-1 locale and
-  requires it, as the pull request job does, so the locale tests run before a
-  release is signed instead of being skipped (Closes #84).
+  request job has, or the two run in different containers. The release job now
+  also makes the Latin-1 locale and requires it, as the pull request job does,
+  so the locale tests run before a release is signed instead of being skipped
+  (Closes #84).
 
 ### Changed
 - Input size limits, so that no document can keep a parser busy: at most
