@@ -34,7 +34,10 @@ TARBALL="${3:-}"
 [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]{1,12}$ ]] || { echo "SOURCE_DATE_EPOCH is not a number" >&2; exit 2; }
 
 for f in mldsa_wasm.wasm mldsa_wasm.js; do
-  [ -f "$WASM_DIR/$f" ] && [ ! -L "$WASM_DIR/$f" ] || { echo "missing $WASM_DIR/$f (build it with tools/mldsa-wasm/build.sh)" >&2; exit 2; }
+  if [ ! -f "$WASM_DIR/$f" ] || [ -L "$WASM_DIR/$f" ]; then
+    echo "missing $WASM_DIR/$f (build it with tools/mldsa-wasm/build.sh)" >&2
+    exit 2
+  fi
 done
 [ ! -e "$TREE" ] || { echo "$TREE already exists" >&2; exit 2; }
 if [ -n "$TARBALL" ] && [ -e "$TARBALL" ]; then echo "$TARBALL already exists" >&2; exit 2; fi
