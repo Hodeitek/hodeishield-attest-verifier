@@ -80,6 +80,9 @@ serves is what we released:
    example `curl -s https://verify.hodeishield.com/index.html | sha256sum`
    against `sha256sum index.html`. The two must be equal. GitHub Pages serves
    the files; it does not serve the archive, so the comparison is file by file.
+   The archive will carry a manifest with the SHA-256 of every file it holds,
+   so this check can cover every served file. The manifest is inside the signed
+   archive, so steps 2 and 3 also cover it.
 
 If anything differs, do not use the page, and report it as described in
 [SECURITY.md](../../SECURITY.md).
@@ -114,6 +117,51 @@ and the setting is what counts.
 - It does not protect a reader whose browser or network is already hostile:
   a page you load over the web can be replaced on the way. That is why the
   offline copy exists, and why the script remains the reference verifier.
+
+## Enabling the deployment (one time)
+
+A repository administrator does this once, and only after the page passes all
+118 vectors and the release workflow builds the archive. The order matters.
+
+1. Verify `hodeishield.com` for the GitHub organisation (organisation settings,
+   Pages, Verified domains; a DNS TXT record). This step has no API.
+2. Enable Pages with GitHub Actions as the source:
+
+   ```bash
+   gh api -X POST repos/Hodeitek/hodeishield-attest-verifier/pages -f build_type=workflow
+   ```
+
+3. Allow deployments to the `github-pages` environment from `v*` tags only, then
+   delete any branch policy that Pages created by default:
+
+   ```bash
+   gh api -X PUT repos/Hodeitek/hodeishield-attest-verifier/environments/github-pages \
+     --input - <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+   gh api -X POST repos/Hodeitek/hodeishield-attest-verifier/environments/github-pages/deployment-branch-policies \
+     -f name='v*' -f type=tag
+   ```
+
+4. Point `verify.hodeishield.com` at GitHub Pages (a DNS CNAME to
+   `hodeitek.github.io`, not proxied), then set the custom domain:
+
+   ```bash
+   gh api -X PUT repos/Hodeitek/hodeishield-attest-verifier/pages -f cname=verify.hodeishield.com
+   ```
+
+5. Once GitHub has issued the certificate, enforce HTTPS:
+
+   ```bash
+   gh api -X PUT repos/Hodeitek/hodeishield-attest-verifier/pages -F https_enforced=true
+   ```
+
+6. Last, open the gate:
+
+   ```bash
+   gh variable set PAGES_ENABLED --body true --repo Hodeitek/hodeishield-attest-verifier
+   ```
+
+A manual re-deployment (`workflow_dispatch`) must run on the tag it deploys, so
+it works only for tags that already contain `.github/workflows/pages.yml`.
 
 ## Status
 
