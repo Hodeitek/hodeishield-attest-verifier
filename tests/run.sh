@@ -2631,7 +2631,9 @@ if command -v git >/dev/null 2>&1; then
 else
   printf 'skipped - licence header: a non-ASCII file name (no git)\n'; SKIPPED=$((SKIPPED + 1))
 fi
-if [ -d "$ROOT/.git" ] || [ -f "$ROOT/.git" ]; then
+if ! command -v git >/dev/null 2>&1; then
+  printf 'skipped - licence header: this tree (no git)\n'; SKIPPED=$((SKIPPED + 1))
+elif [ -d "$ROOT/.git" ] || [ -f "$ROOT/.git" ]; then
   bash "$SH" > "$T/spdx.out" 2>&1; got=$?
   if [ "$got" -eq 0 ]; then printf 'ok - licence header: this tree (%s)\n' "$(cat "$T/spdx.out")"; PASSED=$((PASSED + 1))
   else printf 'not ok - licence header: this tree\n'; sed 's/^/    # /' "$T/spdx.out"; FAILED=$((FAILED + 1)); fi
