@@ -118,7 +118,9 @@ A 1.0 version number alone does not meet the intent of the policy.
   with verification in the stable API. Two points the owner must accept or
   reject first: the C/asm code underneath, and `aws-lc-sys` being pre-1.0.
   Its FIPS status for ML-DSA is not confirmed and must not be cited.
-- **WebAssembly: no-go.** No candidate states `wasm32-unknown-unknown` support
+- **WebAssembly: no-go for `wasm32-unknown-unknown`** (the finding of
+  2026-10-08; for the browser verifier of #25, see the addendum of 2026-10-13,
+  which tests two other paths). No candidate states `wasm32-unknown-unknown` support
   and is also >= 1.0. Wait for one of: `ml-dsa` 1.0, or `aws-lc-rs`
   documenting `wasm32-unknown-unknown`.
 - **Event that would change the first point:** a published AWS-LC FIPS module
@@ -155,6 +157,156 @@ This is a check of the primitive's signature verdict only. It is not a check of
 the whole verifier, and it does not change the points under "Not confirmed". The
 other candidates were not run: none of them meets the stability policy.
 
+## Addendum 2026-10-13: ML-DSA-65 in the browser
+
+Tracks [issue #25](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/25)
+(a static in-browser verifier that uses an ML-DSA-65 implementation different
+from the issuer's). The sections above found no Rust library that documents
+`wasm32-unknown-unknown`. Two other paths were not tested, and this addendum
+tests them. Every result below was measured on 2026-10-13 and every version is
+stated; claims from a project's own pages are linked.
+
+### Method
+
+Same pass criterion and case selection as "Result of the vector check". The
+`tools/mldsa-vectors` harness was run natively once, unchanged in logic, with
+one addition: besides comparing the verdicts it wrote out, for each checked
+case, the public key, the signing input and the signature (hex), and the
+verdict the manifest requires. That gives 50 signature verdicts in 47 checked
+cases (118 cases in all; 3 anchor cases and 68 cases whose manifest entry states
+no signature verdict are skipped, exactly as before). Each runtime below was
+given those 50 inputs and had to return accept or reject as required. A case
+passes only if all its signature verdicts agree. Nothing but the primitive
+differs between runs, so the counts are comparable with the native run (47 of 47
+checked cases, 0 disagreed). These runs check the primitive's signature verdict
+only; they are not a check of a browser verifier, which does not exist yet.
+
+A static page needs a secure context for WebCrypto. The browser runs were
+served from `http://127.0.0.1` (a secure context) with fresh, default browser
+profiles and no flags except `--headless` (Chrome: `--headless=new --no-sandbox
+--disable-gpu`; Firefox: `--headless --no-remote`).
+
+### Result
+
+| Path | Runtime | Result | Cases | Signature verdicts |
+|---|---|---|---|---|
+| 1. AWS-LC on `wasm32-unknown-emscripten` | Node 24.15.0 | PASS | 47/47 | 50/50 |
+| 1. AWS-LC on `wasm32-unknown-emscripten` | Chrome 155.0.8059.39, default settings | PASS | 47/47 | 50/50 |
+| 1. AWS-LC on `wasm32-unknown-emscripten` | Firefox 153.4.0esr, default settings | PASS | 47/47 | 50/50 |
+| 2. native WebCrypto `ML-DSA-65` | Chrome 155.0.8059.39, default settings | PASS | 47/47 | 50/50 |
+| 2. native WebCrypto `ML-DSA-65` | Firefox 153.4.0esr, default settings | FAIL | 0/47 | 0/50 |
+| 2. native WebCrypto `ML-DSA-65` | Node 24.15.0 (context only, not a pass) | would pass | 47/47 | 50/50 |
+| 2. native WebCrypto `ML-DSA-65` | Safari | not tested | | |
+
+No mismatch was found in any run that passed. The Firefox WebCrypto run
+mismatched every case because every call failed (below).
+
+### Path 1: AWS-LC on `wasm32-unknown-emscripten`
+
+Builds and runs. Versions: `aws-lc-rs` 1.18.1 and `aws-lc-sys` 0.45.0 (the same
+`Cargo.lock` as `tools/mldsa-vectors`, minus the two crates the wasm harness does
+not use), Rust 1.97.1 (LLVM 22.1.6) with the `wasm32-unknown-emscripten`
+target, Emscripten 6.0.12 installed from the `emsdk` repository.
+
+Method. A minimal binary crate depending on `aws-lc-rs` with
+`default-features = false, features = ["aws-lc-sys"]`, exporting one C function
+that calls `UnparsedPublicKey::new(&ML_DSA_65, pk).verify(msg, sig)`. Built with
+`cargo build --release --target wasm32-unknown-emscripten`, linker arguments
+`-sEXPORTED_FUNCTIONS=_mldsa_verify,_malloc,_free -sEXPORTED_RUNTIME_METHODS=HEAPU8
+-sMODULARIZE=1 -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH=1`. The build
+compiles the C code of AWS-LC with `emcc`; no change to
+`aws-lc-sys` was needed. Output: one `.wasm` file of 778,381 bytes and one
+JavaScript loader of 56,046 bytes (default `-O3`; no attempt was made to
+shrink them). The loader was run in Node and in both browsers; the browsers
+loaded it from a page and called the export for each input.
+
+What did not work first. With Emscripten 3.1.68, the version the Rust platform
+page for this target names
+([platform support](https://doc.rust-lang.org/rustc/platform-support/wasm32-unknown-emscripten.html)),
+the C code of AWS-LC compiled but the final link failed in `wasm-opt`:
+`Unknown option '--enable-bulk-memory-opt'`. Emscripten 6.0.12 (the version
+`emsdk` listed as the recommended one on that day) links without error, with one
+deprecation warning about `-sWASM_BIGINT` that Rust's link line passes. Use a
+clean build directory when changing the Emscripten version: a cached build of the
+C objects survives a change of `emcc`.
+
+What this path means for a trust path. It keeps AWS-LC (C code, so it is the same
+code base as the native option, with the open points above: `aws-lc-sys` is
+pre-1.0 and the FIPS status for ML-DSA is not confirmed). It adds the
+Emscripten toolchain and its generated JavaScript loader to what a reader must
+trust and review, and a page that loads WebAssembly needs a
+Content-Security-Policy that allows it (`'wasm-unsafe-eval'`). Whether two
+builds of the module give the same bytes was not tested; #29 requires that.
+
+### Path 2: native ML-DSA in WebCrypto
+
+The WICG draft
+[Modern Algorithms in the Web Cryptography API](https://wicg.github.io/webcrypto-modern-algos/)
+defines `ML-DSA-65`, the key formats `raw-public`, `spki` and `jwk` (key type
+`AKP`) and `SubtleCrypto.supports()`.
+
+Chrome 155.0.8059.39, default settings, no flag: `SubtleCrypto.supports("verify",
+"ML-DSA-65")` and `supports("importKey", "ML-DSA-65")` return `true`.
+`importKey` succeeds with `raw-public`, with `spki` (the 1,952-byte key wrapped
+in a SubjectPublicKeyInfo with OID 2.16.840.1.101.3.4.3.18) and with `jwk`
+(`kty: "AKP"`). `crypto.subtle.verify({name: "ML-DSA-65"}, ...)` gave the
+required verdict in 50 of 50 signature verdicts. This passes without any
+experimental flag. Which cryptographic library Chrome uses for it was not
+checked here. Only version 155 was tested, not the first version that ships it.
+
+Firefox 153.4.0esr, default settings: `SubtleCrypto.supports` does not exist
+(`undefined`). `importKey` with `raw-public` throws `SyntaxError: An invalid or
+illegal string was specified` (the format is not accepted); with `spki` and with
+`jwk` it throws `NotSupportedError: Operation is not supported`. All 50 verify
+attempts therefore failed. No experimental setting was found: a search of the
+`libxul.so` of this build for the strings `ML-DSA`, `mldsa` and `dilithium` found
+none (the same library does contain ML-KEM preference text), while the NSS library
+shipped with it does contain ML-DSA. That does not prove that no preference
+exists; it shows that the browser engine of this build has no ML-DSA name in it.
+Fail.
+
+Node 24.15.0 (OpenSSL 3.5.5, `process.versions.openssl`) supports `ML-DSA-65` in
+`crypto.subtle` with `raw-public` and prints an `ExperimentalWarning`; 50 of 50
+verdicts and 47 of 47 cases agree. It is recorded as context only: it is backed
+by OpenSSL, the library the reference script uses, so it is not an independent
+implementation for the purpose of #25 (see the
+[Node documentation](https://nodejs.org/docs/latest-v24.x/api/webcrypto.html)).
+
+Safari: not tested (not available for this evaluation).
+
+Consequence for a public page. A page that relies on native WebCrypto verifies in
+Chrome 155 and fails in Firefox 153 ESR, so it cannot be the only verification
+path. It could be used as a second, independent check next to path 1 or only
+where `SubtleCrypto.supports("verify", "ML-DSA-65")` is true; that is a design
+decision for #25, not a result of this test.
+
+### Updated recommendation for #25
+
+- Path 1 passes the criterion on every runtime tested (Node, Chrome 155,
+  Firefox 153 ESR): 47 of 47 checked cases. The technical blocker recorded above
+  ("no candidate documents `wasm32-unknown-unknown`") is removed for #25 by this
+  route, so #25 does not have to stay on hold for lack of an implementation.
+- The remaining questions are decisions, not findings: whether `aws-lc-sys`
+  (pre-1.0) and an Emscripten-generated loader are acceptable in the trust path
+  under the policy above; a reproducible build of the module (not tested); and
+  the size of the artefact (about 830 KB before compression). The decision on
+  #25 therefore stays with the maintainers; this document does not make it.
+- Path 2 does not pass (Firefox 153 ESR fails, Safari not tested). Native
+  WebCrypto is not a substitute for path 1 today. Re-check when Firefox ships
+  `ML-DSA` in WebCrypto.
+- #29 (a shared Rust core for the CLI and the browser) is not affected: the
+  addendum tested only the signature primitive, not the canonical encoders,
+  freshness, revocation or any other check of the verifier.
+
+### Reproducing
+
+Run `tools/mldsa-vectors` natively with a small patch that writes out the inputs
+(not committed). Build the harness crate described above with the pinned
+versions. Serve a directory with the loader, the `.wasm`, the inputs and the page
+from `127.0.0.1`, and open it with the browsers listed, with a new profile each.
+For path 2 call `crypto.subtle.importKey("raw-public", pk, {name: "ML-DSA-65"},
+false, ["verify"])` and `crypto.subtle.verify({name: "ML-DSA-65"}, key, sig, msg)`.
+
 ## Not confirmed
 
 - Any external audit report for any candidate's ML-DSA code.
@@ -162,3 +314,8 @@ other candidates were not run: none of them meets the stability policy.
 - `wasm32-unknown-unknown` support as a stated claim by any project.
 - The ML-DSA-65 API of `pqcrypto-*` and `oqs` at the docs.rs level; both are
   excluded for other reasons.
+- Added 2026-10-13: whether two builds of the Emscripten module of `aws-lc-rs`
+  give the same bytes; any Safari result; which library Chrome uses for ML-DSA
+  in WebCrypto; the first Chrome version that ships it; whether Firefox has a
+  preference that enables ML-DSA in WebCrypto (none was found in the 153 ESR
+  build).
