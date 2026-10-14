@@ -1,0 +1,15 @@
+{
+  "note": "Inputs on which the page once gave a weaker verdict than the script, or that probe a rule the 118 vectors do not. {v1} is tests/vectors/v1, {fx} is tests/web/differential/fixtures (signed with the TEST-ONLY keys of v1). Every case is run through the page's logic and through the real script; exit code, verdict and reason code must be identical.",
+  "defaults": ["--jwks", "{v1}/keys/test-only-issuer-jwks.json", "--expect-slug", "fixture-org", "--expect-issuer", "https://issuer.test", "--now", "1767225900"],
+  "cases": [
+    { "id": "h0-extra-header-member", "why": "control: a header member beyond alg, kid, typ", "args": ["--attestation", "{fx}/h0-extra.json"] },
+    { "id": "h1-nested-duplicate-in-header", "why": "a member repeated inside a nested object of the protected header: the script's hook sees every object", "args": ["--attestation", "{fx}/h1-nested-dup-header.json"] },
+    { "id": "c1-bigint-in-wrapper", "why": "an integer of more than 4,300 digits in the attestation document", "args": ["--attestation", "{fx}/c1-bigint-att.json"] },
+    { "id": "c2-bigint-in-jwks", "why": "the same in the key set", "args": ["--attestation", "{v1}/attestations/valid.json"], "defaults": ["--jwks", "{fx}/c2-bigint-jwks.json", "--expect-slug", "fixture-org", "--expect-issuer", "https://issuer.test", "--now", "1767225900"] },
+    { "id": "c3-lone-high-surrogate-in-status", "why": "an unpaired high surrogate escape in the status document: jsonq refuses it", "args": ["--attestation", "{v1}/attestations/valid.json", "--status-list", "--status", "{fx}/c3-highsurrogate-status.json", "--status-keys", "{v1}/keys/test-only-status-jwks.json"] },
+    { "id": "c4-deep-status", "why": "nesting that weighs more than 256 in the status document: jsonq refuses it", "args": ["--attestation", "{v1}/attestations/valid.json", "--status-list", "--status", "{fx}/c4-deep-status.json", "--status-keys", "{v1}/keys/test-only-status-jwks.json"] },
+    { "id": "c5-bigint-in-status", "why": "an integer of more than 4,300 digits in the status document", "args": ["--attestation", "{v1}/attestations/valid.json", "--status-list", "--status", "{fx}/c5-bigint-status.json", "--status-keys", "{v1}/keys/test-only-status-jwks.json"] },
+    { "id": "c6-bigint-in-status-keys", "why": "the same in the status key set", "args": ["--attestation", "{v1}/attestations/valid.json", "--status-list", "--status", "{v1}/status-lists/empty.json", "--status-keys", "{fx}/c6-bigint-statuskeys.json"] },
+    { "id": "bidi-in-organisation-name", "why": "a genuine document whose signed organisation name holds a right-to-left override: it verifies; the page must not display the raw character (page check)", "args": ["--attestation", "{fx}/bidi.json"], "defaults": ["--jwks", "{v1}/keys/test-only-issuer-jwks.json", "--expect-slug", "fixture-org", "--expect-issuer", "https://issuer.test", "--now", "1791937200"] }
+  ]
+}

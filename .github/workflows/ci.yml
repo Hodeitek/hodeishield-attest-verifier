@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh tests/web-vectors.sh tests/web-static.sh tests/web-bundle.sh tools/verify-page/build.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh tests/web-vectors.sh tests/web-static.sh tests/web-bundle.sh tests/web-differential.sh tools/verify-page/build.sh tools/verify-page/check.sh
 
   # Semgrep's bash parser is stricter than bash: one construct it does not read
   # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
@@ -135,6 +135,29 @@ jobs:
           firefox --version
       - name: tests/web-vectors.sh
         run: bash tests/web-vectors.sh --wasm "$RUNNER_TEMP/wasm"
+
+  # The page's logic and the real script, on the same arguments, must agree on exit
+  # code, verdict and reason code, on inputs the 118 vectors do not cover. It needs
+  # what the script needs (OpenSSL 3.5), so it runs in the Debian container.
+  web-differential:
+    name: web page and script agree (differential)
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the script's dependencies, and Node for the page's logic
+        run: bash .github/scripts/install-test-deps.sh nodejs
+      - name: Fetch the module
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mldsa-wasm
+          path: ${{ runner.temp }}/wasm
+      - name: tests/web-differential.sh
+        run: bash tests/web-differential.sh --wasm "$RUNNER_TEMP/wasm"
 
   tests:
     name: offline tests (valid + rejection)

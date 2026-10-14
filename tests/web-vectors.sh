@@ -56,8 +56,7 @@ echo '# vectors v1: the files match SHA256SUMS'
 
 echo '# assembling the page as the release bundle does'
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1792000000}" bash "$ROOT/tools/verify-page/build.sh" "$WASM_DIR" "$WORK/page" > /dev/null
-( cd "$WORK/page" && sha256sum --quiet -c MANIFEST.sha256 ) || { echo 'not ok - the manifest of the page does not match its files' >&2; exit 1; }
-echo "ok - the manifest lists $(wc -l < "$WORK/page/MANIFEST.sha256" | tr -d ' ') files and matches them"
+bash "$ROOT/tools/verify-page/check.sh" "$WORK/page" || exit 1
 
 rc=0
 IFS=, read -r -a LIST <<< "$BROWSERS"
