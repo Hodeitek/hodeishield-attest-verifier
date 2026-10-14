@@ -50,7 +50,12 @@ The verifier gains an in-browser page, built and tested but not deployed.
   page is not served anywhere until the deployment described in
   `docs/security/browser-verifier.md` is enabled.
 - `tools/mldsa-wasm/expected.sha256` pins the bytes of the module; the CI and
-  release builds fail if a build gives other bytes.
+  release builds fail if a build gives other bytes, and `tools/verify-page/check.sh`
+  also checks that `mldsa_wasm.b64.js`, the file the page runs, decodes to them.
+- `tests/web-differential.sh`: the page's logic and the real script must agree on
+  exit code, verdict and reason code on inputs the 118 vectors do not cover (a
+  duplicate member nested in the protected header, an integer of more than 4,300
+  digits, the refusals of the script's status-list reader).
 
 ### Changed
 - `VERIFIER_VERSION` is 1.6.0 (the page carries the same number).

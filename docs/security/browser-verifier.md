@@ -196,9 +196,22 @@ another message) and gives no verdict if it answers any of them wrongly.
   `reason-codes.md`: `wasm_mldsa65_available` (pass), `engine_unavailable` (the
   module did not start, exit 2) and `internal_error` (anything unexpected, exit 2:
   the page never turns an exception into a pass).
-- Strict JSON is a little stricter than Python's reader: `NaN` and `Infinity` are
-  refused, and nesting deeper than 1,000 levels is refused. Both end in "could not
-  check" or a refused document, never a pass.
+- The page's JSON reader is the script's, not only a stricter one. It keeps the
+  members in order and sees repeated ones (`JSON.parse` cannot). It refuses what
+  Python's reader refuses (a byte order mark, text after the value, a raw control
+  character, invalid UTF-8) and, as Python 3.11 and later does, an integer of more
+  than 4,300 digits, with the reason code and exit code the script gives for that
+  input (`attestation_unparseable`, `not_strict_json`, `status_unknown_not_strict_json`
+  for the document, the key set, the status list and its key set). It is stricter
+  than Python in two ways: `NaN` and `Infinity` are refused, and so is nesting deeper
+  than 1,000 levels; both end in "could not check" or a refused document, never a
+  pass.
+- In `--status-list` mode the script reads the list with its own reader (`jsonq`),
+  which refuses two more things: a string or member name holding an unpaired high
+  surrogate escape (`\ud800`), and nesting that weighs more than 256 (an array or
+  object costs 1, one that is the value of an object member costs 2, summed along
+  the open containers). The list is then UNKNOWN (exit 3,
+  `status_unknown_malformed_document`). The page makes the same two refusals.
 
 ### Differences between the script and its documentation
 
@@ -218,8 +231,10 @@ follows the script.
 3. The attestation's `alg`, `typ` and `kid` are read from the decoded header with
    `sed`, as text, and not parsed as JSON: the last occurrence of the member on the
    first line that has one is the one used. The closed-set check parses the header
-   as JSON, so the two readings can differ for a header that repeats a member (the
-   set check then fails it).
+   as JSON with a hook that sees every object, nested ones included, so a member
+   repeated at any depth fails it (`header_not_allowed`, exit 1). The page does the
+   same (an earlier version of it looked only at the top level and said "verified"
+   for such a header; `tests/web/differential` covers it).
 
 ## Browsers
 
@@ -303,6 +318,18 @@ manifest inside the archive is independent of that.
   gives every file its own origin, so the frame cannot be inspected: the vectors
   run on the page's scripts and module loaded from disk, and a screenshot of the
   real `index.html` confirms that it starts under its policy.
+- `bash tests/web-differential.sh [--wasm DIR]`: the page's logic and the real script
+  on the same arguments, which must agree on exit code, verdict and reason code, for
+  inputs the 118 vectors do not cover (`tests/web/differential/cases.json`; the
+  fixtures are signed with the test-only keys of the vectors). It needs what the
+  script needs, so CI runs it in the Debian container.
+- `bash tools/verify-page/check.sh PAGE_DIR`: the manifest matches, the module is the
+  one pinned in `tools/mldsa-wasm/expected.sha256`, and `mldsa/mldsa_wasm.b64.js`, the
+  file the page actually runs, decodes to exactly that module. `tests/web-vectors.sh`
+  and `release.yml` run it.
+- The browser page checks also cover a result going stale (changing any file or
+  option takes a shown result off the page) and the display of control and
+  direction characters in signed or supplied text (shown as "?").
 - `bash tests/web-static.sh`: the policy and the code, and the six languages.
 - `bash tests/web-bundle.sh`: the bundle.
 - CI runs them on every pull request (`wasm-build`, `web-static`, `web-vectors`).
