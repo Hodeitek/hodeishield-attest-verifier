@@ -20,7 +20,7 @@
   var HV = root.HV || (root.HV = {});
   var B = HV.base, J = HV.json, C = HV.canon;
 
-  var VERSION = "1.6.0";
+  var VERSION = "1.6.1";
   var NOW_MAX = 253402300799;
   var MAX_TTL_SECONDS = 3600;
   var POSTURE_CLOCK_SKEW_SECONDS = 300;
