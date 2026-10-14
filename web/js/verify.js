@@ -65,7 +65,7 @@
     if (v === null || v === undefined) return "null";
     if (v === true) return "true";
     if (v === false) return "false";
-    if (J.isNum(v)) return v.raw;
+    if (J.isNum(v)) return v.pyText();
     if (typeof v === "string") return JSON.stringify(v);
     if (Array.isArray(v)) return "[" + v.map(dumpValue).join(",") + "]";
     return "{" + v.keys().map(function (k) { return JSON.stringify(k) + ":" + dumpValue(v.get(k)); }).join(",") + "}";

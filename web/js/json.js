@@ -35,6 +35,37 @@
   function JNum(raw) { this.raw = raw; }
   JNum.prototype.isInt = function () { return /^-?(0|[1-9][0-9]*)$/.test(this.raw); };
 
+  // The text of a number after the script's reader of the status list (jsonq) has
+  // rewritten it with Python's Decimal and str() (JSONQ_PY, num()): leading zeros
+  // gone, an exponent of 0 gone ("7e0" is "7", "0.7e1" is "7"), a fraction kept
+  // ("70e-1" is "7.0"), a positive exponent in scientific form ("1e2" is "1E+2").
+  // Python's json then reads that text back: plain digits are an int, anything else
+  // a float. The context of jsonq has a huge precision and an exponent range of
+  // +-999999999: beyond it a number becomes the largest double or a zero.
+  JNum.prototype.pyText = function () {
+    var m = /^(-?)([0-9]*)(?:\.([0-9]*))?(?:[eE]([+-]?[0-9]+))?$/.exec(this.raw);
+    if (!m) return this.raw;
+    var sign = m[1], frac = m[3] || "", exp = (m[4] ? parseInt(m[4], 10) : 0) - frac.length;
+    var coef = (m[2] + frac).replace(/^0+/, "") || "0";
+    var adjusted = exp + coef.length - 1;
+    if (coef !== "0" && adjusted > 999999999) return sign + "1.7976931348623157e+308";
+    if (exp < -1147483646) return sign + "0E-1147483646";
+    var out;
+    if (exp <= 0 && adjusted >= -6) {
+      if (exp === 0) out = coef;
+      else if (coef.length > -exp) out = coef.slice(0, coef.length + exp) + "." + coef.slice(coef.length + exp);
+      else out = "0." + "0".repeat(-exp - coef.length) + coef;
+    } else {
+      out = coef.charAt(0) + (coef.length > 1 ? "." + coef.slice(1) : "") + "E" + (adjusted >= 0 ? "+" : "-") + Math.abs(adjusted);
+    }
+    return sign + out;
+  };
+  // the integer value after that round trip, or null when Python's json would read a float
+  JNum.prototype.pyInt = function () {
+    var t = this.pyText();
+    return /^-?[0-9]+$/.test(t) ? BigInt(t) : null;
+  };
+
   var NUM = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
 
   function parseText(t) {
@@ -226,5 +257,24 @@
     return false;
   }
 
-  HV.json = { hasDuplicateMember: hasDuplicateMember, jsonqRefuses: jsonqRefuses, parse: parse, parseText: parseText, JObj: JObj, JNum: JNum, isObj: isObj, isNum: isNum, duplicates: duplicates, vis: vis };
+  // Python 3.11 and later refuses to read back an integer of more than 4,300 digits:
+  // after the rewrite above, an exponent that makes a number a plain integer can
+  // make it too long ("1...1e0", 4,301 ones). True when any number of the value does.
+  function hasHugeIntegerAfterRewrite(root) {
+    var stack = [root], v, i, t;
+    while (stack.length) {
+      v = stack.pop();
+      if (isNum(v)) {
+        t = v.pyText();
+        if (/^-?[0-9]+$/.test(t) && t.replace("-", "").length > MAX_INT_DIGITS) return true;
+      } else if (Array.isArray(v)) {
+        for (i = 0; i < v.length; i++) stack.push(v[i]);
+      } else if (isObj(v)) {
+        for (i = 0; i < v.entries.length; i++) stack.push(v.entries[i][1]);
+      }
+    }
+    return false;
+  }
+
+  HV.json = { hasHugeIntegerAfterRewrite: hasHugeIntegerAfterRewrite, hasDuplicateMember: hasDuplicateMember, jsonqRefuses: jsonqRefuses, parse: parse, parseText: parseText, JObj: JObj, JNum: JNum, isObj: isObj, isNum: isNum, duplicates: duplicates, vis: vis };
 })(typeof globalThis !== "undefined" ? globalThis : this);

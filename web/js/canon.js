@@ -139,12 +139,14 @@
   // CANON_STATUS_PY. `list` is the statusList object.
   function statusBytes(L) {
     if (!J.isObj(L)) throw new Error("canonical: statusList must be an object");
+    // the script re-reads the list after rewriting its numbers (see JNum.pyText)
+    if (J.hasHugeIntegerAfterRewrite(L)) throw new Error("canonical: an integer of more than 4300 digits");
     if (member(L, "docVersion") !== "attest.statuslist.v1") throw new Error("canonical: unsupported docVersion");
     var truncated = member(L, "truncated");
     if (typeof truncated !== "boolean") throw new Error("canonical: truncated must be a boolean");
     var seq = member(L, "seq");
-    if (!J.isNum(seq) || !seq.isInt()) throw new Error("canonical: seq must be an integer in [0, 2^63)");
-    var seqN = BigInt(seq.raw);
+    var seqN = J.isNum(seq) ? seq.pyInt() : null;
+    if (seqN === null) throw new Error("canonical: seq must be an integer in [0, 2^63)");
     if (seqN < 0n || seqN >= (1n << 63n)) throw new Error("canonical: seq must be an integer in [0, 2^63)");
     function entries(name, idKey) {
       var v = need(L, name);
