@@ -53,7 +53,8 @@ function dataScript() {
   // fixtures of the differential test (signed with the TEST-ONLY keys of v1), as "fx/<name>"
   const fxdir = path.join(here, "differential/fixtures");
   for (const n of fs.readdirSync(fxdir)) if (n.endsWith(".json")) files["fx/" + n] = fs.readFileSync(path.join(fxdir, n)).toString("base64");
-  return "globalThis.HVT_CASES=" + JSON.stringify(manifest.cases) + ";globalThis.HVT_FILES=" + JSON.stringify(files) + ";";
+  const diff = JSON.parse(fs.readFileSync(path.join(here, "differential/cases.json"), "utf8"));
+  return "globalThis.HVT_CASES=" + JSON.stringify(manifest.cases) + ";globalThis.HVT_FILES=" + JSON.stringify(files) + ";globalThis.HVT_DIFF=" + JSON.stringify(diff) + ";";
 }
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",

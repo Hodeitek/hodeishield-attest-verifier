@@ -212,6 +212,16 @@ another message) and gives no verdict if it answers any of them wrongly.
   object costs 1, one that is the value of an object member costs 2, summed along
   the open containers). The list is then UNKNOWN (exit 3,
   `status_unknown_malformed_document`). The page makes the same two refusals.
+- That reader also rewrites every number of the `statusList` with Python's `Decimal`
+  (`7e0` becomes `7`, `0.7e1` becomes `7`, `70e-1` becomes `7.0`, `1e2` becomes
+  `1E+2`) before the canonical encoder reads the list back with Python's `json`. So
+  `"seq": 7e0` is the integer 7 for the script, and an integer written with an
+  exponent that makes it 4,301 digits long (`1...1e0`) is refused when it is read
+  back (exit 3, `status_unknown_encoding_failed`), even though its raw text is not a
+  plain integer. The page makes the same rewrite (`JNum.pyText`) and applies the same
+  integer test and the same limit. `tests/web/differential/cases.json` probes the
+  boundaries (4,300 against 4,301 digits; `e0`, `E+0`, `e1`, `e-1`, a fraction, a
+  negative number, a leading zero, the exponent limits of the decimal context).
 
 ### Differences between the script and its documentation
 
@@ -322,11 +332,18 @@ manifest inside the archive is independent of that.
   on the same arguments, which must agree on exit code, verdict and reason code, for
   inputs the 118 vectors do not cover (`tests/web/differential/cases.json`; the
   fixtures are signed with the test-only keys of the vectors). It needs what the
-  script needs, so CI runs it in the Debian container.
-- `bash tools/verify-page/check.sh PAGE_DIR`: the manifest matches, the module is the
-  one pinned in `tools/mldsa-wasm/expected.sha256`, and `mldsa/mldsa_wasm.b64.js`, the
-  file the page actually runs, decodes to exactly that module. `tests/web-vectors.sh`
-  and `release.yml` run it.
+  script needs, so CI runs it in the Debian container. It fails if the case list is
+  shorter than the committed minimum, if the script's own process exit status differs
+  from the exit code it reports, and if the script stops giving the result recorded in
+  `cases.json`; the browser runner then runs the same cases through the page in Chrome
+  and Firefox and compares them with those recorded results.
+- `bash tools/verify-page/check.sh PAGE_DIR`: the manifest matches and lists every
+  file, the module is the one pinned in `tools/mldsa-wasm/expected.sha256`, and
+  `mldsa/mldsa_wasm.b64.js`, the file the page actually runs, is byte for byte what
+  `tools/verify-page/b64js.sh` makes from that pinned module (so nothing can be
+  appended to it or added beside the module, even with the manifest made again).
+  `tests/web-bundle.sh` proves that a tampered copy fails. `tests/web-vectors.sh` and
+  `release.yml` run it.
 - The browser page checks also cover a result going stale (changing any file or
   option takes a shown result off the page) and the display of control and
   direction characters in signed or supplied text (shown as "?").

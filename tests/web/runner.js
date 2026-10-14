@@ -63,6 +63,31 @@
     });
   }
 
+  // The cases of tests/web/differential/cases.json through the page's logic, in this
+  // browser. The expected result of each is what the real script gives (the
+  // differential test run by tests/web-differential.sh checks that it still does).
+  function differentialWhy(w) {
+    var spec = HVT_DIFF, bad = [];
+    if (!spec.cases || spec.cases.length < spec.minimum) return "fewer cases than the minimum";
+    var enc = new TextEncoder(), dec = new TextDecoder();
+    spec.cases.forEach(function (c) {
+      try {
+        var gen = "gen/" + c.id + ".json", files = {};
+        var args = HVD.args(c, spec, { v1: "v1", fx: "fx", gen: gen });
+        HVT.filesOf(args).forEach(function (p) {
+          if (p.indexOf("v1/") === 0) files[p] = b64bytes(HVT_FILES[p.slice(3)], w);
+          else if (p === gen) files[p] = new w.Uint8Array(enc.encode(HVD.generate(dec.decode(b64bytes(HVT_FILES["status-lists/empty.json"])), c.generated)));
+          else files[p] = b64bytes(HVT_FILES[p], w);
+        });
+        var res = w.HV.verify(HVT.buildInput(args, files), w.HV.engine);
+        if (res.exit_code !== c.expect.exit || res.reason !== c.expect.reason) {
+          bad.push(c.id + ": exit " + res.exit_code + " " + res.reason + ", the script gives " + c.expect.exit + " " + c.expect.reason);
+        }
+      } catch (e) { bad.push(c.id + ": " + (e && e.message || e)); }
+    });
+    return bad.join("; ");
+  }
+
   function runVectors() {
     HVT_CASES.forEach(function (c) {
       var why;
@@ -131,6 +156,7 @@
         return "";
       });
     });
+    add("the crafted differential inputs give what the script gives", function () { return differentialWhy(win); });
     add("the engine self-check refuses a wrong engine", function () {
       if (win.HV.selfCheck({ verify: function () { return true; } })) return "accepted an engine that says yes to everything";
       if (win.HV.selfCheck({ verify: function () { return false; } })) return "accepted an engine that says no to everything";
@@ -362,6 +388,8 @@
         } catch (e) { why = "exception: " + (e && e.message || e); }
         result.cases.push({ id: c.id, ok: !why, why: why || "" });
       });
+      var dw = differentialWhy(window);
+      result.ui.push({ name: "the crafted differential inputs give what the script gives", ok: !dw, why: dw });
       result.direct = true;
     }).then(function () { finish(); }, function (e) { finish(String(e && e.message || e)); });
   }
