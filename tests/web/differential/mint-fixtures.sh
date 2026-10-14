@@ -53,29 +53,26 @@ att b10-split-lines.json '{"alg"
 "ML-DSA-65",
 '"$K,$T"'}'
 
-# a header nested deep (typ is an empty array inside N-1 more): at 1001 containers (N = 1000)
-# the reader still reads it, at 1002 it does not (no kid); an oversize one has a padding member
-# first. The text goes through a file, being too long for an argument.
-deep() {   # NAME DEPTH PAD [LEAF]
-  python3 -I - "$FX/.deep.txt" "$2" "$3" "${4:-}" <<'PY'
+# a header nested deep: typ is an empty array inside N-1 more, so the header is N+1 containers
+# deep. Up to 64 containers the reader reads it; one more and it does not (no kid). An oversize
+# one has a padding member first.
+deep() {   # NAME N PAD
+  python3 -I - "$FX/.deep.txt" "$2" "$3" <<'PY'
 import sys
 n, pad = int(sys.argv[2]), int(sys.argv[3])
 p = '"pad":"' + "x" * pad + '",' if pad else ""
-open(sys.argv[1], "w").write('{"alg":"ML-DSA-65",' + p + '"kid":"@KID@","typ":' + "[" * n + sys.argv[4] + "]" * n + "}")
+open(sys.argv[1], "w").write('{"alg":"ML-DSA-65",' + p + '"kid":"@KID@","typ":' + "[" * n + "]" * n + "}")
 PY
   att "$1" "@$FX/.deep.txt"
   rm -f "$FX/.deep.txt"
 }
-deep b11-deep-1000.json 1000 0
-deep b12-deep-1001.json 1001 0
-deep b13-deep-10000.json 10000 0
-deep b14-deep-100000.json 100000 0
-deep b15-oversize-deep-1000.json 1000 5000
-deep b16-oversize-deep-1001.json 1001 5000
-deep b17-oversize-deep-10000.json 10000 5000
-deep b18-oversize-deep-100000.json 100000 5000
-deep b19-leaf-999.json 999 0 1
-deep b20-leaf-1000.json 1000 0 1
+deep b11-deep-64-containers.json 63 0
+deep b12-deep-65-containers.json 64 0
+deep b13-deep-66-containers.json 65 0
+deep b14-deep-1001-containers.json 1000 0
+deep b15-oversize-deep-64-containers.json 63 5000
+deep b16-oversize-deep-65-containers.json 64 5000
+deep b17-oversize-deep-1001-containers.json 1000 5000
 
 # a byte that is not UTF-8 in the kid: edited into a signed document, so it is not signed
 python3 -I - "$FX/b7-kid-number.json" "$FX/b9-kid-invalid-utf8.json" <<'PY'

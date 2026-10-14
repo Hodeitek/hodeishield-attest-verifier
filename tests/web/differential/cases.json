@@ -948,11 +948,11 @@
    }
   },
   {
-   "id": "hdr-deep-1001-containers",
-   "why": "typ nested so that the header is 1001 containers deep (the last empty): still read, typ is not a string",
+   "id": "hdr-deep-64-containers",
+   "why": "a header 64 containers deep (typ is an empty array nested in 62 more): read, typ is not a string",
    "args": [
     "--attestation",
-    "{fx}/b11-deep-1000.json"
+    "{fx}/b11-deep-64-containers.json"
    ],
    "expect": {
     "exit": 1,
@@ -960,11 +960,11 @@
    }
   },
   {
-   "id": "hdr-deep-1002-containers",
-   "why": "one container deeper: too deep to read, so no kid",
+   "id": "hdr-deep-65-containers",
+   "why": "one container deeper: refused before the reader runs, so no kid",
    "args": [
     "--attestation",
-    "{fx}/b12-deep-1001.json"
+    "{fx}/b12-deep-65-containers.json"
    ],
    "expect": {
     "exit": 2,
@@ -972,11 +972,11 @@
    }
   },
   {
-   "id": "hdr-deep-10000",
-   "why": "typ nested 10,000 deep: no kid",
+   "id": "hdr-deep-66-containers",
+   "why": "two deeper: no kid",
    "args": [
     "--attestation",
-    "{fx}/b13-deep-10000.json"
+    "{fx}/b13-deep-66-containers.json"
    ],
    "expect": {
     "exit": 2,
@@ -984,11 +984,35 @@
    }
   },
   {
-   "id": "hdr-deep-100000",
-   "why": "typ nested 100,000 deep: no kid, and no dependence on the depth Python gives up at",
+   "id": "hdr-deep-1001-containers",
+   "why": "1001 containers deep: no kid, on any Python",
    "args": [
     "--attestation",
-    "{fx}/b14-deep-100000.json"
+    "{fx}/b14-deep-1001-containers.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-oversize-deep-64-containers",
+   "why": "a header over 4096 bytes, 64 containers deep: still fails for its size (1)",
+   "args": [
+    "--attestation",
+    "{fx}/b15-oversize-deep-64-containers.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_too_large"
+   }
+  },
+  {
+   "id": "hdr-oversize-deep-65-containers",
+   "why": "a header over 4096 bytes, 65 containers deep: no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b16-oversize-deep-65-containers.json"
    ],
    "expect": {
     "exit": 2,
@@ -997,70 +1021,10 @@
   },
   {
    "id": "hdr-oversize-deep-1001-containers",
-   "why": "a header over 4096 bytes, 1001 containers deep: still fails for its size (1)",
+   "why": "a header over 4096 bytes, 1001 containers deep: no kid",
    "args": [
     "--attestation",
-    "{fx}/b15-oversize-deep-1000.json"
-   ],
-   "expect": {
-    "exit": 1,
-    "reason": "header_too_large"
-   }
-  },
-  {
-   "id": "hdr-oversize-deep-1002-containers",
-   "why": "a header over 4096 bytes, one container deeper: no kid",
-   "args": [
-    "--attestation",
-    "{fx}/b16-oversize-deep-1001.json"
-   ],
-   "expect": {
-    "exit": 2,
-    "reason": "unknown_kid"
-   }
-  },
-  {
-   "id": "hdr-oversize-deep-10000",
-   "why": "a header over 4096 bytes, nested 10,000 deep: no kid",
-   "args": [
-    "--attestation",
-    "{fx}/b17-oversize-deep-10000.json"
-   ],
-   "expect": {
-    "exit": 2,
-    "reason": "unknown_kid"
-   }
-  },
-  {
-   "id": "hdr-oversize-deep-100000",
-   "why": "a header over 4096 bytes, nested 100,000 deep: no kid",
-   "args": [
-    "--attestation",
-    "{fx}/b18-oversize-deep-100000.json"
-   ],
-   "expect": {
-    "exit": 2,
-    "reason": "unknown_kid"
-   }
-  },
-  {
-   "id": "hdr-deep-leaf-at-limit",
-   "why": "a number at depth 1000 inside the nesting: read",
-   "args": [
-    "--attestation",
-    "{fx}/b19-leaf-999.json"
-   ],
-   "expect": {
-    "exit": 1,
-    "reason": "header_typ_invalid"
-   }
-  },
-  {
-   "id": "hdr-deep-leaf-past-limit",
-   "why": "a number at depth 1001: too deep, no kid",
-   "args": [
-    "--attestation",
-    "{fx}/b20-leaf-1000.json"
+    "{fx}/b17-oversize-deep-1001-containers.json"
    ],
    "expect": {
     "exit": 2,
@@ -1088,5 +1052,5 @@
    "{v1}/keys/test-only-status-jwks.json"
   ]
  },
- "minimum": 76
+ "minimum": 73
 }

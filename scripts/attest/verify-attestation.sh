@@ -2458,22 +2458,21 @@ import json, sys
 def no_constant(c): raise ValueError(c)
 def load(path, hook):
     s = open(path, encoding="utf-8").read()
-    # Nesting is limited here, the same everywhere (as in the page): no value deeper
-    # than 1000 containers (the top one is 0), so at most 1001 containers, the last
-    # one empty. The reader would otherwise give up at a depth that depends on the
-    # Python in use.
+    # Nesting is limited here, to 64 containers (the page does the same): a header
+    # holds three strings, so depth carries nothing, and the check is made before the
+    # reader runs, so that no Python version can give up first (the depth at which
+    # its reader raises RecursionError varies with the version).
     depth, quoted, escaped = 0, False, False
     for c in s:
         if quoted:
             if escaped: escaped = False
             elif c == "\\": escaped = True
             elif c == "\"": quoted = False
-        elif depth > 1000 and c not in " \t\r\n]}":
-            raise ValueError("too deep")
         elif c == "\"":
             quoted = True
         elif c in "[{":
             depth += 1
+            if depth > 64: raise ValueError("too deep")
         elif c in "]}":
             depth -= 1
     return json.loads(s, object_pairs_hook=hook, parse_constant=no_constant)

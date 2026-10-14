@@ -53,6 +53,23 @@
     }
     return v.replace(/\u0000/g, "\\x00");
   }
+  // The protected header is read with no more than 64 nested containers, as the script
+  // does (HEADER_PY): a header holds three strings, and the check is made before the reader
+  // runs. Throws, as a header that is not JSON does.
+  function parseHeader(bytes) {
+    var s = B.latin1(bytes), depth = 0, quoted = false, escaped = false, i, c;
+    for (i = 0; i < s.length; i++) {
+      c = s.charAt(i);
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (c === "\\") escaped = true;
+        else if (c === '"') quoted = false;
+      } else if (c === '"') quoted = true;
+      else if (c === "[" || c === "{") { if (++depth > 64) throw new Error("header nested too deep"); }
+      else if (c === "]" || c === "}") depth--;
+    }
+    return J.parse(bytes);
+  }
   function stripSpace(s) { return s.replace(/[ \t\n\v\f\r]/g, ""); }
   function stripTrailingNewlines(s) { return s.replace(/\n+$/, ""); }
   function isDigits(max, s) { return typeof s === "string" && new RegExp("^[0-9]{1," + max + "}$").test(s); }
@@ -298,7 +315,7 @@
         // --- 2. Header ---
         var members = "(not JSON)", ALG = "", TYP = "", hdr = null;
         try {
-          hdr = J.parse(headerBytes);
+          hdr = parseHeader(headerBytes);
           if (J.isObj(hdr)) {
             if (J.hasDuplicateMember(hdr)) members = "duplicated";
             else members = hdr.keys().sort().join(",");
@@ -307,7 +324,7 @@
         // alg, typ and kid come from the same parse; only for a header over the cap
         // (which already failed) they are read from the whole of it, as the script does
         var vals = hdr;
-        if (headerFull !== headerBytes) { try { vals = J.parse(headerFull); } catch (e4b) { vals = null; } }
+        if (headerFull !== headerBytes) { try { vals = parseHeader(headerFull); } catch (e4b) { vals = null; } }
         ALG = headerString(vals, "alg"); TYP = headerString(vals, "typ"); KID = headerString(vals, "kid");
         if (ALG === "ML-DSA-65") ok("header_alg_valid"); else bad("header_alg_invalid");
         if (TYP === "application/attest+jws") ok("header_typ_valid"); else bad("header_typ_invalid");

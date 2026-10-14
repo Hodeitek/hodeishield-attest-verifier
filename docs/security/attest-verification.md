@@ -213,7 +213,7 @@ decoded (`"ML\u002dDSA-65"` is `ML-DSA-65`, and a member name written with an
 escape is that member), and white space, line breaks included, may separate a
 member name, the colon and the value; a value that is not a string, or holds an unpaired
 surrogate, is not the constant it is compared with. A header that is not JSON, or is nested
-more than 1001 containers deep, has no `kid` to look a key up by.
+more than 64 containers deep, has no `kid` to look a key up by.
 
 **Every segment is base64url exactly.** A JWS segment, a `pub` and a status-list
 segment are checked against the alphabet `A-Z a-z 0-9 - _` before they are

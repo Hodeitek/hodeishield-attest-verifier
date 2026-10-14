@@ -94,7 +94,7 @@ Fixed.
   `alg` was written with an escape used to fail `header_alg_invalid`. A header
   that is not JSON (invalid UTF-8, a `NaN`) has no `kid` to look a key up by, so
   with a key set the run ends in `unknown_kid` (exit 2) where the pattern could
-  still find one; so does a header nested more than 1001 containers deep, a limit
+  still find one; so does a header nested more than 64 containers deep, a limit
   written into the script (the reader's own limit depends on the Python in use) and
   shared with the page. A header whose member name, colon and value sit on separate
   lines now verifies, where the line-by-line pattern missed it. The status list's
