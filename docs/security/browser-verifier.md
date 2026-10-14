@@ -122,7 +122,7 @@ and the setting is what counts.
 - A reader can prove that the files served are the files in the release, and
   that the release was built by this repository's release workflow at that tag.
 - It does **not** prove the page is correct. As with the script, read it. The
-  page must pass all 118 cases of `tests/vectors/v1` in headless Chrome and
+  page must pass all 136 cases of `tests/vectors/v1` in headless Chrome and
   Firefox before a release containing it is drafted (see [Tests](#tests)).
 - It does not protect a reader whose browser or network is already hostile:
   a page you load over the web can be replaced on the way. That is why the
@@ -184,7 +184,7 @@ another message) and gives no verdict if it answers any of them wrongly.
   asked for. The case `anchor-statement-older-than-verifier` of the vectors expects
   `anchor_statement_older`, the reason the script finds by reading the tag out of a
   verified certificate; the page gives `anchor_unverified` for it. Exit code and
-  verdict agree. This is the one reason-code difference of the 118 cases, and
+  verdict agree. This is the one reason-code difference of the 136 cases, and
   `tests/web/args.js` names it.
 - `--posture` (deprecated), `--json`, `--raw` and `--help` are about a terminal and
   are not offered. `--now` is not offered in the page (the library takes it, and
@@ -222,29 +222,6 @@ another message) and gives no verdict if it answers any of them wrongly.
   integer test and the same limit. `tests/web/differential/cases.json` probes the
   boundaries (4,300 against 4,301 digits; `e0`, `E+0`, `e1`, `e-1`, a fraction, a
   negative number, a leading zero, the exponent limits of the decimal context).
-
-### Differences between the script and its documentation
-
-Found while porting it. Where they differ, the script is the reference and the page
-follows the script.
-
-1. [reason-codes.md](reason-codes.md) describes `header_not_base64url`,
-   `signature_not_base64url` and `public_key_not_base64url` as "not base64url".
-   In the script, `b64url_decode` fails only when the length is 1 modulo 4. Any
-   other invalid input is decoded by `openssl base64 -d -A` as an empty string,
-   with success (measured with OpenSSL 3.5; spaces and line breaks are ignored,
-   leftover bits are ignored), and the run then fails later for another reason:
-   `signature_size_invalid` (exit 1), `header_alg_invalid`, or the key size.
-2. `public_key_size_invalid` is documented as exit 1. The script records it, then
-   builds the key for OpenSSL, which refuses a key of the wrong size, and the run
-   ends with `public_key_rejected` (exit 2).
-3. The attestation's `alg`, `typ` and `kid` are read from the decoded header with
-   `sed`, as text, and not parsed as JSON: the last occurrence of the member on the
-   first line that has one is the one used. The closed-set check parses the header
-   as JSON with a hook that sees every object, nested ones included, so a member
-   repeated at any depth fails it (`header_not_allowed`, exit 1). The page does the
-   same (an earlier version of it looked only at the top level and said "verified"
-   for such a header; `tests/web/differential` covers it).
 
 ## Browsers
 
@@ -317,7 +294,7 @@ manifest inside the archive is independent of that.
 
 ## Tests
 
-- `bash tests/web-vectors.sh [--wasm DIR]`: all 118 cases of `tests/vectors/v1`, with
+- `bash tests/web-vectors.sh [--wasm DIR]`: all 136 cases of `tests/vectors/v1`, with
   the fixed time of each case (`--now`), in headless Chrome and Firefox, from
   `http://127.0.0.1` and from disk, on the page as the bundle ships it. Each case
   must give the verdict, exit code and reason code of the case (with the one
@@ -330,7 +307,7 @@ manifest inside the archive is independent of that.
   real `index.html` confirms that it starts under its policy.
 - `bash tests/web-differential.sh [--wasm DIR]`: the page's logic and the real script
   on the same arguments, which must agree on exit code, verdict and reason code, for
-  inputs the 118 vectors do not cover (`tests/web/differential/cases.json`; the
+  inputs the 136 vectors do not cover (`tests/web/differential/cases.json`; the
   fixtures are signed with the test-only keys of the vectors). It needs what the
   script needs, so CI runs it in the Debian container. It fails if the case list is
   shorter than the committed minimum, if the script's own process exit status differs
@@ -356,13 +333,13 @@ manifest inside the archive is independent of that.
 - CI runs them on every pull request (`wasm-build`, `web-static`, `web-vectors`).
 
 Result, 2026-10-14, Chrome 155.0.8059.39 and Firefox 153.4.0esr on Linux, with the
-module of `tools/mldsa-wasm` (`mldsa_wasm.wasm` SHA-256 `4a3c6a43...87da`): 118 of
-118 cases, from http and from disk, in both browsers.
+module of `tools/mldsa-wasm` (`mldsa_wasm.wasm` SHA-256 `4a3c6a43...87da`): 136 of
+136 cases, from http and from disk, in both browsers.
 
 ## Enabling the deployment (one time)
 
 A repository administrator does this once, and only after the page passes all
-118 vectors and the release workflow builds the archive. The order matters.
+136 vectors and the release workflow builds the archive. The order matters.
 
 1. Verify `hodeishield.com` for the GitHub organisation (organisation settings,
    Pages, Verified domains; a DNS TXT record). This step has no API.
@@ -407,7 +384,7 @@ it works only for tags that already contain `.github/workflows/pages.yml`.
 ## Status
 
 Built, not deployed. The page, the bundle step of `release.yml` and the web tests
-exist, and the page passes all 118 vectors in Chrome and Firefox. The deployment
+exist, and the page passes all 136 vectors in Chrome and Firefox. The deployment
 workflow is committed but inert (`PAGES_ENABLED` is not set), and the first release
 that carries `verify-page-<tag>.tar.gz` is the next one after this change. Nothing
 is served at `verify.hodeishield.com` until a repository administrator has done

@@ -65,41 +65,32 @@
 
   // --- base64url ------------------------------------------------------------
   var ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  var LOOKUP = (function () {
+  // b64url_decode of the script: strict base64url (RFC 4648 section 5), unpadded.
+  // Only A-Z a-z 0-9 - _ (no padding, no + or /, no space or line break), a length
+  // that is not 1 modulo 4, and no bits left over in the last character, so that
+  // the input is exactly what b64urlEncode writes for the bytes it decodes to.
+  // Anything else gives null, which the callers turn into the segment's
+  // *_not_base64url reason code.
+  var URL_LOOKUP = (function () {
     var t = new Int16Array(256).fill(-1);
-    for (var i = 0; i < 64; i++) t[ALPHA.charCodeAt(i)] = i;
+    for (var i = 0; i < 62; i++) t[ALPHA.charCodeAt(i)] = i;
+    t[45] = 62; t[95] = 63; // - and _
     return t;
   })();
-
-  // b64url_decode of the script. It translates - and _, pads by length, and hands
-  // the result to `openssl base64 -d -A`. Two behaviours are copied on purpose,
-  // both measured with OpenSSL 3.5:
-  //  - a length of 1 modulo 4 is a failure (the script returns 1): returns null;
-  //  - anything else OpenSSL cannot decode (a stray character, padding in the
-  //    wrong place) is NOT a failure there: it writes nothing and succeeds, so
-  //    the result is an EMPTY byte string. Spaces and line breaks are ignored,
-  //    bits left over in the last character are ignored.
-  // The callers then see an empty header, key or signature and fail on that.
   function b64urlDecode(str) {
-    var s = str.replace(/-/g, "+").replace(/_/g, "/");
-    var rem = s.length % 4;
+    var n = str.length, rem = n % 4, i, v;
     if (rem === 1) return null;
-    if (rem === 2) s += "=="; else if (rem === 3) s += "=";
-    s = s.replace(/[ \t\n\r]/g, "");
-    var empty = new Uint8Array(0);
-    if (s.length % 4 !== 0) return empty;
-    var pad = 0, end = s.length;
-    if (s.charAt(end - 1) === "=") { pad++; end--; }
-    if (end > 0 && s.charAt(end - 1) === "=") { pad++; end--; }
-    var out = new Uint8Array((s.length / 4) * 3 - pad);
-    var o = 0, acc = 0, bits = 0, i, v;
-    for (i = 0; i < end; i++) {
-      v = LOOKUP[s.charCodeAt(i) & 255];
-      if (s.charCodeAt(i) > 255 || v < 0) return empty;
-      acc = (acc << 6) | v; bits += 6;
+    for (i = 0; i < n; i++) {
+      v = str.charCodeAt(i);
+      if (v > 255 || URL_LOOKUP[v] < 0) return null;
+    }
+    var out = new Uint8Array(((n - rem) / 4) * 3 + (rem === 0 ? 0 : rem - 1));
+    var o = 0, acc = 0, bits = 0;
+    for (i = 0; i < n; i++) {
+      acc = (acc << 6) | URL_LOOKUP[str.charCodeAt(i)]; bits += 6;
       if (bits >= 8) { bits -= 8; out[o++] = (acc >> bits) & 255; acc &= (1 << bits) - 1; }
     }
-    if (o !== out.length) return empty;
+    if (acc !== 0) return null; // non-canonical: bits left over in the last character
     return out;
   }
   function b64urlEncode(bytes) {

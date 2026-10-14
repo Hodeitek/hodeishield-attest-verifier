@@ -1290,16 +1290,16 @@ LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter in --expect-kid
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'ééééééééééééééééééééé'
 LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter among valid characters is a usage error (2) under $KID_LOCALE" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAAéA'
-# The protected header is read in the C locale too: a header kid holding a byte
-# that is not valid UTF-8 is read and shown, escaped, under a UTF-8 locale as
-# under C (it used to read as an empty kid there).
+# The protected header is read as JSON, which is UTF-8: a header holding a byte
+# that is not valid UTF-8 is not JSON, so its kid reads as empty, and it reads the
+# same under a UTF-8 locale as under C.
 edit "$T/att.json" "$T/kid-ff.json" '
 import base64
 h, p, s = d["attestation"]["signature"].split(".")
 raw = base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)).replace(b"\"kid\":\"", b"\"kid\":\"\xff", 1)
 d["attestation"]["signature"] = ".".join([base64.urlsafe_b64encode(raw).rstrip(b"=").decode(), p, s])'
 for kid_loc in C "$KID_LOCALE"; do
-  LC_ALL="$kid_loc" expect 2 "no key in this JWKS carries kid '\\xff$ISSUER_KID'" "a header kid with a byte that is not UTF-8 is read the same under $kid_loc (2)" -- \
+  LC_ALL="$kid_loc" expect 2 "no key in this JWKS carries kid ''" "a header with a byte that is not UTF-8 has no readable kid, the same under $kid_loc (2)" -- \
     --attestation "$T/kid-ff.json" "${COMMON[@]}"
 done
 
@@ -2386,7 +2386,7 @@ PROBE2="$T/probe-header-verifier.sh"
 "$PYBIN" -I - "$VERIFIER" "$PROBE2" "$T/probe-header.json" <<'PY'
 import sys
 t = open(sys.argv[1]).read()
-anchor = 'TYP="$(header_field "$WORKDIR/header.json" typ)"\n'
+anchor = 'printf \'        %s\\n\' "$(esc "$(cat "$WORKDIR/header.json")")"\n'
 assert t.count(anchor) == 1
 open(sys.argv[2], "w").write(t.replace(anchor, anchor + 'json_emit_bash 0 attestation verified > "%s"\n' % sys.argv[3]))
 PY
@@ -2411,6 +2411,218 @@ PATH="$NOPY" jexpect 2 'without python3: exit 2, a valid object, no attested con
 
 export PATH="$PATH_BEFORE_STUB"
 unset COSIGN_STUB_LOG
+
+# --- base64url is strict ------------------------------------------------------------
+# A segment of a JWS, a key and a status-list segment are base64url exactly: the
+# alphabet A-Z a-z 0-9 - _ and nothing else (no +, no /, no =, no space), a length
+# that is not 1 modulo 4, and no bits left over in the last character. Each fault is
+# "could not check" under the reason code of its segment, never a quiet empty value
+# that fails later under another one.
+echo '# strict base64url'
+
+# jws_edit IN OUT PYTHON — change the segments h, p, s of the attestation's signature
+jws_edit() {
+  edit "$1" "$2" '
+h, p, s = d["attestation"]["signature"].split(".")
+'"$3"'
+d["attestation"]["signature"] = ".".join([h, p, s])'
+}
+# jwks_pub IN OUT PYTHON — change the `pub` of the first key (`pub`, as text)
+jwks_pub() {
+  edit "$1" "$2" '
+pub = d["keys"][0]["pub"]
+'"$3"'
+d["keys"][0]["pub"] = pub'
+}
+B64ARGS=(--expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW")
+
+# the header segment
+for variant in 'Q!JD' 'Q*J' 'h[:10] + "+" + h[11:]' 'h[:10] + "/" + h[11:]' 'h + "=="' 'h[:10] + "é" + h[11:]'; do
+  case "$variant" in
+    Q*) py="h = '$variant'" ;;
+    *) py="h = $variant" ;;
+  esac
+  jws_edit "$T/att.json" "$T/b64-header.json" "$py"
+  jexpect 2 "a header segment of $variant is \"could not check\" (2), header_not_base64url" \
+    'o["reason"] == "header_not_base64url" and o["verdict"] == "could_not_check"' -- \
+    --attestation "$T/b64-header.json" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+done
+# the signature segment
+for variant in 's[:100] + "+" + s[101:]' 's[:100] + "/" + s[101:]' 's + "=="' 's[:100] + "!" + s[101:]' 's[:100] + "." + s[101:]'; do
+  jws_edit "$T/att.json" "$T/b64-sig.json" "s = $variant"
+  case "$variant" in
+    *'"."'*) want='jws_too_many_dots' ;;
+    *) want='signature_not_base64url' ;;
+  esac
+  jexpect 2 "a signature segment of $variant is \"could not check\" (2), $want" \
+    "o[\"reason\"] == \"$want\"" -- \
+    --attestation "$T/b64-sig.json" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+done
+# bits left over in the last character: the same bytes written another way. The
+# signed document has a header of 82 bytes (a space after the closing brace), whose
+# segment has 110 characters, so that its last character carries 4 spare bits.
+mint_attest --out "$T/hdr-space.json" \
+  --header-text '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application/attest+jws"} '
+expect 0 'VERIFIED — this document was signed' 'a header segment that needs padding bits, written canonically, verifies' -- \
+  --attestation "$T/hdr-space.json" "${COMMON[@]}"
+jws_edit "$T/hdr-space.json" "$T/hdr-space-bits.json" '
+assert len(h) % 4 == 2 and h[-1] in "AQgw"
+h = h[:-1] + "B"'
+jexpect 2 'a header segment with bits left over in its last character is "could not check" (2)' \
+  'o["reason"] == "header_not_base64url"' -- \
+  --attestation "$T/hdr-space-bits.json" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+# an attached payload that is not base64url is evidence against the document, not a tooling problem
+python3 -I - "$T/attached.jws" "$T/attached-bang.jws" <<'PY'
+import sys
+h, p, s = open(sys.argv[1]).read().strip().split(".")
+open(sys.argv[2], "w").write(".".join([h, p[:10] + "!" + p[11:], s]) + "\n")
+PY
+jexpect 1 'an attached payload with ! is not an envelope (1), never verified as opaque bytes' \
+  'o["reason"] == "payload_not_envelope"' -- \
+  --jws "$T/attached-bang.jws" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+
+# the key: in a key set and in --pub-b64url
+jwks_pub "$T/jwks.json" "$T/jwks-bits.json" '
+alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+assert len(pub) % 4 == 3 and alpha.index(pub[-1]) % 4 == 0
+pub = pub[:-1] + alpha[alpha.index(pub[-1]) + 1]'
+jexpect 2 'a key whose last character has bits left over is "could not check" (2), not the same key' \
+  'o["reason"] == "public_key_not_base64url"' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks-bits.json" "${B64ARGS[@]}"
+for variant in 'pub[:50] + "+" + pub[51:]' 'pub[:50] + "/" + pub[51:]' 'pub + "="' 'pub[:50] + "!" + pub[51:]' 'pub[:50] + " " + pub[51:]'; do
+  jwks_pub "$T/jwks.json" "$T/jwks-bad-pub.json" "pub = $variant"
+  jexpect 2 "a key set whose pub is $variant is \"could not check\" (2), public_key_not_base64url" \
+    'o["reason"] == "public_key_not_base64url"' -- \
+    --attestation "$T/att.json" --jwks "$T/jwks-bad-pub.json" "${B64ARGS[@]}"
+done
+jexpect 2 '--pub-b64url with = padding is "could not check" (2), public_key_not_base64url' \
+  'o["reason"] == "public_key_not_base64url"' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB=" "${B64ARGS[@]}"
+jexpect 2 '--pub-b64url with a character of the standard alphabet is "could not check" (2)' \
+  'o["reason"] == "public_key_not_base64url"' -- \
+  --attestation "$T/att.json" --pub-b64url "${PUB:0:50}+${PUB:51}" "${B64ARGS[@]}"
+
+# a status list: its header, its signature, its key
+status_edit() {   # IN OUT PYTHON — change the segments h, p, s of the status list's signature
+  edit "$1" "$2" '
+h, p, s = d["signature"].split(".")
+'"$3"'
+d["signature"] = ".".join([h, p, s])'
+}
+status_edit "$T/list-empty.json" "$T/b64-status-h.json" 'h = h[:10] + "!" + h[11:]'
+jexpect 3 'a status list header segment with ! is UNKNOWN (3), status_unknown_header_not_base64url' \
+  'o["reason"] == "status_unknown_header_not_base64url"' -- "${SL[@]}" --status "$T/b64-status-h.json"
+for variant in 's[:100] + "+" + s[101:]' 's[:100] + "/" + s[101:]' 's + "=="'; do
+  status_edit "$T/list-empty.json" "$T/b64-status-s.json" "s = $variant"
+  jexpect 3 "a status list signature segment of $variant is UNKNOWN (3), status_unknown_signature_not_base64url" \
+    'o["reason"] == "status_unknown_signature_not_base64url"' -- "${SL[@]}" --status "$T/b64-status-s.json"
+done
+jwks_pub "$T/status-keys.json" "$T/status-keys-bits.json" '
+alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+assert len(pub) % 4 == 3 and alpha.index(pub[-1]) % 4 == 0
+pub = pub[:-1] + alpha[alpha.index(pub[-1]) + 1]'
+jexpect 3 'a status key with bits left over in its last character is UNKNOWN (3)' \
+  'o["reason"] == "status_unknown_public_key_not_base64url"' -- \
+  --status-list --status-keys "$T/status-keys-bits.json" --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-empty.json"
+jexpect 0 'a canonical key still verifies after all this' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB" "${B64ARGS[@]}"
+
+# --- a public key that is not 1952 bytes ---------------------------------------------
+# The run stops at once: exit 2 (could not check), reason public_key_size_invalid. The key
+# material is broken, which says nothing about the document.
+echo '# a public key of the wrong size'
+for delta in 1 -1000 1000 -1951 -1; do
+  WRONG="$(python3 -I - "$PUB" "$delta" <<'PY'
+import base64, sys
+raw = base64.urlsafe_b64decode(sys.argv[1] + "=" * (-len(sys.argv[1]) % 4))
+n = int(sys.argv[2])
+raw = raw[:n] if n < 0 else raw + b"\x00" * n
+print(base64.urlsafe_b64encode(raw).rstrip(b"=").decode())
+PY
+)"
+  jexpect 2 "a key of $((1952 + delta)) bytes stops at public_key_size_invalid (2): the last check is that one, and OpenSSL is never asked" \
+    'o["reason"] == "public_key_size_invalid" and o["verdict"] == "could_not_check"
+     and o["checks"][-1]["code"] == "public_key_size_invalid" and o["checks"][-1]["exit_class"] == 2
+     and not any(c["code"] in ("public_key_rejected", "kid_mismatch", "public_key_loaded") for c in o["checks"])' -- \
+    --attestation "$T/att.json" --pub-b64url "$WRONG" "${B64ARGS[@]}"
+  jwks_pub "$T/jwks.json" "$T/jwks-wrong-size.json" "pub = '$WRONG'"
+  jexpect 2 "the same key of $((1952 + delta)) bytes in a key set: public_key_size_invalid (2)" \
+    'o["reason"] == "public_key_size_invalid"' -- \
+    --attestation "$T/att.json" --jwks "$T/jwks-wrong-size.json" "${B64ARGS[@]}"
+done
+expect 2 'public key is 1951 bytes, expected 1952' 'the message says what was found and what is expected' -- \
+  --attestation "$T/att.json" --pub-b64url "$WRONG" "${B64ARGS[@]}"
+# the status key of the wrong size stays UNKNOWN (3), as before
+jwks_pub "$T/status-keys.json" "$T/status-keys-short.json" 'import base64
+pub = base64.urlsafe_b64encode(base64.urlsafe_b64decode(pub + "=" * (-len(pub) % 4))[:-1]).rstrip(b"=").decode()'
+jexpect 3 'a status key of 1951 bytes is UNKNOWN (3), status_unknown_public_key_size' \
+  'o["reason"] == "status_unknown_public_key_size"' -- \
+  --status-list --status-keys "$T/status-keys-short.json" --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-empty.json"
+
+# --- alg, typ and kid are read from the header as JSON --------------------------------
+# By the parse that checks the member set, not by a text pattern.
+echo '# the protected header is read as JSON'
+hdr_text() {   # NAME TEXT — an attestation signed under exactly this protected header
+  mint_attest --out "$T/hdr-$1.json" --header-text "$2"
+}
+KT='"kid":"@KID@","typ":"application/attest+jws"'
+hdr_text alg-escaped '{"alg":"ML-DSA-65",'"$KT"'}'
+jexpect 0 'alg written as ML-DSA-65 is ML-DSA-65: the document verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-alg-escaped.json" "${COMMON[@]}"
+hdr_text name-escaped '{"alg":"ML-DSA-65",'"$KT"'}'
+jexpect 0 'the member name alg is alg: the document verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-name-escaped.json" "${COMMON[@]}"
+hdr_text typ-slash '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application\/attest+jws"}'
+jexpect 0 'typ with an escaped slash is application/attest+jws: the document verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-typ-slash.json" "${COMMON[@]}"
+hdr_text kid-escaped '{"alg":"ML-DSA-65","kid":"'"$(printf '\\u%04x' "'${ISSUER_KID:0:1}")${ISSUER_KID:1}"'","typ":"application/attest+jws"}'
+jexpect 0 'a kid whose first character is a JSON escape finds its key' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-kid-escaped.json" "${COMMON[@]}"
+hdr_text newline '{
+  "alg": "ML-DSA-65",
+  "kid": "@KID@",
+  "typ": "application/attest+jws"
+}'
+jexpect 0 'a header written over several lines verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-newline.json" "${COMMON[@]}"
+# what is not a string, or not exactly the constant, does not pass
+hdr_text alg-array '{"alg":["ML-DSA-65"],'"$KT"'}'
+jexpect 1 'alg as an array is not ML-DSA-65 (1)' 'o["reason"] == "header_alg_invalid"' -- \
+  --attestation "$T/hdr-alg-array.json" "${COMMON[@]}"
+hdr_text alg-nul '{"alg":"ML-DSA-65\u0000",'"$KT"'}'
+jexpect 1 'alg with a NUL character after it is not ML-DSA-65 (1)' 'o["reason"] == "header_alg_invalid"' -- \
+  --attestation "$T/hdr-alg-nul.json" "${COMMON[@]}"
+hdr_text alg-quote '{"alg":"ML-DSA-65\"",'"$KT"'}'
+jexpect 1 'alg ending in an escaped quote is not ML-DSA-65 (1)' 'o["reason"] == "header_alg_invalid"' -- \
+  --attestation "$T/hdr-alg-quote.json" "${COMMON[@]}"
+hdr_text typ-number '{"alg":"ML-DSA-65","kid":"@KID@","typ":5}'
+jexpect 1 'typ as a number is not the constant (1)' 'o["reason"] == "header_typ_invalid"' -- \
+  --attestation "$T/hdr-typ-number.json" "${COMMON[@]}"
+hdr_text alg-twice '{"alg":"none","alg":"ML-DSA-65",'"$KT"'}'
+jexpect 1 'alg twice is a header with a repeated member (1)' 'o["reason"] == "header_not_allowed"' -- \
+  --attestation "$T/hdr-alg-twice.json" "${COMMON[@]}"
+hdr_text nan '{"alg":"ML-DSA-65",'"$KT"',"x":NaN}'
+jexpect 2 'a header with a NaN is not JSON, so it has no kid: no key (2)' 'o["reason"] == "unknown_kid"' -- \
+  --attestation "$T/hdr-nan.json" "${COMMON[@]}"
+hdr_text kid-number '{"alg":"ML-DSA-65","kid":5,"typ":"application/attest+jws"}'
+jexpect 2 'a kid that is a number is no kid: no key (2)' 'o["reason"] == "unknown_kid"' -- \
+  --attestation "$T/hdr-kid-number.json" "${COMMON[@]}"
+hdr_text kid-surrogate '{"alg":"ML-DSA-65","kid":"\ud800","typ":"application/attest+jws"}'
+jexpect 2 'a kid that is an unpaired surrogate is no kid: no key (2)' 'o["reason"] == "unknown_kid"' -- \
+  --attestation "$T/hdr-kid-surrogate.json" "${COMMON[@]}"
+# the status list's header, read the same way
+mint_status --out "$T/list-hdr-escaped.json" --seq 7 \
+  --header-text '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application/attest-status+jws"}'
+jexpect 0 'a status list whose alg is written ML-DSA-65 is good' 'o["verdict"] == "good"' -- \
+  "${SL[@]}" --status "$T/list-hdr-escaped.json"
+mint_status --out "$T/list-hdr-alg-number.json" --seq 7 \
+  --header-text '{"alg":5,"kid":"@KID@","typ":"application/attest-status+jws"}'
+jexpect 3 'a status list whose alg is a number is UNKNOWN (3)' 'o["reason"] == "status_unknown_unsupported_alg"' -- \
+  "${SL[@]}" --status "$T/list-hdr-alg-number.json"
+mint_status --out "$T/list-hdr-kid-number.json" --seq 7 \
+  --header-text '{"alg":"ML-DSA-65","kid":5,"typ":"application/attest-status+jws"}'
+jexpect 3 'a status list whose kid is a number is UNKNOWN (3), no key' 'o["reason"] == "status_unknown_unknown_kid"' -- \
+  "${SL[@]}" --status "$T/list-hdr-kid-number.json"
 
 # --- real cosign: a legacy-format bundle cannot lend the tag a certificate -----------
 # Needs cosign 3.1.3 or later (CI installs it); skipped, never passed, without it.

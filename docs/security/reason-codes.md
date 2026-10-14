@@ -21,6 +21,9 @@ code, are codes from this file (see
 - **Vectors**: the cases of `tests/vectors/v1/vectors.json` whose `expect.code`
   is this code. A code with no vector is covered by `tests/run.sh` or by no
   published case yet.
+- **base64url.** Every `..._not_base64url` code means the text is not base64url exactly
+  (RFC 4648 section 5, without padding): the alphabet `A-Z a-z 0-9 - _` only, no padding, a length that is not 1 modulo 4, and no bits left over in the last character. The text is never
+  decoded into something else and left to fail later under another code.
 - A row whose description starts with "Retired in" is a code the verifier no
   longer emits. It stays in the table, and its name is never reused.
 - Codes named in the manifest keep the name it gives them. Where a document
@@ -85,19 +88,19 @@ cannot emit.
 | `jws_detached` | Detached JWS: the payload segment is empty. | pass | 0 | both |  |
 | `jws_attached` | Attached JWS: the payload segment carries the canonical bytes. | pass | 0 | both |  |
 | `jws_detached_needs_claims` | A detached JWS needs `--claims` or `--attestation`. | fail | 2 | both |  |
-| `header_not_base64url` | The protected header is not base64url. | fail | 2 | both |  |
+| `header_not_base64url` | The protected header is not base64url (the alphabet `A-Z a-z 0-9 - _` only, no padding, a length that is not 1 modulo 4, and no bits left over in the last character). | fail | 2 | both | 2: `header-segment-not-base64url`, `header-segment-trailing-bits` |
 | `header_too_large` | The decoded protected header is over 4096 bytes (a real one is about 100). Only its first 4096 bytes are parsed. | fail | 1 | both |  |
-| `signature_not_base64url` | The signature is not base64url. | fail | 2 | both |  |
+| `signature_not_base64url` | The signature is not base64url (the same rules). | fail | 2 | both | 3: `signature-segment-plus`, `signature-segment-slash`, `signature-segment-padded` |
 | `signature_size_valid` | The signature is 3309 bytes. | pass | 0 | both |  |
 | `signature_size_invalid` | The signature is not 3309 bytes. | fail | 1 | both | 2: `sig-truncated-3308`, `sig-extended-3310` |
 | `header_alg_valid` | `alg` is `ML-DSA-65`. | pass | 0 | both |  |
-| `header_alg_invalid` | `alg` is anything else. | fail | 1 | both | 5: `header-alg-none`, `alg-ml-dsa-44`, `alg-ml-dsa-87`, ... |
+| `header_alg_invalid` | `alg` is anything else, or is not a JSON string. | fail | 1 | both | 6: `header-alg-none`, `alg-ml-dsa-44`, `alg-ml-dsa-87`, ... |
 | `header_typ_valid` | `typ` is `application/attest+jws`. | pass | 0 | both |  |
-| `header_typ_invalid` | `typ` is anything else. | fail | 1 | both |  |
+| `header_typ_invalid` | `typ` is anything else, or is not a JSON string. | fail | 1 | both |  |
 | `header_crit_absent` | The header has no `crit`. | pass | 0 | both |  |
 | `header_members_valid` | The header is exactly `alg`, `kid`, `typ`. | pass | 0 | both |  |
 | `header_not_allowed` | The header carries `crit` or a member beyond `alg`, `kid`, `typ`. | fail | 1 | both | 3: `header-extra-member`, `header-crit`, `dup-header-member` |
-| `payload_not_base64url` | The attached payload is not base64url. | fail | 2 | both |  |
+| `payload_not_base64url` | The attached payload is not base64url (the same rules). | fail | 2 | both |  |
 | `payload_not_envelope` | The attached payload does not decode to an attestation envelope. | fail | 1 | both | 1: `attached-garbage-payload` |
 | `payload_embedded` | The payload embedded in the JWS is used. | pass | 0 | both |  |
 | `payload_matches_claims` | The embedded payload equals the bytes re-derived from the claims. | pass | 0 | both |  |
@@ -119,9 +122,9 @@ cannot emit.
 | `unknown_kid` | No key in the set carries the header kid. | fail | 2 | both | 1: `unknown-kid` |
 | `jwks_key_selected` | A key was selected by kid. | pass | 0 | both |  |
 | `jwks_retired_at_malformed` | `hs_retired_at` of the selected key is malformed. | fail | 2 | both | 1: `retired-key-malformed` |
-| `public_key_not_base64url` | The public key is not base64url. | fail | 2 | both |  |
+| `public_key_not_base64url` | The public key is not base64url (the same rules). | fail | 2 | both | 1: `public-key-trailing-bits` |
 | `public_key_size_valid` | The public key is 1952 bytes. | pass | 0 | both |  |
-| `public_key_size_invalid` | The public key is not 1952 bytes. | fail | 1 | both |  |
+| `public_key_size_invalid` | The public key is not 1952 bytes. The run stops here: the key material is broken, which says nothing about the document. | fail | 2 | both | 2: `public-key-1951-bytes`, `public-key-1953-bytes` |
 | `kid_derivable` | The kid derives from the key bytes. | pass | 0 | both |  |
 | `kid_mismatch` | The header kid does not derive from the key bytes, or `claims.kid` differs from the header kid. | fail | 1 | both | 4: `kid-mismatch`, `header-kid-not-derived-from-key`, `claims-kid-differs-from-header-kid`, ... |
 | `kid_pinned` | The key kid is one pinned with `--expect-kid`. | pass | 0 | both |  |
@@ -219,7 +222,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `overall_band_mismatch` | `overallBand` is not the weakest attested band. | fail | 1 | both | 1: `overall-band-overclaim` |
 | `redaction_valid` | A gated posture is redacted as required. | pass | 0 | both |  |
 | `redaction_violation` | A gated posture carries coverage, heartbeat or overall band. | fail | 1 | both | 1: `gated-redaction-leak` |
-| `verified` | The verdict: every check held. | pass | 0 | attestation | 8: `valid-detached`, `valid-jws-claims`, `nonce-match`, ... |
+| `verified` | The verdict: every check held. | pass | 0 | attestation | 12: `valid-detached`, `valid-jws-claims`, `nonce-match`, ... |
 
 ## Status list (a failure leaves the status unknown)
 
@@ -237,9 +240,9 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_unknown_too_many_dots` | `signature` has too many dots. | fail | 3 | status-list |  |
 | `status_unknown_signature_not_detached` | The payload segment is not empty. | fail | 3 | status-list |  |
 | `status_jws_detached` | The payload segment is empty, as required. | pass | 0 | status-list |  |
-| `status_unknown_header_not_base64url` | The protected header is not base64url. | fail | 3 | status-list |  |
+| `status_unknown_header_not_base64url` | The protected header is not base64url (the same rules). | fail | 3 | status-list | 1: `status-header-segment-not-base64url` |
 | `status_unknown_header_too_large` | The decoded protected header of the status list is over 4096 bytes. It is not read. | fail | 3 | status-list |  |
-| `status_unknown_signature_not_base64url` | The signature is not base64url. | fail | 3 | status-list |  |
+| `status_unknown_signature_not_base64url` | The signature is not base64url (the same rules). | fail | 3 | status-list | 1: `status-signature-segment-plus` |
 | `status_signature_size_valid` | The signature is 3309 bytes. | pass | 0 | status-list |  |
 | `status_unknown_signature_size` | The signature is not 3309 bytes. | fail | 3 | status-list | 2: `status-sig-truncated-3308`, `status-sig-extended-3310` |
 | `status_unknown_header_not_object` | The header is not a JSON object. | fail | 3 | status-list |  |
@@ -258,9 +261,9 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_key_selected` | A status key was selected by kid. | pass | 0 | status-list |  |
 | `status_unknown_retired_at_malformed` | `hs_retired_at` of the status key is malformed. | fail | 3 | status-list | 1: `status-retired-key-malformed` |
 | `status_unknown_unknown_kid` | The list's kid is not in the status key set. | fail | 3 | status-list | 1: `status-wrong-key` |
-| `status_unknown_public_key_not_base64url` | The status public key is not base64url. | fail | 3 | status-list |  |
+| `status_unknown_public_key_not_base64url` | The status public key is not base64url (the same rules). | fail | 3 | status-list | 1: `status-public-key-trailing-bits` |
 | `status_public_key_size_valid` | The status public key is 1952 bytes. | pass | 0 | status-list |  |
-| `status_unknown_public_key_size` | The status public key is not 1952 bytes. | fail | 3 | status-list |  |
+| `status_unknown_public_key_size` | The status public key is not 1952 bytes. | fail | 3 | status-list | 1: `status-public-key-1951-bytes` |
 | `status_kid_derivable` | The kid derives from the status key bytes. | pass | 0 | status-list |  |
 | `status_unknown_kid_mismatch` | The kid does not derive from the key bytes, or `statusList.kid` differs from the header kid. | fail | 3 | status-list |  |
 | `status_public_key_loaded` | The status key loaded. | pass | 0 | status-list |  |
@@ -297,6 +300,6 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_unknown_generated_at_missing` | Warning: the subject is listed, but there is no `generatedAt` to compare with `notBefore`. | warn | 3 | status-list |  |
 | `status_unknown_subject_dates_unparseable` | Warning: `generatedAt` or `notBefore` is not RFC 3339. | warn | 3 | status-list |  |
 | `status_unknown_truncated` | Warning: the subject is not found, but the list is truncated. | warn | 3 | status-list |  |
-| `good` | The verdict: not revoked, per a verified list. | pass | 0 | status-list | 3: `status-good`, `status-good-after-withdrawal`, `status-retired-key-before` |
+| `good` | The verdict: not revoked, per a verified list. | pass | 0 | status-list | 4: `status-good`, `status-good-after-withdrawal`, `status-retired-key-before` |
 | `revoked_key` | The verdict: the key is in the list. | fail | 1 | status-list | 2: `status-revoked-key`, `status-expired-under-revoking-list` |
 | `revoked_subject` | The verdict: the subject is withdrawn from a date after the document. | fail | 1 | status-list | 2: `status-revoked-subject`, `status-attached-jws-revoked` |

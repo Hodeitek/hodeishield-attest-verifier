@@ -15,8 +15,8 @@ as [SECURITY.md](SECURITY.md#supported-versions) says.
 ## Unreleased
 
 The verifier gains an in-browser page, built and tested but not deployed.
-`verify-attestation.sh` changes only its version number, to 1.6.0, which is what
-`tests/version-consistency.sh` requires of an Unreleased section.
+`verify-attestation.sh` is 1.6.0 and its checks change in the places listed under
+Fixed.
 
 ### Added
 - The in-browser verifier page, [`web/`](web/): the same checks as the script,
@@ -36,7 +36,7 @@ The verifier gains an in-browser page, built and tested but not deployed.
   (`--anchor-file`), which needs Sigstore. Safari is not tested. See
   [docs/security/browser-verifier.md](docs/security/browser-verifier.md)
   (Refs #25).
-- `tests/web-vectors.sh`: all 118 cases of `tests/vectors/v1` on the page as it
+- `tests/web-vectors.sh`: all 136 cases of `tests/vectors/v1` on the page as it
   ships, in headless Google Chrome and Firefox, from http and from disk, with the
   verdict, exit code and reason code of each case (one reason code differs by
   design and is named); `tests/web-static.sh` (the policy, the code and the six
@@ -54,14 +54,52 @@ The verifier gains an in-browser page, built and tested but not deployed.
   also checks that `mldsa_wasm.b64.js`, the file the page runs, is byte for byte what
   the pinned module makes.
 - `tests/web-differential.sh`: the page's logic and the real script must agree on
-  exit code, verdict and reason code on inputs the 118 vectors do not cover (a
+  exit code, verdict and reason code on inputs the 136 vectors do not cover (a
   duplicate member nested in the protected header, an integer of more than 4,300
   digits, the refusals of the script's status-list reader).
 
 ### Changed
 - `VERIFIER_VERSION` is 1.6.0 (the page carries the same number).
-- Differences between the script and its documentation, found while porting it,
-  are written down in `docs/security/browser-verifier.md`; neither was changed.
+- The differences between the script and its documentation, found while porting
+  the page, are fixed in the script and in the page (see Fixed).
+
+### Fixed
+- Base64url is strict. A JWS segment, a public key `pub` and a status-list segment
+  are checked against the alphabet `A-Z a-z 0-9 - _` before they are decoded: no
+  padding, no `+` or `/`, no spaces, a length that is not 1 modulo 4, and no bits
+  left over in the last character (what is decoded must encode back to the
+  input). A fault is "could not check" (exit 2, or 3 for a status list) under the
+  reason code of its segment: `header_not_base64url`, `signature_not_base64url`,
+  `public_key_not_base64url` and the `status_unknown_..._not_base64url` codes.
+  Before, only a length of 1 modulo 4 had that code: a stray character decoded to
+  nothing or to part of the text and the run ended later under another reason
+  (`signature_invalid`, `unknown_kid`, a header that is not JSON), and a key
+  written with bits left over in its last character was read as the same key. The
+  page does the same (#104).
+- A public key that is not 1952 bytes stops the run at once with
+  `public_key_size_invalid`, exit 2 (could not check: the key material is broken,
+  which is no evidence about the document). `docs/security/reason-codes.md` listed
+  it as exit 1; the documented exit code is corrected to the behaviour. The script
+  used to record the size and carry on until OpenSSL refused the key, so a key
+  that was too short already ended in exit 2, as `public_key_rejected`; the exit
+  code is the same and the reason is now the exact one. A key one byte too long,
+  which OpenSSL loaded, ended in exit 1 and now ends in exit 2 as well. A status
+  key of the wrong size was already `status_unknown_public_key_size` (exit 3).
+  The page does the same (#105).
+- `alg`, `typ` and `kid` of the attestation's protected header are read with the
+  JSON parse that checks the member set, and not with a `sed` pattern. A JSON
+  escape is decoded (`"ML\u002dDSA-65"` is `ML-DSA-65`; a member name written
+  with an escape is that member); a value that is not a string, or holds an
+  unpaired surrogate, reads as empty and fails its check. A signed header whose
+  `alg` was written with an escape used to fail `header_alg_invalid`. A header
+  that is not JSON (invalid UTF-8, a `NaN`) has no `kid` to look a key up by, so
+  with a key set the run ends in `unknown_kid` (exit 2) where the pattern could
+  still find one; so does a header nested more than 64 containers deep, a limit
+  written into the script (the reader's own limit depends on the Python in use) and
+  shared with the page. A header whose member name, colon and value sit on separate
+  lines now verifies, where the line-by-line pattern missed it. The status list's
+  header, already read as JSON, now takes only strings too. The page does the same
+  (#106).
 
 ## v1.5.0 - 2026-10-13
 

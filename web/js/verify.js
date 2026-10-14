@@ -31,26 +31,44 @@
   var HEADER_MAX_BYTES = 4096;
   var KID_SHAPE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
   var STRENGTH = ["in_progress", "basic", "substantial", "advanced"];
-  var SPACE = "[ \\t\\n\\v\\f\\r]*";
 
   function Stop(rc) { this.rc = rc; }
 
   // ---- small helpers shared by the sections ---------------------------------
   function lenient(bytes) { return new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(bytes); }
-  // the sed lookup of the script: the member as written on the first line that has
-  // it (greedy: the last occurrence on that line), read as bytes in the C locale
-  function sedField(bytes, name) {
-    var re = new RegExp('^[^\\n]*"' + name + '"' + SPACE + ":" + SPACE + '"([^"]*)"[^\\n]*$');
-    var lines = B.latin1(bytes).split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      var m = re.exec(lines[i]);
-      if (m) {
-        var raw = new Uint8Array(m[1].length);
-        for (var j = 0; j < m[1].length; j++) raw[j] = m[1].charCodeAt(j);
-        return lenient(raw);
-      }
+  // The value of a protected-header member, as HEADER_PY of the script reads it: the
+  // JSON string, with its escapes decoded. A value that is not a string, a member
+  // that is missing, and a string with an unpaired surrogate all read as empty; a
+  // NUL character is shown as \x00, as the script's shell cannot hold one.
+  function headerString(hdr, name) {
+    var v = J.isObj(hdr) ? hdr.get(name) : undefined;
+    if (typeof v !== "string") return "";
+    for (var i = 0; i < v.length; i++) {
+      var c = v.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        var d = i + 1 < v.length ? v.charCodeAt(i + 1) : 0;
+        if (d < 0xdc00 || d > 0xdfff) return "";
+        i++;
+      } else if (c >= 0xdc00 && c <= 0xdfff) return "";
     }
-    return "";
+    return v.replace(/\u0000/g, "\\x00");
+  }
+  // The protected header is read with no more than 64 nested containers, as the script
+  // does (HEADER_PY): a header holds three strings, and the check is made before the reader
+  // runs. Throws, as a header that is not JSON does.
+  function parseHeader(bytes) {
+    var s = B.latin1(bytes), depth = 0, quoted = false, escaped = false, i, c;
+    for (i = 0; i < s.length; i++) {
+      c = s.charAt(i);
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (c === "\\") escaped = true;
+        else if (c === '"') quoted = false;
+      } else if (c === '"') quoted = true;
+      else if (c === "[" || c === "{") { if (++depth > 64) throw new Error("header nested too deep"); }
+      else if (c === "]" || c === "}") depth--;
+    }
+    return J.parse(bytes);
   }
   function stripSpace(s) { return s.replace(/[ \t\n\v\f\r]/g, ""); }
   function stripTrailingNewlines(s) { return s.replace(/\n+$/, ""); }
@@ -295,19 +313,22 @@
         if (sigBytes.length === 3309) ok("signature_size_valid"); else bad("signature_size_invalid");
 
         // --- 2. Header ---
-        var ALG = sedField(headerFull, "alg"), TYP = sedField(headerFull, "typ");
-        KID = sedField(headerFull, "kid");
-        if (ALG === "ML-DSA-65") ok("header_alg_valid"); else bad("header_alg_invalid");
-        if (TYP === "application/attest+jws") ok("header_typ_valid"); else bad("header_typ_invalid");
-        if (B.latin1(headerBytes).indexOf('"crit"') >= 0) bad("header_not_allowed"); else ok("header_crit_absent");
-        var members;
+        var members = "(not JSON)", ALG = "", TYP = "", hdr = null;
         try {
-          var hdr = J.parse(headerBytes);
+          hdr = parseHeader(headerBytes);
           if (J.isObj(hdr)) {
             if (J.hasDuplicateMember(hdr)) members = "duplicated";
             else members = hdr.keys().sort().join(",");
           } else members = "(not a JSON object)";
-        } catch (e4) { members = "(not JSON)"; }
+        } catch (e4) { members = "(not JSON)"; hdr = null; }
+        // alg, typ and kid come from the same parse; only for a header over the cap
+        // (which already failed) they are read from the whole of it, as the script does
+        var vals = hdr;
+        if (headerFull !== headerBytes) { try { vals = parseHeader(headerFull); } catch (e4b) { vals = null; } }
+        ALG = headerString(vals, "alg"); TYP = headerString(vals, "typ"); KID = headerString(vals, "kid");
+        if (ALG === "ML-DSA-65") ok("header_alg_valid"); else bad("header_alg_invalid");
+        if (TYP === "application/attest+jws") ok("header_typ_valid"); else bad("header_typ_invalid");
+        if (B.latin1(headerBytes).indexOf('"crit"') >= 0) bad("header_not_allowed"); else ok("header_crit_absent");
         if (members === "alg,kid,typ") ok("header_members_valid"); else bad("header_not_allowed");
 
         // --- 3. Public key ---
@@ -328,14 +349,12 @@
         }
         var pubBytes = B.b64urlDecode(pubB64);
         if (pubBytes === null) die("public_key_not_base64url", "the public key is not valid base64url");
-        if (pubBytes.length === 1952) ok("public_key_size_valid"); else bad("public_key_size_invalid");
+        if (pubBytes.length === 1952) ok("public_key_size_valid"); else die("public_key_size_invalid", "the public key is " + pubBytes.length + " bytes, expected 1952");
         DERIVED_KID = kidOf(pubBytes);
         if (DERIVED_KID === KID) ok("kid_derivable"); else bad("kid_mismatch");
         if (expectKids.length) {
           if (expectKids.indexOf(DERIVED_KID) >= 0) ok("kid_pinned"); else bad("unexpected_kid");
         }
-        // OpenSSL loads a key of the wrong size as an error; so does this check
-        if (pubBytes.length !== 1952) die("public_key_rejected", "the public key has the wrong size");
         ok("public_key_loaded");
 
         // --- 4. Payload: the signing envelope ---
@@ -574,9 +593,10 @@
       } else statBad("status_unknown_malformed_document");
 
       // list_field: a jq-like read of a member, with the script's failure modes
-      function listField(obj, name) {
+      function listField(obj, name, stringOnly) {
         var v;
         try { v = memberOf(obj, name); } catch (e) { statBad("status_unknown_malformed_document"); return ""; }
+        if (stringOnly && typeof v !== "string") return "";
         var text = plain(v);
         if (typeof v === "string" && v.indexOf("\u0000") >= 0) { text = text.replace(/\u0000/g, "\\x00"); statBad("status_unknown_nul_byte"); }
         return text;
@@ -638,7 +658,7 @@
       }
       var SALG = "", STYP = "", LKID = "";
       if (STATUS_FAILURES === 0) {
-        SALG = listField(hdr, "alg"); STYP = listField(hdr, "typ"); LKID = listField(hdr, "kid");
+        SALG = listField(hdr, "alg", true); STYP = listField(hdr, "typ", true); LKID = listField(hdr, "kid", true);
         if (SALG === "ML-DSA-65") ok("status_header_alg_valid"); else statBad("status_unknown_unsupported_alg");
         if (STYP === "application/attest-status+jws") ok("status_header_typ_valid"); else statBad("status_unknown_unexpected_typ");
       }
