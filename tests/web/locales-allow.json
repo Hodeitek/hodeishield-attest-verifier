@@ -1,0 +1,18 @@
+{
+  "all": [
+    "app.name"
+  ],
+  "perLocale": {
+    "de": [
+      "foot.version",
+      "content.org"
+    ],
+    "fr": [
+      "foot.version",
+      "content.org",
+      "content.slug",
+      "details.verdict",
+      "details.mode"
+    ]
+  }
+}

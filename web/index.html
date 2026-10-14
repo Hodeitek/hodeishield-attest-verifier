@@ -1,0 +1,221 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: Apache-2.0
+  Copyright 2026 Hodeitek S.L.
+  The in-browser verifier for HodeiShield attestations. Source and the
+  specification of what this page does: docs/security/browser-verifier.md.
+  Every visible string is in locales/*.js. Nothing is loaded from another origin.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>HodeiShield</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cross" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-question" viewBox="0 0 24 24"><path d="M9 9.2a3 3 0 115 2c-.9.7-2 1.3-2 2.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="18" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-dash" viewBox="0 0 24 24"><path d="M7 12h10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3.5h6.5L18 8v12.5H7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M13.5 3.5V8H18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8.5" cy="12" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 12h8M17 12v3M20 12v2.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-seal" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.3-2.9 7.6-7 9.5-4.1-1.9-7-5.2-7-9.5V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.8 12l2.3 2.3 4.1-4.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<a class="skip" href="#main" data-i18n="app.skip"></a>
+
+<header class="top">
+  <div class="brand">
+    <svg class="icon brand-mark" aria-hidden="true"><use href="#i-seal"/></svg>
+    <span class="brand-name" data-i18n="app.name"></span>
+  </div>
+  <div class="lang">
+    <label class="lang-label" for="lang" data-i18n="lang.label"></label>
+    <select id="lang" name="lang"></select>
+  </div>
+</header>
+
+<main id="main">
+  <section class="intro" aria-labelledby="intro-title">
+    <h1 id="intro-title" data-i18n="intro.title"></h1>
+    <p class="lead" data-i18n="intro.lead"></p>
+    <p class="privacy"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span data-i18n="privacy.short"></span></p>
+  </section>
+
+  <form id="form" novalidate autocomplete="off">
+    <div class="inputs">
+      <section class="slot" data-slot="doc" aria-labelledby="doc-title">
+        <h2 id="doc-title" data-i18n="slot.doc.title"></h2>
+        <p class="help" id="doc-help" data-i18n="slot.doc.help"></p>
+        <div class="drop" data-drop>
+          <svg class="icon drop-icon" aria-hidden="true"><use href="#i-file"/></svg>
+          <p class="drop-text"><span class="drop-prompt" data-i18n="drop.prompt"></span> <button type="button" class="link" id="choose-doc" aria-labelledby="choose-doc doc-title" data-choose aria-describedby="doc-help" data-i18n="drop.choose"></button></p>
+          <p class="drop-over" aria-hidden="true" data-i18n="drop.over"></p>
+          <input type="file" class="file-input" data-file accept=".json,application/json,text/plain" tabindex="-1" aria-labelledby="doc-title">
+        </div>
+        <p class="slot-status" data-status role="status"></p>
+        <button type="button" class="link small" id="remove-doc" aria-labelledby="remove-doc doc-title" data-remove hidden data-i18n="drop.remove"></button>
+        <details class="paste">
+          <summary id="paste-doc" aria-labelledby="paste-doc doc-title" data-i18n="drop.paste"></summary>
+          <label class="sr" for="doc-paste" data-i18n="drop.pasteLabel"></label>
+          <textarea id="doc-paste" data-paste rows="5" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+        </details>
+      </section>
+
+      <section class="slot" data-slot="keys" aria-labelledby="keys-title">
+        <h2 id="keys-title" data-i18n="slot.keys.title"></h2>
+        <p class="help" id="keys-help"><span data-i18n="slot.keys.help"></span> <a href="https://app.hodeishield.com/api/public/attest/keys" target="_blank" rel="noopener noreferrer" data-i18n="slot.keys.get"></a></p>
+        <div class="drop" data-drop>
+          <svg class="icon drop-icon" aria-hidden="true"><use href="#i-key"/></svg>
+          <p class="drop-text"><span class="drop-prompt" data-i18n="drop.prompt"></span> <button type="button" class="link" id="choose-keys" aria-labelledby="choose-keys keys-title" data-choose aria-describedby="keys-help" data-i18n="drop.choose"></button></p>
+          <p class="drop-over" aria-hidden="true" data-i18n="drop.over"></p>
+          <input type="file" class="file-input" data-file accept=".json,application/json,text/plain" tabindex="-1" aria-labelledby="keys-title">
+        </div>
+        <p class="slot-status" data-status role="status"></p>
+        <button type="button" class="link small" id="remove-keys" aria-labelledby="remove-keys keys-title" data-remove hidden data-i18n="drop.remove"></button>
+        <details class="paste">
+          <summary id="paste-keys" aria-labelledby="paste-keys keys-title" data-i18n="drop.paste"></summary>
+          <label class="sr" for="keys-paste" data-i18n="drop.pasteLabel"></label>
+          <textarea id="keys-paste" data-paste rows="5" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+        </details>
+      </section>
+    </div>
+
+    <details class="more" id="opts">
+      <summary data-i18n="opts.title"></summary>
+      <p class="help" data-i18n="opts.lead"></p>
+      <div class="fields">
+        <div class="field"><label for="o-slug" data-i18n="opts.slug.label"></label><input id="o-slug" type="text" inputmode="text" autocapitalize="off" spellcheck="false" aria-describedby="o-slug-h"><p class="help" id="o-slug-h" data-i18n="opts.slug.help"></p></div>
+        <div class="field"><label for="o-issuer" data-i18n="opts.issuer.label"></label><input id="o-issuer" type="url" inputmode="url" autocapitalize="off" spellcheck="false" aria-describedby="o-issuer-h"><p class="help" id="o-issuer-h" data-i18n="opts.issuer.help"></p></div>
+        <div class="field"><label for="o-nonce" data-i18n="opts.nonce.label"></label><input id="o-nonce" type="text" autocapitalize="off" spellcheck="false" aria-describedby="o-nonce-h"><p class="help" id="o-nonce-h" data-i18n="opts.nonce.help"></p></div>
+        <div class="field"><label for="o-age" data-i18n="opts.age.label"></label><input id="o-age" type="number" inputmode="numeric" min="1" max="9999999" step="1" placeholder="60" aria-describedby="o-age-h"><p class="help" id="o-age-h" data-i18n="opts.age.help"></p></div>
+        <div class="field"><label for="o-kid" data-i18n="opts.kid.label"></label><input id="o-kid" type="text" autocapitalize="off" spellcheck="false" aria-describedby="o-kid-h"><p class="help" id="o-kid-h" data-i18n="opts.kid.help"></p></div>
+      </div>
+    </details>
+
+    <details class="more" id="rev">
+      <summary data-i18n="rev.title"></summary>
+      <p class="help" data-i18n="rev.lead"></p>
+      <div class="inputs">
+        <section class="slot" data-slot="status" aria-labelledby="status-title">
+          <h3 id="status-title" data-i18n="rev.status.title"></h3>
+          <p class="help" id="status-help" data-i18n="rev.status.help"></p>
+          <div class="drop" data-drop>
+            <svg class="icon drop-icon" aria-hidden="true"><use href="#i-file"/></svg>
+            <p class="drop-text"><span class="drop-prompt" data-i18n="drop.prompt"></span> <button type="button" class="link" id="choose-status" aria-labelledby="choose-status status-title" data-choose aria-describedby="status-help" data-i18n="drop.choose"></button></p>
+            <p class="drop-over" aria-hidden="true" data-i18n="drop.over"></p>
+            <input type="file" class="file-input" data-file accept=".json,application/json,text/plain" tabindex="-1" aria-labelledby="status-title">
+          </div>
+          <p class="slot-status" data-status role="status"></p>
+          <button type="button" class="link small" id="remove-status" aria-labelledby="remove-status status-title" data-remove hidden data-i18n="drop.remove"></button>
+          <details class="paste">
+            <summary id="paste-status" aria-labelledby="paste-status status-title" data-i18n="drop.paste"></summary>
+            <label class="sr" for="status-paste" data-i18n="drop.pasteLabel"></label>
+            <textarea id="status-paste" data-paste rows="4" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+          </details>
+        </section>
+        <section class="slot" data-slot="statusKeys" aria-labelledby="skeys-title">
+          <h3 id="skeys-title" data-i18n="rev.keys.title"></h3>
+          <p class="help" id="skeys-help" data-i18n="rev.keys.help"></p>
+          <div class="drop" data-drop>
+            <svg class="icon drop-icon" aria-hidden="true"><use href="#i-key"/></svg>
+            <p class="drop-text"><span class="drop-prompt" data-i18n="drop.prompt"></span> <button type="button" class="link" id="choose-skeys" aria-labelledby="choose-skeys skeys-title" data-choose aria-describedby="skeys-help" data-i18n="drop.choose"></button></p>
+            <p class="drop-over" aria-hidden="true" data-i18n="drop.over"></p>
+            <input type="file" class="file-input" data-file accept=".json,application/json,text/plain" tabindex="-1" aria-labelledby="skeys-title">
+          </div>
+          <p class="slot-status" data-status role="status"></p>
+          <button type="button" class="link small" id="remove-skeys" aria-labelledby="remove-skeys skeys-title" data-remove hidden data-i18n="drop.remove"></button>
+          <details class="paste">
+            <summary id="paste-skeys" aria-labelledby="paste-skeys skeys-title" data-i18n="drop.paste"></summary>
+            <label class="sr" for="skeys-paste" data-i18n="drop.pasteLabel"></label>
+            <textarea id="skeys-paste" data-paste rows="4" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+          </details>
+        </section>
+      </div>
+    </details>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="check" disabled data-i18n="action.check"></button>
+      <button type="button" class="secondary" id="again" hidden data-i18n="action.again"></button>
+    </div>
+    <p class="engine" id="engine" role="status"></p>
+  </form>
+
+  <section id="result" class="result" hidden aria-labelledby="result-title" data-verdict="" data-exit="" data-reason="">
+    <p class="result-kind sr" data-i18n="result.heading"></p>
+    <div class="slip">
+      <svg class="glyph" aria-hidden="true"><use id="glyph-use" href="#i-check"/></svg>
+      <div class="slip-text">
+        <h2 id="result-title" tabindex="-1" aria-describedby="result-meaning result-next result-why"></h2>
+        <p class="meaning" id="result-meaning"></p>
+        <p class="next" id="result-next"></p>
+        <p class="why" id="result-why" hidden><strong id="why-label"></strong> <span id="why-text"></span></p>
+        <p class="stamp" id="stamp" hidden></p>
+      </div>
+    </div>
+    <ul class="notes" id="notes"></ul>
+    <p class="limits" id="limits" hidden></p>
+
+    <section class="looked" aria-labelledby="looked-title">
+      <h3 id="looked-title" data-i18n="list.title"></h3>
+      <ol class="checklist" id="checklist"></ol>
+    </section>
+
+    <section class="content" id="content" hidden aria-labelledby="content-title">
+      <h3 id="content-title" data-i18n="result.contentTitle"></h3>
+      <p class="help" data-i18n="result.contentNote"></p>
+      <dl id="content-list"></dl>
+    </section>
+
+    <details class="more tech" id="tech">
+      <summary data-i18n="details.title"></summary>
+      <p class="help" data-i18n="details.intro"></p>
+      <dl class="facts" id="tech-facts"></dl>
+      <h3 data-i18n="details.checks"></h3>
+      <ol class="codes" id="tech-checks"></ol>
+      <button type="button" class="secondary small" id="copy" data-i18n="details.copy"></button>
+      <span class="copied" id="copied" role="status"></span>
+    </details>
+  </section>
+</main>
+
+<footer class="foot">
+  <p data-i18n="foot.privacy"></p>
+  <p data-i18n="foot.reference"></p>
+  <p data-i18n="foot.offline"></p>
+  <p class="browsers" data-i18n="foot.browsers"></p>
+  <ul class="links">
+    <li><a href="https://github.com/Hodeitek/hodeishield-attest-verifier/blob/main/scripts/attest/verify-attestation.sh" target="_blank" rel="noopener noreferrer" data-i18n="foot.script"></a></li>
+    <li><a href="https://github.com/Hodeitek/hodeishield-attest-verifier/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="foot.release"></a></li>
+    <li><a href="https://github.com/Hodeitek/hodeishield-attest-verifier/blob/main/docs/security/browser-verifier.md#how-to-check-what-you-are-served" target="_blank" rel="noopener noreferrer" data-i18n="foot.check"></a></li>
+    <li><a href="https://github.com/Hodeitek/hodeishield-attest-verifier/tree/main/web" target="_blank" rel="noopener noreferrer" data-i18n="foot.source"></a></li>
+  </ul>
+  <p class="version" id="version"></p>
+</footer>
+
+<noscript><p class="noscript">This page needs JavaScript to check a document, and nothing is sent anywhere. Enable JavaScript, or use the reference script: https://github.com/Hodeitek/hodeishield-attest-verifier</p></noscript>
+
+<script src="locales/en.js"></script>
+<script src="js/base.js"></script>
+<script src="js/json.js"></script>
+<script src="js/canon.js"></script>
+<script src="js/verify.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/selftest.js"></script>
+<script src="mldsa/mldsa_wasm.b64.js"></script>
+<script src="mldsa/mldsa_wasm.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

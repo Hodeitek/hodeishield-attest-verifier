@@ -36,6 +36,10 @@ lines="$(grep -E '^[[:space:]]*sha256sum [^|]*> SHA256SUMS[[:space:]]*$' "$RELEA
 read -ra words <<<"$(printf '%s' "$lines" | sed -E 's/^[[:space:]]*sha256sum //; s/[[:space:]]*> SHA256SUMS[[:space:]]*$//')"
 files=()
 for w in "${words[@]}"; do
+  # The page bundle is named after the tag: release.yml writes it as
+  # "verify-page-${TAG}.tar.gz", and this test runs with TAG=v0.0.0.
+  w="${w//\"/}"
+  w="${w//\$\{TAG\}/v0.0.0}"
   [[ "$w" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "release.yml lists a name this test cannot read: $w"
   files+=("$w")
 done
@@ -46,6 +50,11 @@ printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh || fail "release.ym
 # staging step must generate it.
 printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh.spdx.json \
   || fail "release.yml does not list verify-attestation.sh.spdx.json (the SBOM) in SHA256SUMS"
+# The in-browser verifier page (issue #25) is part of every release, under the
+# same signature: pages.yml deploys only what SHA256SUMS lists.
+printf '%s\n' "${files[@]}" | grep -qx 'verify-page-v0.0.0.tar.gz' \
+  || fail "release.yml does not list verify-page-<tag>.tar.gz (the page bundle) in SHA256SUMS"
+grep -qF 'tools/verify-page/build.sh' "$RELEASE" || fail "release.yml does not build the page bundle with tools/verify-page/build.sh"
 grep -qF '.github/scripts/generate-sbom.sh' "$RELEASE" || fail "release.yml does not run the SBOM generator"
 ok "release.yml lists: ${files[*]}"
 
@@ -56,7 +65,7 @@ loops="$(grep -E '^[[:space:]]*for f in .*; do[[:space:]]*$' "$RELEASE" || true)
 [ "$(printf '%s\n' "$loops" | grep -c .)" -eq 2 ] \
   || fail "expected exactly two 'for f in ...; do' loops in release.yml"
 while IFS= read -r loop; do
-  got="$(printf '%s' "$loop" | sed -E 's/^[[:space:]]*for f in //; s/; do[[:space:]]*$//' | tr ' ' '\n' | sort)"
+  got="$(printf '%s' "$loop" | sed -E 's/^[[:space:]]*for f in //; s/; do[[:space:]]*$//; s/"//g; s/\$\{TAG\}/v0.0.0/g' | tr ' ' '\n' | sort)"
   [ "$got" = "$want" ] || fail "a release.yml loop does not list exactly the SHA256SUMS files plus SHA256SUMS: $loop"
 done <<<"$loops"
 ok "both release.yml loops cover the SHA256SUMS files and SHA256SUMS"
