@@ -959,7 +959,10 @@ if [ "$OSSL_MAJ" -lt 3 ] || { [ "$OSSL_MAJ" -eq 3 ] && [ "$OSSL_MIN" -lt 5 ]; };
 fi
 # Ask OpenSSL itself, instead of inferring it from the version: a build or a
 # provider configuration (a FIPS-only provider, say) can lack ML-DSA-65 on 3.5+.
-if ! openssl list -signature-algorithms 2>/dev/null | grep -qi 'ML-DSA-65'; then
+# The list is read whole first: under pipefail, `openssl list | grep -q` can fail
+# when grep stops reading before openssl has written everything.
+OSSL_SIGALGS="$(openssl list -signature-algorithms 2>/dev/null || true)"
+if ! grep -qi 'ML-DSA-65' <<< "$OSSL_SIGALGS"; then
   die openssl_mldsa65_missing "OpenSSL ${OSSL_V} does not offer ML-DSA-65, so it is not ML-DSA capable here.
        Found: ${OSSL_LINE}
        'openssl list -signature-algorithms' does not list ML-DSA-65 (check the

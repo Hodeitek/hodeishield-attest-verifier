@@ -227,15 +227,9 @@ jobs:
           done
           # The bundle as a reader would use it: index.html at the root, no path
           # that leaves the folder, nothing but files and folders, and every file
-          # as the manifest inside it says.
-          bundle="verify-page-${TAG}.tar.gz"
-          tar -tzf "$bundle" | grep -qx './index.html' || { echo "index.html is not at the root of the bundle" >&2; exit 1; }
-          if tar -tzf "$bundle" | grep -Eq '(^|/)\.\.(/|$)|^/'; then echo "the bundle has an absolute path or .." >&2; exit 1; fi
-          if tar -tzvf "$bundle" | grep -v '^[-d]' | grep -q .; then echo "the bundle has entries that are not plain files or folders" >&2; exit 1; fi
-          rm -rf "$RUNNER_TEMP/unpacked"
-          mkdir "$RUNNER_TEMP/unpacked"
-          tar -xzf "$bundle" -C "$RUNNER_TEMP/unpacked" --no-same-owner --no-same-permissions
-          bash "$GITHUB_WORKSPACE/tools/verify-page/check.sh" "$RUNNER_TEMP/unpacked"
+          # as the manifest inside it says (tests/web-bundle.sh checks that each
+          # of these refusals fires).
+          bash "$GITHUB_WORKSPACE/tools/verify-page/reader-check.sh" "verify-page-${TAG}.tar.gz"
 
       - name: Create draft GitHub release
         env:
