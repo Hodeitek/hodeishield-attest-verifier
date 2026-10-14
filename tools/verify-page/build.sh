@@ -51,14 +51,7 @@ mkdir -p "$TREE"
 
 mkdir "$TREE/mldsa"
 cp "$WASM_DIR/mldsa_wasm.wasm" "$WASM_DIR/mldsa_wasm.js" "$TREE/mldsa/"
-{
-  printf '// SPDX-License-Identifier: Apache-2.0\n'
-  printf '// Copyright 2026 Hodeitek S.L.\n'
-  printf '//\n'
-  printf '// The bytes of mldsa_wasm.wasm as base64, made by tools/verify-page/build.sh. Not edited by hand:\n'
-  printf '// decode it and compare with mldsa_wasm.wasm, or with a build of tools/mldsa-wasm.\n'
-  printf 'globalThis.HV_MLDSA_WASM_B64="%s";\n' "$(base64 -w0 "$WASM_DIR/mldsa_wasm.wasm")"
-} > "$TREE/mldsa/mldsa_wasm.b64.js"
+bash "$HERE/b64js.sh" "$WASM_DIR/mldsa_wasm.wasm" > "$TREE/mldsa/mldsa_wasm.b64.js"
 
 # Fixed modes, so the bytes of the archive do not depend on the umask.
 find "$TREE" -type d -exec chmod 0755 {} +

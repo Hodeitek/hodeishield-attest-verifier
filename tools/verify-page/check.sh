@@ -10,9 +10,10 @@
 # 1. MANIFEST.sha256 matches every file, and lists every file but itself;
 # 2. mldsa/mldsa_wasm.wasm and mldsa/mldsa_wasm.js are the bytes pinned in
 #    tools/mldsa-wasm/expected.sha256;
-# 3. mldsa/mldsa_wasm.b64.js, the file the page actually runs, decodes to exactly
-#    those pinned .wasm bytes (the pin covers the module the page uses, not only
-#    the file next to it).
+# 3. mldsa/mldsa_wasm.b64.js, the file the page actually runs, is byte for byte
+#    what tools/verify-page/b64js.sh makes from that pinned .wasm (the pin covers
+#    the module the page uses, not only the file next to it, and nothing can be
+#    added to it).
 # Needs bash, coreutils and python3.
 # =============================================================================
 set -euo pipefail
@@ -20,7 +21,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 DIR="${1:?usage: check.sh PAGE_DIR}"
-EXPECTED="$ROOT/tools/mldsa-wasm/expected.sha256"
+# VERIFY_PAGE_EXPECTED is for the tests of this script only (a stand-in module).
+EXPECTED="${VERIFY_PAGE_EXPECTED:-$ROOT/tools/mldsa-wasm/expected.sha256}"
 
 T="$(mktemp -d)"
 trap 'rm -rf -- "$T"' EXIT
@@ -33,18 +35,9 @@ echo "ok - MANIFEST.sha256 lists and matches every file"
 ( cd "$DIR/mldsa" && sha256sum --quiet -c "$EXPECTED" ) || { echo "not ok - the module is not the pinned one (tools/mldsa-wasm/expected.sha256)" >&2; exit 1; }
 echo "ok - mldsa_wasm.wasm and mldsa_wasm.js are the pinned bytes"
 
-python3 -I - "$DIR/mldsa" "$EXPECTED" <<'PY' || { echo "not ok - mldsa_wasm.b64.js does not decode to the pinned module" >&2; exit 1; }
-import base64, hashlib, re, sys
-d, expected = sys.argv[1], sys.argv[2]
-pin = {}
-for line in open(expected, encoding="ascii"):
-    h, _, n = line.rstrip("\n").partition("  ")
-    pin[n] = h
-js = open(d + "/mldsa_wasm.b64.js", encoding="ascii").read()
-m = re.search(r'^globalThis\.HV_MLDSA_WASM_B64="([A-Za-z0-9+/=]*)";$', js, re.M)
-assert m, "no module in mldsa_wasm.b64.js"
-assert len(re.findall(r"HV_MLDSA_WASM_B64", js)) == 1, "more than one module in mldsa_wasm.b64.js"
-raw = base64.b64decode(m.group(1), validate=True)
-assert hashlib.sha256(raw).hexdigest() == pin["mldsa_wasm.wasm"], "the decoded module is not the pinned one"
-PY
-echo "ok - mldsa_wasm.b64.js, the file the page runs, decodes to the pinned module"
+# The file the page runs, compared byte for byte with what b64js.sh makes from the
+# pinned module (the module's hash was checked just above): nothing can be appended
+# to it, and no second module can be added.
+bash "$HERE/b64js.sh" "$DIR/mldsa/mldsa_wasm.wasm" > "$T/b64.js"
+cmp -s "$T/b64.js" "$DIR/mldsa/mldsa_wasm.b64.js" || { echo "not ok - mldsa_wasm.b64.js is not exactly what the pinned module makes" >&2; exit 1; }
+echo "ok - mldsa_wasm.b64.js, the file the page runs, is exactly the pinned module (byte for byte)"

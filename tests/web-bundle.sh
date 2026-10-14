@@ -103,3 +103,39 @@ if ( unset SOURCE_DATE_EPOCH; bash "$BUILD" "$WASM" "$T/n1" > /dev/null 2>&1 ); 
 mkdir "$T/empty"
 if ( SOURCE_DATE_EPOCH=$SDE bash "$BUILD" "$T/empty" "$T/n2" > /dev/null 2>&1 ); then fail "a build without the module was accepted"; fi
 ok "a missing SOURCE_DATE_EPOCH and a missing module are refused"
+
+# check.sh: the pinned module, the file the page runs, and the manifest. The pin is
+# made here from the module of this run (VERIFY_PAGE_EXPECTED is for this test only).
+( cd "$WASM" && sha256sum mldsa_wasm.wasm mldsa_wasm.js ) > "$T/expected.sha256"
+CHECK="$ROOT/tools/verify-page/check.sh"
+export VERIFY_PAGE_EXPECTED="$T/expected.sha256"
+bash "$CHECK" "$T/x" > /dev/null || fail "check.sh refused the untouched page"
+ok "check.sh accepts the untouched page"
+remanifest() {
+  ( cd "$1" && find . -type f ! -name MANIFEST.sha256 | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do sha256sum -- "$f"; done > "$T/m" )
+  cp "$T/m" "$1/MANIFEST.sha256"
+}
+# a second module appended to the file the page runs, and the manifest made again
+cp -r "$T/x" "$T/evil1"
+printf 'globalThis["HV_MLDSA_"+"WASM_B64"]="AGFzbQEAAAA=";\n' >> "$T/evil1/mldsa/mldsa_wasm.b64.js"
+remanifest "$T/evil1"
+if bash "$CHECK" "$T/evil1" > /dev/null 2>&1; then fail "check.sh accepted a second module appended to mldsa_wasm.b64.js"; fi
+# another module in place of the real one inside the script
+cp -r "$T/x" "$T/evil2"
+{ head -n 5 "$T/x/mldsa/mldsa_wasm.b64.js"; printf 'globalThis.HV_MLDSA_WASM_B64="AGFzbQEAAAA=";\n'; } > "$T/evil2/mldsa/mldsa_wasm.b64.js"
+remanifest "$T/evil2"
+if bash "$CHECK" "$T/evil2" > /dev/null 2>&1; then fail "check.sh accepted another module in mldsa_wasm.b64.js"; fi
+# the .wasm itself changed
+cp -r "$T/x" "$T/evil3"
+printf 'x' >> "$T/evil3/mldsa/mldsa_wasm.wasm"
+remanifest "$T/evil3"
+if bash "$CHECK" "$T/evil3" > /dev/null 2>&1; then fail "check.sh accepted a changed mldsa_wasm.wasm"; fi
+# a file changed and the manifest not made again
+cp -r "$T/x" "$T/evil4"
+printf '\n' >> "$T/evil4/index.html"
+if bash "$CHECK" "$T/evil4" > /dev/null 2>&1; then fail "check.sh accepted a file that the manifest does not match"; fi
+# a file added that the manifest does not list
+cp -r "$T/x" "$T/evil5"
+printf 'x' > "$T/evil5/extra.js"
+if bash "$CHECK" "$T/evil5" > /dev/null 2>&1; then fail "check.sh accepted a file the manifest does not list"; fi
+ok "check.sh refuses: a module appended to or replaced in mldsa_wasm.b64.js (manifest made again), a changed .wasm, a changed file, an unlisted file"
