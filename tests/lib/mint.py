@@ -121,6 +121,8 @@ def sign(key_pem, message):
 
 def detached_jws(key_pem, kid, typ, payload, extra_header=None, header_text=None):
     hdr = {"alg": "ML-DSA-65", "kid": kid, "typ": typ, **(extra_header or {})}
+    if header_text is not None and header_text.startswith("@"):   # @FILE: the text is in a file (too long for an argument)
+        header_text = open(header_text[1:], encoding="utf-8").read()
     text = json.dumps(hdr, separators=(",", ":")) if header_text is None else header_text.replace("@KID@", kid)
     header = b64url(text.encode("utf-8"))
     sig = sign(key_pem, (header + "." + b64url(payload)).encode("ascii"))

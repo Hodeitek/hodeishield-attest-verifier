@@ -2457,7 +2457,26 @@ HEADER_PY='
 import json, sys
 def no_constant(c): raise ValueError(c)
 def load(path, hook):
-    return json.load(open(path, encoding="utf-8"), object_pairs_hook=hook, parse_constant=no_constant)
+    s = open(path, encoding="utf-8").read()
+    # Nesting is limited here, the same everywhere (as in the page): no value deeper
+    # than 1000 containers (the top one is 0), so at most 1001 containers, the last
+    # one empty. The reader would otherwise give up at a depth that depends on the
+    # Python in use.
+    depth, quoted, escaped = 0, False, False
+    for c in s:
+        if quoted:
+            if escaped: escaped = False
+            elif c == "\\": escaped = True
+            elif c == "\"": quoted = False
+        elif depth > 1000 and c not in " \t\r\n]}":
+            raise ValueError("too deep")
+        elif c == "\"":
+            quoted = True
+        elif c in "[{":
+            depth += 1
+        elif c in "]}":
+            depth -= 1
+    return json.loads(s, object_pairs_hook=hook, parse_constant=no_constant)
 pairs = []
 try:
     h = load(sys.argv[1], lambda p: (pairs.append([k for k, _ in p]), dict(p))[1])

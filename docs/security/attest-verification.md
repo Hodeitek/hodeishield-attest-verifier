@@ -210,9 +210,10 @@ parse that checks the member set (a member repeated at any depth is refused), no
 from a text pattern, so the verdict does not depend on how a second reader would
 see the same bytes. Each must be a JSON string, read as JSON says: an escape is
 decoded (`"ML\u002dDSA-65"` is `ML-DSA-65`, and a member name written with an
-escape is that member); a value that is not a string, or holds an unpaired
-surrogate, is not the constant it is compared with. A header that is not JSON has
-no `kid` to look a key up by.
+escape is that member), and white space, line breaks included, may separate a
+member name, the colon and the value; a value that is not a string, or holds an unpaired
+surrogate, is not the constant it is compared with. A header that is not JSON, or is nested
+more than 1001 containers deep, has no `kid` to look a key up by.
 
 **Every segment is base64url exactly.** A JWS segment, a `pub` and a status-list
 segment are checked against the alphabet `A-Z a-z 0-9 - _` before they are
