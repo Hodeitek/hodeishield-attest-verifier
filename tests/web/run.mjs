@@ -50,6 +50,9 @@ function dataScript() {
     }
   };
   walk(vdir);
+  // fixtures of the differential test (signed with the TEST-ONLY keys of v1), as "fx/<name>"
+  const fxdir = path.join(here, "differential/fixtures");
+  for (const n of fs.readdirSync(fxdir)) if (n.endsWith(".json")) files["fx/" + n] = fs.readFileSync(path.join(fxdir, n)).toString("base64");
   return "globalThis.HVT_CASES=" + JSON.stringify(manifest.cases) + ";globalThis.HVT_FILES=" + JSON.stringify(files) + ";";
 }
 

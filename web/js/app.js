@@ -36,6 +36,13 @@
     s.appendChild(u);
     return s;
   }
+  // What the reader sees of a text that the document or the file system supplied:
+  // a control, format (direction override, zero-width), separator, private-use,
+  // unassigned or lone-surrogate character becomes "?", as the script's summary does
+  // (it keeps only what Python's isprintable calls printable). A signed organisation
+  // name cannot then reorder or hide what is shown beside it.
+  var UNPRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/gu;
+  function clean(v) { return String(v).replace(UNPRINTABLE, function (c) { return c === " " ? c : "?"; }); }
   function fmtSize(n) {
     if (n < 1000) return n + " B";
     if (n < 1000000) return (n / 1000).toFixed(1) + " kB";
@@ -44,10 +51,10 @@
   function fmtDate(iso) {
     if (!iso) return "";
     var d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
+    if (isNaN(d.getTime())) return clean(iso);
     try {
       return new Intl.DateTimeFormat(HV.i18n.current, { dateStyle: "long", timeStyle: "short", timeZone: "UTC" }).format(d) + " UTC";
-    } catch (e) { return iso; }
+    } catch (e) { return clean(iso); }
   }
 
   // ---- input slots -----------------------------------------------------------
@@ -61,17 +68,31 @@
     $("[data-remove]", slot.el).hidden = !has;
     $("[data-drop]", slot.el).classList.toggle("has-file", has);
     if (has) {
-      setStatus(slot, slot.source === "paste" ? t("drop.addedPaste", { size: fmtSize(slot.bytes.length) }) : t("drop.added", { name: slot.name, size: fmtSize(slot.bytes.length) }));
+      setStatus(slot, slot.source === "paste" ? t("drop.addedPaste", { size: fmtSize(slot.bytes.length) }) : t("drop.added", { name: clean(slot.name), size: fmtSize(slot.bytes.length) }));
     } else if (!slot.error) setStatus(slot, "");
     updateButton();
   }
   function clearSlot(slot) {
+    invalidate();
     slot.bytes = null; slot.name = ""; slot.source = ""; slot.error = null;
     $("[data-paste]", slot.el).value = "";
     $("[data-file]", slot.el).value = "";
     refreshSlot(slot);
   }
+  // A result belongs to the files and options it was made from. Changing any of
+  // them takes it off the page, so that a verdict is never shown beside inputs it
+  // was not made from (the language switch re-renders a result only while it holds).
+  function invalidate() {
+    last = null;
+    var box = $("#result");
+    box.hidden = true;
+    ["data-verdict", "data-exit", "data-reason"].forEach(function (a) { box.setAttribute(a, ""); });
+    ["#checklist", "#notes", "#content-list", "#tech-facts", "#tech-checks", "#stamp"].forEach(function (s) { $(s).textContent = ""; });
+    $("#content").hidden = true;
+    $("#again").hidden = true;
+  }
   function putBytes(slot, bytes, name, source) {
+    invalidate();
     slot.bytes = bytes; slot.name = name; slot.source = source; slot.error = null;
     if (source !== "paste") $("[data-paste]", slot.el).value = "";
     refreshSlot(slot);
@@ -93,6 +114,7 @@
     return readFile(file).then(function (bytes) {
       putBytes(slot, bytes, file.name, "file");
     }, function (e) {
+      invalidate();
       slot.bytes = null; slot.error = true;
       refreshSlot(slot);
       setStatus(slot, e && e.code === "big" ? t("drop.tooBig", { size: fmtSize(e.size), max: fmtSize(MAX_BYTES) }) : t("drop.unreadable"), true);
@@ -155,7 +177,7 @@
       var v = e.target.value;
       if (v === "") { if (slot.source === "paste") clearSlot(slot); return; }
       var bytes = new TextEncoder().encode(v);
-      if (bytes.length > MAX_BYTES) { slot.bytes = null; refreshSlot(slot); setStatus(slot, t("drop.tooBig", { size: fmtSize(bytes.length), max: fmtSize(MAX_BYTES) }), true); return; }
+      if (bytes.length > MAX_BYTES) { invalidate(); slot.bytes = null; refreshSlot(slot); setStatus(slot, t("drop.tooBig", { size: fmtSize(bytes.length), max: fmtSize(MAX_BYTES) }), true); return; }
       putBytes(slot, bytes, "", "paste");
     });
   }
@@ -321,7 +343,7 @@
     if (verdict === "verified") notes.appendChild(el("li", "", t("note.withdrawal_unchecked")));
     var stamp = $("#stamp");
     stamp.hidden = !last.fp;
-    stamp.textContent = last.fp ? t("result.stamp", { date: fmtDate(last.time), doc: last.doc || t("result.pastedDoc"), hash: last.fp }) : "";
+    stamp.textContent = last.fp ? t("result.stamp", { date: fmtDate(last.time), doc: last.doc ? clean(last.doc) : t("result.pastedDoc"), hash: last.fp }) : "";
     var lim = $("#limits");
     lim.hidden = !(verdict === "verified" || verdict === "good");
     lim.textContent = lim.hidden ? "" : t("result.limits");
@@ -361,18 +383,18 @@
       if (typeof valueNode === "string") dd.textContent = valueNode; else dd.appendChild(valueNode);
       dl.appendChild(dd);
     }
-    if (a.orgName) row("content.org", String(a.orgName));
-    if (a.slug) row("content.slug", String(a.slug));
+    if (a.orgName) row("content.org", clean(a.orgName));
+    if (a.slug) row("content.slug", clean(a.slug));
     row("content.level", a.overallBand ? t("band." + a.overallBand) : t("band.none"));
     if (a.generatedAt) row("content.issuedAt", fmtDate(a.generatedAt));
     if (a.expiresAt) row("content.expiresAt", fmtDate(a.expiresAt));
-    if (a.iss) row("content.issuer", String(a.iss));
+    if (a.iss) row("content.issuer", clean(a.iss));
     var ul = el("ul", "fw");
     if (!a.frameworks.length) ul.appendChild(el("li", "", t("content.none")));
     a.frameworks.forEach(function (f) {
       var b = String(f.band);
-      var bandText = ["in_progress", "basic", "substantial", "advanced"].indexOf(b) >= 0 ? t("band." + b) : b;
-      ul.appendChild(el("li", "", String(f.label) + " (" + String(f.code) + "): " + bandText));
+      var bandText = ["in_progress", "basic", "substantial", "advanced"].indexOf(b) >= 0 ? t("band." + b) : clean(b);
+      ul.appendChild(el("li", "", clean(f.label) + " (" + clean(f.code) + "): " + bandText));
     });
     row("content.frameworks", ul);
   }
@@ -469,6 +491,7 @@
     $("#again").addEventListener("click", resetAll);
     $("#copy").addEventListener("click", copyReport);
     $("#lang").addEventListener("change", function (e) { setLanguage(e.target.value, true); });
+    $all("#opts input").forEach(function (i) { i.addEventListener("input", invalidate); i.addEventListener("change", invalidate); });
     // A file dropped beside a drop zone must not make the browser open it and leave the page.
     ["dragover", "drop"].forEach(function (ev) { root.addEventListener(ev, function (e) { e.preventDefault(); }); });
 

@@ -222,6 +222,74 @@
       slot("doc").querySelector("[data-drop]").dispatchEvent(new win.DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
       return waitFor(function () { return slotHasFile("doc") && slotHasFile("keys"); }, 3000, "both files").then(function () { return ""; });
     });
+    function typeIn(sel, value) { var i = $(sel); i.value = value; i.dispatchEvent(new win.Event("input", { bubbles: true })); }
+    function switchLanguage(l) {
+      var sel = $("#lang"); sel.value = l; sel.dispatchEvent(new win.Event("change", { bubbles: true }));
+      return waitFor(function () { return doc.documentElement.lang === l; }, 3000, "language " + l).then(function () { return sleep(40); });
+    }
+    function shown() { return !$("#result").hidden && $("#result").getAttribute("data-verdict") !== ""; }
+    add("changing any file or option takes a shown result off the page, and a language change does not bring it back", function () {
+      var restore = fakeNow(FIXED);
+      var changes = [
+        ["the attestation file", function () { setFile("doc", fileBytes("attestations/tampered-field.json"), "other.json"); }],
+        ["the key file", function () { setFile("keys", fileBytes("keys/test-only-other-jwks.json"), "other.json"); }],
+        ["removing the attestation", function () { slot("doc").querySelector("[data-remove]").click(); }],
+        ["removing the keys", function () { slot("keys").querySelector("[data-remove]").click(); }],
+        ["pasting into the attestation", function () { slot("doc").querySelector("details.paste").open = true; typeIn('[data-slot="doc"] [data-paste]', "{}"); }],
+        ["the withdrawal list", function () { setFile("status", fileBytes("status-lists/revokes-key.json"), "other.json"); }],
+        ["the withdrawal list keys", function () { setFile("statusKeys", fileBytes("keys/test-only-other-jwks.json"), "other.json"); }],
+        ["removing the withdrawal list", function () { slot("status").querySelector("[data-remove]").click(); }],
+        ["the organisation", function () { typeIn("#o-slug", "other-org"); }],
+        ["the issuer", function () { typeIn("#o-issuer", "https://other.test"); }],
+        ["the challenge", function () { typeIn("#o-nonce", "abc"); }],
+        ["the oldest age", function () { typeIn("#o-age", "5"); }],
+        ["the key identifier", function () { typeIn("#o-kid", "U4ak4BB34tmbAwevvbToHw"); }]
+      ];
+      var bad = [];
+      return changes.reduce(function (p, c) {
+        return p.then(function () {
+          resetPage();
+          setFile("status", fileBytes("status-lists/empty.json"), "list.json");
+          setFile("statusKeys", fileBytes("keys/test-only-status-jwks.json"), "keys.json");
+          return fillValid().then(function () { return waitFor(function () { return slotHasFile("status") && slotHasFile("statusKeys"); }, 3000, "files"); })
+            .then(runCheckAndRead).then(function (r) {
+              if (!shown() || r.exit !== "0") { bad.push(c[0] + ": no result to start from (" + JSON.stringify(r) + ")"); return; }
+              c[1]();
+              return sleep(60).then(function () {
+                if (shown() || !$("#result").hidden || $("#result").getAttribute("data-verdict") !== "") bad.push(c[0] + ": the old result is still shown");
+                return switchLanguage("de").then(function () {
+                  if (!$("#result").hidden) bad.push(c[0] + ": a language change brought the old result back");
+                  return switchLanguage("en");
+                });
+              });
+            });
+        });
+      }, Promise.resolve()).then(function () { restore(); return bad.join("; "); });
+    });
+    add("a language change keeps a result whose inputs have not changed", function () {
+      resetPage(); var restore = fakeNow(FIXED);
+      return fillValid().then(runCheckAndRead).then(function () {
+        return switchLanguage("fr").then(function () {
+          var kept = shown(), t1 = $("#result-title").textContent;
+          return switchLanguage("en").then(function () { restore(); return kept && t1 && $("#result-title").textContent !== t1 ? "" : "the result was lost or not translated"; });
+        });
+      });
+    });
+    function printable(s) { return !/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u.test(s); }
+    add("a control or direction character in the signed text or the file name is not shown raw", function () {
+      resetPage(); var restore = fakeNow(1791937200);
+      setFile("doc", fileBytes("fx/bidi.json"), "att\u202egnp.json");
+      setFile("keys", fileBytes(VALID.keys), "keys.json");
+      $("#o-slug").value = "fixture-org"; $("#o-issuer").value = "https://issuer.test";
+      return waitFor(function () { return slotHasFile("doc") && slotHasFile("keys"); }, 3000, "files").then(runCheckAndRead).then(function (r) {
+        restore();
+        if (r.verdict !== "verified") return "the fixture did not verify: " + JSON.stringify(r);
+        var shownText = $("#content-list").textContent + "|" + $("#stamp").textContent + "|" + slot("doc").querySelector("[data-status]").textContent;
+        if (!printable(shownText)) return "a control or format character is shown: " + JSON.stringify(shownText);
+        if (shownText.indexOf("?") < 0) return "the character was removed without a mark";
+        return "";
+      });
+    });
     add("a genuine but old document gives expired (exit 1), with the real clock", function () {
       resetPage();
       return fillValid().then(runCheckAndRead).then(function (r) {
