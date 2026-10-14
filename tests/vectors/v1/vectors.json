@@ -3025,6 +3025,143 @@
         "code": "status_unknown_public_key_size",
         "match": "public key is 1951 bytes, expected 1952"
       }
+    },
+    {
+      "id": "header-alg-escaped-value",
+      "description": "alg is written with a JSON escape (ML\\u002dDSA-65), which is ML-DSA-65: the document verifies.",
+      "args": [
+        "--attestation",
+        "attestations/header-alg-escaped-value.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed"
+      },
+      "canonical_sha256": "4304b85387e13faed4c6938c5d52ef0311ee9a3191a7dd5c0003a3984ded25f2"
+    },
+    {
+      "id": "header-member-name-escaped",
+      "description": "The member name alg is written with a JSON escape (\\u0061lg), which is alg: the document verifies.",
+      "args": [
+        "--attestation",
+        "attestations/header-member-name-escaped.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed"
+      },
+      "canonical_sha256": "9facea17af9093bf88bfc313ee6bf232c4e121e8549adbda45c7cbe9171a1594"
+    },
+    {
+      "id": "header-typ-escaped-slash",
+      "description": "typ is written with a JSON escaped slash (application\\/attest+jws), which is application/attest+jws: the document verifies.",
+      "args": [
+        "--attestation",
+        "attestations/header-typ-escaped-slash.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed"
+      },
+      "canonical_sha256": "7dd025b126f117c524130171a281144376097eb14be7271bc9e159068523c07c"
+    },
+    {
+      "id": "header-kid-escaped",
+      "description": "The first character of kid is written with a JSON escape: the kid read is the issuer's, the key is found and the document verifies.",
+      "args": [
+        "--attestation",
+        "attestations/header-kid-escaped.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "verified",
+        "match": "VERIFIED — this document was signed"
+      },
+      "canonical_sha256": "7ed244777300bdc6837928306f22272dd4fdc577bb3295df8fd29fe87f58e946"
+    },
+    {
+      "id": "header-alg-not-a-string",
+      "description": "alg is a JSON array holding ML-DSA-65, not the string: the algorithm is not ML-DSA-65.",
+      "args": [
+        "--attestation",
+        "attestations/header-alg-not-a-string.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 1,
+        "code": "header_alg_invalid",
+        "match": "alg is '', expected 'ML-DSA-65'"
+      }
+    },
+    {
+      "id": "status-header-alg-escaped-value",
+      "description": "The status list's alg is written with a JSON escape (ML\\u002dDSA-65), which is ML-DSA-65: the list is verified and the document is good.",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/header-alg-escaped-value.json"
+      ],
+      "expect": {
+        "exit": 0,
+        "code": "good",
+        "match": "GOOD — not revoked, per a verified status list"
+      },
+      "canonical_sha256": "fe8b07a0e89e219fc53384aedb0c3bd65038946e1e31e2352486caa77d610571",
+      "status_canonical_sha256": "047960f5100d1f72bfd2d2cbc2fc446176adc871a0892f6ee1fe4ea53cb06ed0"
     }
   ]
 }

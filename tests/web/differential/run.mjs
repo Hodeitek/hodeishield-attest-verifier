@@ -4,7 +4,7 @@
 // Differential test: the page's verifier logic and the real script, on the same
 // arguments, must agree on the exit code, the verdict and the reason code. The
 // cases (cases.json) are inputs on which the page once gave a weaker verdict than
-// the script, or that probe a rule the 130 vectors do not cover.
+// the script, or that probe a rule the 136 vectors do not cover.
 //
 //   node tests/web/differential/run.mjs PAGE_DIR
 //

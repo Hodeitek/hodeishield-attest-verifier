@@ -527,6 +527,7 @@ def build(g):
     build_retired_cases(g, A, S, issuer_kid)
     build_encoding_cases(g, A, S, SL, COMMON, issuer_kid)
     build_key_size_cases(g, A, S, SL, COMMON, issuer_kid)
+    build_header_cases(g, A, S, SL, COMMON, issuer_kid)
 
 
 def common_with(common, jwks):
@@ -979,6 +980,54 @@ def build_key_size_cases(g, A, S, SL, COMMON, issuer_kid):
            ["--status-list", "--status-keys", "jwks/status-pub-1951.json", "--attestation", A + "valid.json"]
            + COMMON + ["--status", S + "empty.json"], 3, "status_unknown_public_key_size",
            "public key is 1951 bytes, expected 1952")
+
+
+def build_header_cases(g, A, S, SL, COMMON, issuer_kid):
+    """alg, typ and kid are read from the header as JSON reads it: an escape is decoded.
+
+    Added after v1 was first published (the policy in its README: append-only)."""
+    def att(rel):
+        return ["--attestation", rel] + COMMON
+    sha_valid = sha_envelope(g, A + "valid.json")
+
+    # alg, typ and kid are read from the header as JSON reads it: an escape is decoded
+    def hdr_case(slug, desc, text, exit, code, match):
+        g.attest(A + "header-" + slug + ".json", header_text=text)
+        kw = {}
+        if exit == 0:
+            kw["canonical_sha256"] = sha_envelope(g, A + "header-" + slug + ".json")
+        g.case("header-" + slug, desc, att(A + "header-" + slug + ".json"), exit, code, match, **kw)
+    VERIFIED = "VERIFIED \u2014 this document was signed"
+    hdr_case("alg-escaped-value",
+             "alg is written with a JSON escape (ML\\u002dDSA-65), which is ML-DSA-65: the document verifies.",
+             '{"alg":"ML\\u002dDSA-65","kid":"@KID@","typ":"application/attest+jws"}',
+             0, "verified", VERIFIED)
+    hdr_case("member-name-escaped",
+             "The member name alg is written with a JSON escape (\\u0061lg), which is alg: the document verifies.",
+             '{"\\u0061lg":"ML-DSA-65","kid":"@KID@","typ":"application/attest+jws"}',
+             0, "verified", VERIFIED)
+    hdr_case("typ-escaped-slash",
+             "typ is written with a JSON escaped slash (application\\/attest+jws), which is application/attest+jws: "
+             "the document verifies.",
+             '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application\\/attest+jws"}',
+             0, "verified", VERIFIED)
+    hdr_case("kid-escaped",
+             "The first character of kid is written with a JSON escape: the kid read is the issuer's, the key is "
+             "found and the document verifies.",
+             '{"alg":"ML-DSA-65","kid":"\\u%04x%s","typ":"application/attest+jws"}' % (ord(issuer_kid[0]), issuer_kid[1:]),
+             0, "verified", VERIFIED)
+    hdr_case("alg-not-a-string",
+             "alg is a JSON array holding ML-DSA-65, not the string: the algorithm is not ML-DSA-65.",
+             '{"alg":["ML-DSA-65"],"kid":"@KID@","typ":"application/attest+jws"}',
+             1, "header_alg_invalid", "alg is '', expected 'ML-DSA-65'")
+    g.status(S + "header-alg-escaped-value.json", issued_at=LIST_AT, next_update=LIST_NEXT, seq=7,
+             header_text='{"alg":"ML\\u002dDSA-65","kid":"@KID@","typ":"application/attest-status+jws"}')
+    g.case("status-header-alg-escaped-value",
+           "The status list's alg is written with a JSON escape (ML\\u002dDSA-65), which is ML-DSA-65: the list "
+           "is verified and the document is good.",
+           SL + ["--status", S + "header-alg-escaped-value.json"], 0, "good",
+           "GOOD \u2014 not revoked, per a verified status list",
+           canonical_sha256=sha_valid, status_canonical_sha256=sha_status(g, S + "header-alg-escaped-value.json"))
 
 
 def write_outputs(g):

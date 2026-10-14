@@ -233,3 +233,9 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   `status_unknown_public_key_size`) for the status list. New code:
   `public_key_size_invalid`. The manifest and this README changed; every other existing file keeps its `SHA256SUMS`
   line byte for byte.
+- 2026-10-14: added 6 cases and their files (nothing existing changed) for the
+  protected header read as JSON: `alg` written with an escape (`ML\u002dDSA-65`), the
+  member name `alg` written with an escape, `typ` with an escaped slash and a `kid`
+  whose first character is an escape all verify; an `alg` that is an array is
+  `header_alg_invalid`; a status list whose `alg` is written with an escape is good. No new code. The manifest and this README changed; every other existing file keeps its `SHA256SUMS`
+  line byte for byte.

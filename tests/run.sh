@@ -1290,16 +1290,16 @@ LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter in --expect-kid
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'ééééééééééééééééééééé'
 LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter among valid characters is a usage error (2) under $KID_LOCALE" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'AAAAAAAAAAAAAAAAAAAAéA'
-# The protected header is read in the C locale too: a header kid holding a byte
-# that is not valid UTF-8 is read and shown, escaped, under a UTF-8 locale as
-# under C (it used to read as an empty kid there).
+# The protected header is read as JSON, which is UTF-8: a header holding a byte
+# that is not valid UTF-8 is not JSON, so its kid reads as empty, and it reads the
+# same under a UTF-8 locale as under C.
 edit "$T/att.json" "$T/kid-ff.json" '
 import base64
 h, p, s = d["attestation"]["signature"].split(".")
 raw = base64.urlsafe_b64decode(h + "=" * (-len(h) % 4)).replace(b"\"kid\":\"", b"\"kid\":\"\xff", 1)
 d["attestation"]["signature"] = ".".join([base64.urlsafe_b64encode(raw).rstrip(b"=").decode(), p, s])'
 for kid_loc in C "$KID_LOCALE"; do
-  LC_ALL="$kid_loc" expect 2 "no key in this JWKS carries kid '\\xff$ISSUER_KID'" "a header kid with a byte that is not UTF-8 is read the same under $kid_loc (2)" -- \
+  LC_ALL="$kid_loc" expect 2 "no key in this JWKS carries kid ''" "a header with a byte that is not UTF-8 has no readable kid, the same under $kid_loc (2)" -- \
     --attestation "$T/kid-ff.json" "${COMMON[@]}"
 done
 
@@ -2386,7 +2386,7 @@ PROBE2="$T/probe-header-verifier.sh"
 "$PYBIN" -I - "$VERIFIER" "$PROBE2" "$T/probe-header.json" <<'PY'
 import sys
 t = open(sys.argv[1]).read()
-anchor = 'TYP="$(header_field "$WORKDIR/header.json" typ)"\n'
+anchor = 'printf \'        %s\\n\' "$(esc "$(cat "$WORKDIR/header.json")")"\n'
 assert t.count(anchor) == 1
 open(sys.argv[2], "w").write(t.replace(anchor, anchor + 'json_emit_bash 0 attestation verified > "%s"\n' % sys.argv[3]))
 PY
@@ -2558,6 +2558,71 @@ pub = base64.urlsafe_b64encode(base64.urlsafe_b64decode(pub + "=" * (-len(pub) %
 jexpect 3 'a status key of 1951 bytes is UNKNOWN (3), status_unknown_public_key_size' \
   'o["reason"] == "status_unknown_public_key_size"' -- \
   --status-list --status-keys "$T/status-keys-short.json" --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-empty.json"
+
+# --- alg, typ and kid are read from the header as JSON --------------------------------
+# By the parse that checks the member set, not by a text pattern.
+echo '# the protected header is read as JSON'
+hdr_text() {   # NAME TEXT — an attestation signed under exactly this protected header
+  mint_attest --out "$T/hdr-$1.json" --header-text "$2"
+}
+KT='"kid":"@KID@","typ":"application/attest+jws"'
+hdr_text alg-escaped '{"alg":"ML-DSA-65",'"$KT"'}'
+jexpect 0 'alg written as ML-DSA-65 is ML-DSA-65: the document verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-alg-escaped.json" "${COMMON[@]}"
+hdr_text name-escaped '{"alg":"ML-DSA-65",'"$KT"'}'
+jexpect 0 'the member name alg is alg: the document verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-name-escaped.json" "${COMMON[@]}"
+hdr_text typ-slash '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application\/attest+jws"}'
+jexpect 0 'typ with an escaped slash is application/attest+jws: the document verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-typ-slash.json" "${COMMON[@]}"
+hdr_text kid-escaped '{"alg":"ML-DSA-65","kid":"'"$(printf '\\u%04x' "'${ISSUER_KID:0:1}")${ISSUER_KID:1}"'","typ":"application/attest+jws"}'
+jexpect 0 'a kid whose first character is a JSON escape finds its key' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-kid-escaped.json" "${COMMON[@]}"
+hdr_text newline '{
+  "alg": "ML-DSA-65",
+  "kid": "@KID@",
+  "typ": "application/attest+jws"
+}'
+jexpect 0 'a header written over several lines verifies' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/hdr-newline.json" "${COMMON[@]}"
+# what is not a string, or not exactly the constant, does not pass
+hdr_text alg-array '{"alg":["ML-DSA-65"],'"$KT"'}'
+jexpect 1 'alg as an array is not ML-DSA-65 (1)' 'o["reason"] == "header_alg_invalid"' -- \
+  --attestation "$T/hdr-alg-array.json" "${COMMON[@]}"
+hdr_text alg-nul '{"alg":"ML-DSA-65\u0000",'"$KT"'}'
+jexpect 1 'alg with a NUL character after it is not ML-DSA-65 (1)' 'o["reason"] == "header_alg_invalid"' -- \
+  --attestation "$T/hdr-alg-nul.json" "${COMMON[@]}"
+hdr_text alg-quote '{"alg":"ML-DSA-65\"",'"$KT"'}'
+jexpect 1 'alg ending in an escaped quote is not ML-DSA-65 (1)' 'o["reason"] == "header_alg_invalid"' -- \
+  --attestation "$T/hdr-alg-quote.json" "${COMMON[@]}"
+hdr_text typ-number '{"alg":"ML-DSA-65","kid":"@KID@","typ":5}'
+jexpect 1 'typ as a number is not the constant (1)' 'o["reason"] == "header_typ_invalid"' -- \
+  --attestation "$T/hdr-typ-number.json" "${COMMON[@]}"
+hdr_text alg-twice '{"alg":"none","alg":"ML-DSA-65",'"$KT"'}'
+jexpect 1 'alg twice is a header with a repeated member (1)' 'o["reason"] == "header_not_allowed"' -- \
+  --attestation "$T/hdr-alg-twice.json" "${COMMON[@]}"
+hdr_text nan '{"alg":"ML-DSA-65",'"$KT"',"x":NaN}'
+jexpect 2 'a header with a NaN is not JSON, so it has no kid: no key (2)' 'o["reason"] == "unknown_kid"' -- \
+  --attestation "$T/hdr-nan.json" "${COMMON[@]}"
+hdr_text kid-number '{"alg":"ML-DSA-65","kid":5,"typ":"application/attest+jws"}'
+jexpect 2 'a kid that is a number is no kid: no key (2)' 'o["reason"] == "unknown_kid"' -- \
+  --attestation "$T/hdr-kid-number.json" "${COMMON[@]}"
+hdr_text kid-surrogate '{"alg":"ML-DSA-65","kid":"\ud800","typ":"application/attest+jws"}'
+jexpect 2 'a kid that is an unpaired surrogate is no kid: no key (2)' 'o["reason"] == "unknown_kid"' -- \
+  --attestation "$T/hdr-kid-surrogate.json" "${COMMON[@]}"
+# the status list's header, read the same way
+mint_status --out "$T/list-hdr-escaped.json" --seq 7 \
+  --header-text '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application/attest-status+jws"}'
+jexpect 0 'a status list whose alg is written ML-DSA-65 is good' 'o["verdict"] == "good"' -- \
+  "${SL[@]}" --status "$T/list-hdr-escaped.json"
+mint_status --out "$T/list-hdr-alg-number.json" --seq 7 \
+  --header-text '{"alg":5,"kid":"@KID@","typ":"application/attest-status+jws"}'
+jexpect 3 'a status list whose alg is a number is UNKNOWN (3)' 'o["reason"] == "status_unknown_unsupported_alg"' -- \
+  "${SL[@]}" --status "$T/list-hdr-alg-number.json"
+mint_status --out "$T/list-hdr-kid-number.json" --seq 7 \
+  --header-text '{"alg":"ML-DSA-65","kid":5,"typ":"application/attest-status+jws"}'
+jexpect 3 'a status list whose kid is a number is UNKNOWN (3), no key' 'o["reason"] == "status_unknown_unknown_kid"' -- \
+  "${SL[@]}" --status "$T/list-hdr-kid-number.json"
 
 # --- real cosign: a legacy-format bundle cannot lend the tag a certificate -----------
 # Needs cosign 3.1.3 or later (CI installs it); skipped, never passed, without it.

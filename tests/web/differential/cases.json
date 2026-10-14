@@ -25,14 +25,14 @@
   },
   {
    "id": "h1-nested-duplicate-in-header",
-   "why": "a member repeated inside a nested object of the protected header: the script's hook sees every object",
+   "why": "a member repeated inside a nested object of the protected header (alg is an object, not a string, and the member set fails too): the script's hook sees every object",
    "args": [
     "--attestation",
     "{fx}/h1-nested-dup-header.json"
    ],
    "expect": {
     "exit": 1,
-    "reason": "header_not_allowed"
+    "reason": "header_alg_invalid"
    }
   },
   {
@@ -715,6 +715,225 @@
     "exit": 3,
     "reason": "status_unknown_public_key_size"
    }
+  },
+  {
+   "id": "hdr-alg-escaped-value",
+   "why": "alg written with a JSON escape is ML-DSA-65",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-alg-escaped-value.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-member-name-escaped",
+   "why": "the member name alg written with a JSON escape is alg",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-member-name-escaped.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-typ-escaped-slash",
+   "why": "typ written with an escaped slash is application/attest+jws",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-typ-escaped-slash.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-kid-escaped",
+   "why": "kid with its first character written as a JSON escape finds its key",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-kid-escaped.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-alg-not-a-string",
+   "why": "alg that is an array, not a string",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-alg-not-a-string.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "hdr-alg-nul",
+   "why": "alg followed by a NUL character (\\u0000)",
+   "args": [
+    "--attestation",
+    "{fx}/b1-alg-nul.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "hdr-kid-lone-surrogate",
+   "why": "a kid that is an unpaired surrogate escape reads as empty: no key",
+   "args": [
+    "--attestation",
+    "{fx}/b2-kid-lone-surrogate.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-nan-member",
+   "why": "a header with a NaN member is not JSON, so it has no kid: no key (Python's own reader would accept the NaN; the script's header read does not)",
+   "args": [
+    "--attestation",
+    "{fx}/b3-nan-member.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-oversize-kid-late",
+   "why": "a header over 4096 bytes: failed for its size, and its kid past byte 4096 is still found",
+   "args": [
+    "--attestation",
+    "{fx}/b4-oversize-kid-late.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_too_large"
+   }
+  },
+  {
+   "id": "hdr-duplicate-alg",
+   "why": "alg twice at the top level: the member set fails",
+   "args": [
+    "--attestation",
+    "{fx}/b5-duplicate-alg.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_not_allowed"
+   }
+  },
+  {
+   "id": "hdr-typ-number",
+   "why": "typ that is a number",
+   "args": [
+    "--attestation",
+    "{fx}/b6-typ-number.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_typ_invalid"
+   }
+  },
+  {
+   "id": "hdr-kid-number",
+   "why": "kid that is a number reads as empty: no key",
+   "args": [
+    "--attestation",
+    "{fx}/b7-kid-number.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-alg-escaped-quote",
+   "why": "alg that ends in an escaped quote is not ML-DSA-65",
+   "args": [
+    "--attestation",
+    "{fx}/b8-alg-escaped-quote.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "hdr-kid-invalid-utf8",
+   "why": "a byte that is not UTF-8 in the header: not JSON, no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b9-kid-invalid-utf8.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-status-alg-escaped-value",
+   "why": "the status header's alg written with a JSON escape",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/header-alg-escaped-value.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "hdr-status-alg-number",
+   "why": "the status header's alg that is a number",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/s1-alg-number.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_unsupported_alg"
+   }
+  },
+  {
+   "id": "hdr-status-kid-number",
+   "why": "the status header's kid that is a number reads as empty: no key",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/s2-kid-number.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_unknown_kid"
+   }
   }
  ],
  "templates": {
@@ -737,5 +956,5 @@
    "{v1}/keys/test-only-status-jwks.json"
   ]
  },
- "minimum": 48
+ "minimum": 65
 }

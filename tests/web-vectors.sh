@@ -17,7 +17,7 @@
 # What it does: assembles the page exactly as the release bundle does
 # (tools/verify-page/build.sh), checks its manifest, then for each browser runs
 # tests/web/run.mjs twice: from http://127.0.0.1 and from disk (file://), as a
-# downloaded copy is used. Every one of the 130 cases must give the verdict, exit
+# downloaded copy is used. Every one of the 136 cases must give the verdict, exit
 # code and reason code of the case, with the fixed "now" of the case (--now). The
 # page's own controls are driven too (files, paste, drop, languages) and the
 # result is read from data attributes, never from the text. The three

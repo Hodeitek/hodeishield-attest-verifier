@@ -36,7 +36,7 @@ Fixed.
   (`--anchor-file`), which needs Sigstore. Safari is not tested. See
   [docs/security/browser-verifier.md](docs/security/browser-verifier.md)
   (Refs #25).
-- `tests/web-vectors.sh`: all 130 cases of `tests/vectors/v1` on the page as it
+- `tests/web-vectors.sh`: all 136 cases of `tests/vectors/v1` on the page as it
   ships, in headless Google Chrome and Firefox, from http and from disk, with the
   verdict, exit code and reason code of each case (one reason code differs by
   design and is named); `tests/web-static.sh` (the policy, the code and the six
@@ -54,14 +54,14 @@ Fixed.
   also checks that `mldsa_wasm.b64.js`, the file the page runs, is byte for byte what
   the pinned module makes.
 - `tests/web-differential.sh`: the page's logic and the real script must agree on
-  exit code, verdict and reason code on inputs the 130 vectors do not cover (a
+  exit code, verdict and reason code on inputs the 136 vectors do not cover (a
   duplicate member nested in the protected header, an integer of more than 4,300
   digits, the refusals of the script's status-list reader).
 
 ### Changed
 - `VERIFIER_VERSION` is 1.6.0 (the page carries the same number).
-- Differences between the script and its documentation, found while porting it,
-  are written down in `docs/security/browser-verifier.md`; neither was changed.
+- The differences between the script and its documentation, found while porting
+  the page, are fixed in the script and in the page (see Fixed).
 
 ### Fixed
 - Base64url is strict. A JWS segment, a public key `pub` and a status-list segment
@@ -86,6 +86,16 @@ Fixed.
   which OpenSSL loaded, ended in exit 1 and now ends in exit 2 as well. A status
   key of the wrong size was already `status_unknown_public_key_size` (exit 3).
   The page does the same (#105).
+- `alg`, `typ` and `kid` of the attestation's protected header are read with the
+  JSON parse that checks the member set, and not with a `sed` pattern. A JSON
+  escape is decoded (`"ML\u002dDSA-65"` is `ML-DSA-65`; a member name written
+  with an escape is that member); a value that is not a string, or holds an
+  unpaired surrogate, reads as empty and fails its check. A signed header whose
+  `alg` was written with an escape used to fail `header_alg_invalid`. A header
+  that is not JSON (invalid UTF-8, a `NaN`) has no `kid` to look a key up by, so
+  with a key set the run ends in `unknown_kid` (exit 2) where the pattern could
+  still find one. The status list's header, already read as JSON, now takes
+  only strings too. The page does the same (#106).
 
 ## v1.5.0 - 2026-10-13
 

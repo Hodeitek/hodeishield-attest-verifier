@@ -205,6 +205,15 @@ and fails, for a posture attestation and for a status list alike. If we ever nee
 to add a header field, that is a new `typ` and a new document version, not a
 silent extension.
 
+**The header is read as JSON.** `alg`, `typ` and `kid` come from the same JSON
+parse that checks the member set (a member repeated at any depth is refused), not
+from a text pattern, so the verdict does not depend on how a second reader would
+see the same bytes. Each must be a JSON string, read as JSON says: an escape is
+decoded (`"ML\u002dDSA-65"` is `ML-DSA-65`, and a member name written with an
+escape is that member); a value that is not a string, or holds an unpaired
+surrogate, is not the constant it is compared with. A header that is not JSON has
+no `kid` to look a key up by.
+
 **Every segment is base64url exactly.** A JWS segment, a `pub` and a status-list
 segment are checked against the alphabet `A-Z a-z 0-9 - _` before they are
 decoded: no `=` padding, no `+` or `/` (the standard alphabet), no spaces, a

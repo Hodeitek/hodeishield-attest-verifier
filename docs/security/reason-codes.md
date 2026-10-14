@@ -94,9 +94,9 @@ cannot emit.
 | `signature_size_valid` | The signature is 3309 bytes. | pass | 0 | both |  |
 | `signature_size_invalid` | The signature is not 3309 bytes. | fail | 1 | both | 2: `sig-truncated-3308`, `sig-extended-3310` |
 | `header_alg_valid` | `alg` is `ML-DSA-65`. | pass | 0 | both |  |
-| `header_alg_invalid` | `alg` is anything else. | fail | 1 | both | 5: `header-alg-none`, `alg-ml-dsa-44`, `alg-ml-dsa-87`, ... |
+| `header_alg_invalid` | `alg` is anything else, or is not a JSON string. | fail | 1 | both | 6: `header-alg-none`, `alg-ml-dsa-44`, `alg-ml-dsa-87`, ... |
 | `header_typ_valid` | `typ` is `application/attest+jws`. | pass | 0 | both |  |
-| `header_typ_invalid` | `typ` is anything else. | fail | 1 | both |  |
+| `header_typ_invalid` | `typ` is anything else, or is not a JSON string. | fail | 1 | both |  |
 | `header_crit_absent` | The header has no `crit`. | pass | 0 | both |  |
 | `header_members_valid` | The header is exactly `alg`, `kid`, `typ`. | pass | 0 | both |  |
 | `header_not_allowed` | The header carries `crit` or a member beyond `alg`, `kid`, `typ`. | fail | 1 | both | 3: `header-extra-member`, `header-crit`, `dup-header-member` |
@@ -222,7 +222,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `overall_band_mismatch` | `overallBand` is not the weakest attested band. | fail | 1 | both | 1: `overall-band-overclaim` |
 | `redaction_valid` | A gated posture is redacted as required. | pass | 0 | both |  |
 | `redaction_violation` | A gated posture carries coverage, heartbeat or overall band. | fail | 1 | both | 1: `gated-redaction-leak` |
-| `verified` | The verdict: every check held. | pass | 0 | attestation | 8: `valid-detached`, `valid-jws-claims`, `nonce-match`, ... |
+| `verified` | The verdict: every check held. | pass | 0 | attestation | 12: `valid-detached`, `valid-jws-claims`, `nonce-match`, ... |
 
 ## Status list (a failure leaves the status unknown)
 
@@ -300,6 +300,6 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_unknown_generated_at_missing` | Warning: the subject is listed, but there is no `generatedAt` to compare with `notBefore`. | warn | 3 | status-list |  |
 | `status_unknown_subject_dates_unparseable` | Warning: `generatedAt` or `notBefore` is not RFC 3339. | warn | 3 | status-list |  |
 | `status_unknown_truncated` | Warning: the subject is not found, but the list is truncated. | warn | 3 | status-list |  |
-| `good` | The verdict: not revoked, per a verified list. | pass | 0 | status-list | 3: `status-good`, `status-good-after-withdrawal`, `status-retired-key-before` |
+| `good` | The verdict: not revoked, per a verified list. | pass | 0 | status-list | 4: `status-good`, `status-good-after-withdrawal`, `status-retired-key-before` |
 | `revoked_key` | The verdict: the key is in the list. | fail | 1 | status-list | 2: `status-revoked-key`, `status-expired-under-revoking-list` |
 | `revoked_subject` | The verdict: the subject is withdrawn from a date after the document. | fail | 1 | status-list | 2: `status-revoked-subject`, `status-attached-jws-revoked` |

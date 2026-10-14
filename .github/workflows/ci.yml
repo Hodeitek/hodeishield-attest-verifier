@@ -77,7 +77,7 @@ jobs:
   # The in-browser verifier page (issue #25). Three jobs, none of which needs the
   # Debian container: the ML-DSA-65 module builds in its pinned container and must
   # have the pinned bytes; the page's policy and languages are checked statically;
-  # and all 130 cases of tests/vectors/v1 run in real headless Chrome and Firefox
+  # and all 136 cases of tests/vectors/v1 run in real headless Chrome and Firefox
   # (both are on ubuntu-latest), from http and from disk, on the page as it is
   # shipped. Safari is not tested.
   wasm-build:
@@ -137,7 +137,7 @@ jobs:
         run: bash tests/web-vectors.sh --wasm "$RUNNER_TEMP/wasm"
 
   # The page's logic and the real script, on the same arguments, must agree on exit
-  # code, verdict and reason code, on inputs the 130 vectors do not cover. It needs
+  # code, verdict and reason code, on inputs the 136 vectors do not cover. It needs
   # what the script needs (OpenSSL 3.5), so it runs in the Debian container.
   web-differential:
     name: web page and script agree (differential)
