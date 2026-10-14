@@ -2753,6 +2753,210 @@
           "VERIFIED"
         ]
       }
+    },
+    {
+      "id": "header-segment-not-base64url",
+      "description": "The protected header segment holds a character outside the base64url alphabet (!): could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/header-segment-bang.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "header_not_base64url",
+        "match": "header is not valid base64url"
+      }
+    },
+    {
+      "id": "signature-segment-plus",
+      "description": "The signature segment holds + (the standard alphabet, not base64url): could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/signature-segment-plus.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "signature_not_base64url",
+        "match": "signature is not valid base64url"
+      }
+    },
+    {
+      "id": "signature-segment-slash",
+      "description": "The signature segment holds / (the standard alphabet, not base64url): could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/signature-segment-slash.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "signature_not_base64url",
+        "match": "signature is not valid base64url"
+      }
+    },
+    {
+      "id": "signature-segment-padded",
+      "description": "The signature segment carries = padding, which unpadded base64url does not have: could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/signature-segment-padded.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "signature_not_base64url",
+        "match": "signature is not valid base64url"
+      }
+    },
+    {
+      "id": "header-segment-trailing-bits",
+      "description": "The last character of the header segment has bits set that the bytes do not use (the same bytes, written another way): could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/header-segment-trailing-bits.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "header_not_base64url",
+        "match": "header is not valid base64url"
+      }
+    },
+    {
+      "id": "public-key-trailing-bits",
+      "description": "The public key's last character has bits set that the key bytes do not use (the same key, written another way): could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "jwks/pub-trailing-bits.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "public_key_not_base64url",
+        "match": "public key is not valid base64url"
+      }
+    },
+    {
+      "id": "status-header-segment-not-base64url",
+      "description": "The status list's header segment holds a character outside the base64url alphabet: unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/header-segment-bang.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_header_not_base64url",
+        "match": "protected header is not valid base64url"
+      }
+    },
+    {
+      "id": "status-signature-segment-plus",
+      "description": "The status list's signature segment holds + (the standard alphabet): unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "keys/test-only-status-jwks.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/signature-segment-plus.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_signature_not_base64url",
+        "match": "signature segment is not valid base64url"
+      }
+    },
+    {
+      "id": "status-public-key-trailing-bits",
+      "description": "The status public key's last character has bits set that the key bytes do not use: unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-pub-trailing-bits.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/empty.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_public_key_not_base64url",
+        "match": "public key is not valid base64url"
+      }
     }
   ]
 }

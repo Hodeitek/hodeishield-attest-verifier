@@ -2412,6 +2412,121 @@ PATH="$NOPY" jexpect 2 'without python3: exit 2, a valid object, no attested con
 export PATH="$PATH_BEFORE_STUB"
 unset COSIGN_STUB_LOG
 
+# --- base64url is strict ------------------------------------------------------------
+# A segment of a JWS, a key and a status-list segment are base64url exactly: the
+# alphabet A-Z a-z 0-9 - _ and nothing else (no +, no /, no =, no space), a length
+# that is not 1 modulo 4, and no bits left over in the last character. Each fault is
+# "could not check" under the reason code of its segment, never a quiet empty value
+# that fails later under another one.
+echo '# strict base64url'
+
+# jws_edit IN OUT PYTHON — change the segments h, p, s of the attestation's signature
+jws_edit() {
+  edit "$1" "$2" '
+h, p, s = d["attestation"]["signature"].split(".")
+'"$3"'
+d["attestation"]["signature"] = ".".join([h, p, s])'
+}
+# jwks_pub IN OUT PYTHON — change the `pub` of the first key (`pub`, as text)
+jwks_pub() {
+  edit "$1" "$2" '
+pub = d["keys"][0]["pub"]
+'"$3"'
+d["keys"][0]["pub"] = pub'
+}
+B64ARGS=(--expect-slug "$SLUG" --expect-issuer "$ISS" --now "$NOW")
+
+# the header segment
+for variant in 'Q!JD' 'Q*J' 'h[:10] + "+" + h[11:]' 'h[:10] + "/" + h[11:]' 'h + "=="' 'h[:10] + "é" + h[11:]'; do
+  case "$variant" in
+    Q*) py="h = '$variant'" ;;
+    *) py="h = $variant" ;;
+  esac
+  jws_edit "$T/att.json" "$T/b64-header.json" "$py"
+  jexpect 2 "a header segment of $variant is \"could not check\" (2), header_not_base64url" \
+    'o["reason"] == "header_not_base64url" and o["verdict"] == "could_not_check"' -- \
+    --attestation "$T/b64-header.json" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+done
+# the signature segment
+for variant in 's[:100] + "+" + s[101:]' 's[:100] + "/" + s[101:]' 's + "=="' 's[:100] + "!" + s[101:]' 's[:100] + "." + s[101:]'; do
+  jws_edit "$T/att.json" "$T/b64-sig.json" "s = $variant"
+  case "$variant" in
+    *'"."'*) want='jws_too_many_dots' ;;
+    *) want='signature_not_base64url' ;;
+  esac
+  jexpect 2 "a signature segment of $variant is \"could not check\" (2), $want" \
+    "o[\"reason\"] == \"$want\"" -- \
+    --attestation "$T/b64-sig.json" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+done
+# bits left over in the last character: the same bytes written another way. The
+# signed document has a header of 82 bytes (a space after the closing brace), whose
+# segment has 110 characters, so that its last character carries 4 spare bits.
+mint_attest --out "$T/hdr-space.json" \
+  --header-text '{"alg":"ML-DSA-65","kid":"@KID@","typ":"application/attest+jws"} '
+expect 0 'VERIFIED — this document was signed' 'a header segment that needs padding bits, written canonically, verifies' -- \
+  --attestation "$T/hdr-space.json" "${COMMON[@]}"
+jws_edit "$T/hdr-space.json" "$T/hdr-space-bits.json" '
+assert len(h) % 4 == 2 and h[-1] in "AQgw"
+h = h[:-1] + "B"'
+jexpect 2 'a header segment with bits left over in its last character is "could not check" (2)' \
+  'o["reason"] == "header_not_base64url"' -- \
+  --attestation "$T/hdr-space-bits.json" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+# an attached payload that is not base64url is evidence against the document, not a tooling problem
+python3 -I - "$T/attached.jws" "$T/attached-bang.jws" <<'PY'
+import sys
+h, p, s = open(sys.argv[1]).read().strip().split(".")
+open(sys.argv[2], "w").write(".".join([h, p[:10] + "!" + p[11:], s]) + "\n")
+PY
+jexpect 1 'an attached payload with ! is not an envelope (1), never verified as opaque bytes' \
+  'o["reason"] == "payload_not_envelope"' -- \
+  --jws "$T/attached-bang.jws" --jwks "$T/jwks.json" "${B64ARGS[@]}"
+
+# the key: in a key set and in --pub-b64url
+jwks_pub "$T/jwks.json" "$T/jwks-bits.json" '
+alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+assert len(pub) % 4 == 3 and alpha.index(pub[-1]) % 4 == 0
+pub = pub[:-1] + alpha[alpha.index(pub[-1]) + 1]'
+jexpect 2 'a key whose last character has bits left over is "could not check" (2), not the same key' \
+  'o["reason"] == "public_key_not_base64url"' -- \
+  --attestation "$T/att.json" --jwks "$T/jwks-bits.json" "${B64ARGS[@]}"
+for variant in 'pub[:50] + "+" + pub[51:]' 'pub[:50] + "/" + pub[51:]' 'pub + "="' 'pub[:50] + "!" + pub[51:]' 'pub[:50] + " " + pub[51:]'; do
+  jwks_pub "$T/jwks.json" "$T/jwks-bad-pub.json" "pub = $variant"
+  jexpect 2 "a key set whose pub is $variant is \"could not check\" (2), public_key_not_base64url" \
+    'o["reason"] == "public_key_not_base64url"' -- \
+    --attestation "$T/att.json" --jwks "$T/jwks-bad-pub.json" "${B64ARGS[@]}"
+done
+jexpect 2 '--pub-b64url with = padding is "could not check" (2), public_key_not_base64url' \
+  'o["reason"] == "public_key_not_base64url"' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB=" "${B64ARGS[@]}"
+jexpect 2 '--pub-b64url with a character of the standard alphabet is "could not check" (2)' \
+  'o["reason"] == "public_key_not_base64url"' -- \
+  --attestation "$T/att.json" --pub-b64url "${PUB:0:50}+${PUB:51}" "${B64ARGS[@]}"
+
+# a status list: its header, its signature, its key
+status_edit() {   # IN OUT PYTHON — change the segments h, p, s of the status list's signature
+  edit "$1" "$2" '
+h, p, s = d["signature"].split(".")
+'"$3"'
+d["signature"] = ".".join([h, p, s])'
+}
+status_edit "$T/list-empty.json" "$T/b64-status-h.json" 'h = h[:10] + "!" + h[11:]'
+jexpect 3 'a status list header segment with ! is UNKNOWN (3), status_unknown_header_not_base64url' \
+  'o["reason"] == "status_unknown_header_not_base64url"' -- "${SL[@]}" --status "$T/b64-status-h.json"
+for variant in 's[:100] + "+" + s[101:]' 's[:100] + "/" + s[101:]' 's + "=="'; do
+  status_edit "$T/list-empty.json" "$T/b64-status-s.json" "s = $variant"
+  jexpect 3 "a status list signature segment of $variant is UNKNOWN (3), status_unknown_signature_not_base64url" \
+    'o["reason"] == "status_unknown_signature_not_base64url"' -- "${SL[@]}" --status "$T/b64-status-s.json"
+done
+jwks_pub "$T/status-keys.json" "$T/status-keys-bits.json" '
+alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+assert len(pub) % 4 == 3 and alpha.index(pub[-1]) % 4 == 0
+pub = pub[:-1] + alpha[alpha.index(pub[-1]) + 1]'
+jexpect 3 'a status key with bits left over in its last character is UNKNOWN (3)' \
+  'o["reason"] == "status_unknown_public_key_not_base64url"' -- \
+  --status-list --status-keys "$T/status-keys-bits.json" --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-empty.json"
+jexpect 0 'a canonical key still verifies after all this' 'o["verdict"] == "verified"' -- \
+  --attestation "$T/att.json" --pub-b64url "$PUB" "${B64ARGS[@]}"
+
 # --- real cosign: a legacy-format bundle cannot lend the tag a certificate -----------
 # Needs cosign 3.1.3 or later (CI installs it); skipped, never passed, without it.
 # The genuine v1.3.0 bundle is rewritten in cosign's legacy format, which cosign

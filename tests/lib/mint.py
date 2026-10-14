@@ -119,9 +119,10 @@ def sign(key_pem, message):
         os.unlink(path)
 
 
-def detached_jws(key_pem, kid, typ, payload, extra_header=None):
+def detached_jws(key_pem, kid, typ, payload, extra_header=None, header_text=None):
     hdr = {"alg": "ML-DSA-65", "kid": kid, "typ": typ, **(extra_header or {})}
-    header = b64url(json.dumps(hdr, separators=(",", ":")).encode("utf-8"))
+    text = json.dumps(hdr, separators=(",", ":")) if header_text is None else header_text.replace("@KID@", kid)
+    header = b64url(text.encode("utf-8"))
     sig = sign(key_pem, (header + "." + b64url(payload)).encode("ascii"))
     return header + ".." + b64url(sig)
 
@@ -182,7 +183,8 @@ def cmd_attest(a):
     payload = envelope_bytes(claims)
     doc = {"attestation": {"claims": claims,
                            "signature": detached_jws(a.key, hkid, ATTEST_TYP, payload,
-                                                     dict(h.split("=", 1) for h in a.header)),
+                                                     dict(h.split("=", 1) for h in a.header),
+                                                     a.header_text),
                            "digest": hashlib.sha256(payload).hexdigest()}}
     with open(a.out, "w") as fh:
         json.dump(doc, fh, indent=2)
@@ -218,7 +220,7 @@ def cmd_status(a):
            "keys": keys, "subjects": subjects}
     doc = {"statusList": lst,
            "signature": detached_jws(a.key, hkid, STATUS_TYP, statuslist_bytes(lst),
-                                     dict(h.split("=", 1) for h in a.header))}
+                                     dict(h.split("=", 1) for h in a.header), a.header_text)}
     with open(a.out, "w") as fh:
         json.dump(doc, fh, indent=2)
 
@@ -253,6 +255,9 @@ def main():
     t.add_argument("--claims-kid", default=None, help="TEST-ONLY: claims.kid only")
     t.add_argument("--escapes", action="store_true",
                    help="TEST-ONLY: read --slug, --iss and --nonce as Python string escapes (\\x00)")
+    t.add_argument("--header-text", default=None,
+                   help="TEST-ONLY: the exact text of the protected header (@KID@ is the kid), signed as given, "
+                        "for a header JSON can write more than one way (an escaped name or value)")
     t.set_defaults(fn=cmd_attest)
 
     x = sub.add_parser("attach")
@@ -277,6 +282,9 @@ def main():
                    help="name=value: an extra or overriding protected-header member, signed")
     s.add_argument("--escapes", action="store_true",
                    help="TEST-ONLY: read --iss as Python string escapes (\\x00)")
+    s.add_argument("--header-text", default=None,
+                   help="TEST-ONLY: the exact text of the protected header (@KID@ is the kid), signed as given, "
+                        "for a header JSON can write more than one way (an escaped name or value)")
     s.set_defaults(fn=cmd_status)
 
     a = ap.parse_args()

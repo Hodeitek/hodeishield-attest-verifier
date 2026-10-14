@@ -1,5 +1,5 @@
 {
- "note": "Inputs on which the page once gave a weaker verdict than the script, or that probe a rule the 118 vectors do not. {v1} is tests/vectors/v1, {fx} is tests/web/differential/fixtures (signed with the TEST-ONLY keys of v1). Every case is run through the page's logic and through the real script; exit code, verdict and reason code must be identical.",
+ "note": "Inputs on which the page once gave a weaker verdict than the script, or that probe a rule the vectors do not. {v1} is tests/vectors/v1, {fx} is tests/web/differential/fixtures (signed with the TEST-ONLY keys of v1). Every case is run through the page's logic and through the real script; exit code, verdict and reason code must be identical.",
  "defaults": [
   "--jwks",
   "{v1}/keys/test-only-issuer-jwks.json",
@@ -521,6 +521,139 @@
     "exit": 0,
     "reason": "good"
    }
+  },
+  {
+   "id": "b64-header-segment-bang",
+   "why": "a header segment with a character outside the base64url alphabet",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-segment-bang.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "header_not_base64url"
+   }
+  },
+  {
+   "id": "b64-signature-segment-plus",
+   "why": "a signature segment with + (the standard alphabet)",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/signature-segment-plus.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-signature-segment-slash",
+   "why": "a signature segment with / (the standard alphabet)",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/signature-segment-slash.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-signature-segment-padded",
+   "why": "a signature segment with = padding",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/signature-segment-padded.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-header-segment-trailing-bits",
+   "why": "a header segment whose last character has bits the bytes do not use",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-segment-trailing-bits.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "header_not_base64url"
+   }
+  },
+  {
+   "id": "b64-public-key-trailing-bits",
+   "why": "the same key written another way: bits left over in the last character",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/jwks/pub-trailing-bits.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "public_key_not_base64url"
+   }
+  },
+  {
+   "id": "b64-status-header-segment-bang",
+   "why": "a status list header segment with a character outside the alphabet",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/header-segment-bang.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_header_not_base64url"
+   }
+  },
+  {
+   "id": "b64-status-signature-segment-plus",
+   "why": "a status list signature segment with +",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/signature-segment-plus.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-status-public-key-trailing-bits",
+   "why": "a status public key with bits left over in the last character",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/empty.json",
+    "--status-keys",
+    "{v1}/jwks/status-pub-trailing-bits.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_public_key_not_base64url"
+   }
   }
  ],
  "templates": {
@@ -543,5 +676,5 @@
    "{v1}/keys/test-only-status-jwks.json"
   ]
  },
- "minimum": 36
+ "minimum": 45
 }

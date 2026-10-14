@@ -9,7 +9,7 @@ name: Release
 # bundle (verify-page-<tag>.tar.gz, issue #25), SHA256SUMS, and a Sigstore keyless
 # signature bundle for each. The owner reviews and publishes
 # the draft by hand; this workflow never publishes a non-draft release. The draft
-# is made only after the page has passed all 118 cases of tests/vectors/v1 in
+# is made only after the page has passed all 127 cases of tests/vectors/v1 in
 # headless Chrome and Firefox (web-vectors).
 on:
   push:
@@ -89,7 +89,7 @@ jobs:
       - name: The page bundle is reproducible and has the shape pages.yml needs
         run: bash tests/web-bundle.sh
 
-  # All 118 cases of tests/vectors/v1, on the page as it will be shipped, in real
+  # All 127 cases of tests/vectors/v1, on the page as it will be shipped, in real
   # headless Google Chrome and Firefox (both are on ubuntu-latest), from http and
   # from disk. The draft release needs this job.
   web-vectors:
@@ -114,7 +114,7 @@ jobs:
         run: bash tests/web-vectors.sh --wasm "$RUNNER_TEMP/wasm"
 
   # The page's logic and the real script, on the same arguments, must agree on exit
-  # code, verdict and reason code, on inputs the 118 vectors do not cover. It needs
+  # code, verdict and reason code, on inputs the 127 vectors do not cover. It needs
   # what the script needs (OpenSSL 3.5), so it runs in the Debian container.
   web-differential:
     name: web page and script agree (differential)

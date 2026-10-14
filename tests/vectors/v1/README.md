@@ -63,12 +63,14 @@ the reason `expect.code` names. The `code` values are:
   `nonce_mismatch`, `overall_band_mismatch`, `kid_mismatch`, `header_not_allowed`,
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
   `redaction_violation`, `revoked_key`, `revoked_subject`, `retired_key`
-- `2`: `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
+- `2`: `header_not_base64url`, `signature_not_base64url`, `public_key_not_base64url`,
+  `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
   `jwks_duplicate_kid`, `jwks_keys_not_array`, `anchor_statement_older`, `anchor_unverified`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
   `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
   `unsupported_alg`, `retired_key`, `retired_at_malformed`, `duplicate_kid`,
-  `keys_not_array`)
+  `keys_not_array`, `header_not_base64url`, `signature_not_base64url`,
+  `public_key_not_base64url`)
 
 Where one document breaks several rules at once (a decoy inside an expired
 document, say), `code` names the verdict the reference gives; the case
@@ -213,3 +215,14 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   identity (`anchor_unverified`). New codes:
   `anchor_statement_older`, `anchor_unverified`. The manifest and this README changed; every other file
   keeps its `SHA256SUMS` line byte for byte.
+- 2026-10-14: added 9 cases and their files (nothing existing changed) for base64url
+  that is strict: text outside `A-Z a-z 0-9 - _`, padding, and bits left over in
+  the last character are no longer decoded into something else. A header segment
+  with `!`, a signature with `+`, with `/` or with `=` padding, a header segment and a
+  public key whose last character has bits the bytes do not use, and the status
+  list's header segment, signature segment and key: "could not check" (2), or
+  unknown (3) for the status list, under the segment's own code. New codes:
+  `header_not_base64url`, `signature_not_base64url`, `public_key_not_base64url`,
+  `status_unknown_header_not_base64url`, `status_unknown_signature_not_base64url`,
+  `status_unknown_public_key_not_base64url`. The manifest and this README changed; every other existing file keeps its `SHA256SUMS`
+  line byte for byte.

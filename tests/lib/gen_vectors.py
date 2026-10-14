@@ -525,6 +525,7 @@ def build(g):
 
     build_signature_cases(g, A, S, SL, COMMON, issuer_kid)
     build_retired_cases(g, A, S, issuer_kid)
+    build_encoding_cases(g, A, S, SL, COMMON, issuer_kid)
 
 
 def common_with(common, jwks):
@@ -854,6 +855,95 @@ def build_retired_cases(g, A, S, issuer_kid):
            ["--status-list", "--status-keys", "jwks/status-keys-str-entry.json"] + SR_COMMON
            + ["--status", S + "retired-before.json"], 3, "status_unknown_keys_not_array",
            "malformed_document \u2014 status-keys.json: `keys` is not an array of objects")
+
+
+def build_encoding_cases(g, A, S, SL, COMMON, issuer_kid):
+    """Strict base64url: the alphabet only, no padding, nothing left over in the last character.
+
+    Added after v1 was first published (the policy in its README: append-only)."""
+    def att(rel):
+        return ["--attestation", rel] + COMMON
+
+    B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+    def with_char(rel_src, rel_dst, part, pos, ch, status=False):
+        """Copy a document, replacing one character of segment `part` (0 header, 2 signature)."""
+        def fn(d):
+            sig = d["signature"] if status else d["attestation"]["signature"]
+            segs = sig.split(".")
+            s = segs[part]
+            segs[part] = s[:pos] + ch + s[pos + 1:]
+            if status:
+                d["signature"] = ".".join(segs)
+            else:
+                d["attestation"]["signature"] = ".".join(segs)
+        g.edit(rel_src, rel_dst, fn)
+
+    with_char(A + "valid.json", A + "header-segment-bang.json", 0, 10, "!")
+    g.case("header-segment-not-base64url",
+           "The protected header segment holds a character outside the base64url alphabet (!): could not check (2).",
+           att(A + "header-segment-bang.json"), 2, "header_not_base64url", "header is not valid base64url")
+    with_char(A + "valid.json", A + "signature-segment-plus.json", 2, 100, "+")
+    g.case("signature-segment-plus",
+           "The signature segment holds + (the standard alphabet, not base64url): could not check (2).",
+           att(A + "signature-segment-plus.json"), 2, "signature_not_base64url", "signature is not valid base64url")
+    with_char(A + "valid.json", A + "signature-segment-slash.json", 2, 100, "/")
+    g.case("signature-segment-slash",
+           "The signature segment holds / (the standard alphabet, not base64url): could not check (2).",
+           att(A + "signature-segment-slash.json"), 2, "signature_not_base64url", "signature is not valid base64url")
+
+    def padded(d):
+        h, pl, s = d["attestation"]["signature"].split(".")
+        d["attestation"]["signature"] = ".".join([h, pl, s + "=="])
+    g.edit(A + "valid.json", A + "signature-segment-padded.json", padded)
+    g.case("signature-segment-padded",
+           "The signature segment carries = padding, which unpadded base64url does not have: could not check (2).",
+           att(A + "signature-segment-padded.json"), 2, "signature_not_base64url", "signature is not valid base64url")
+
+    # a header segment whose last character leaves bits over: the same bytes, written another way
+    g.attest(A + "header-trailing-space.json",
+             header_text='{"alg":"ML-DSA-65","kid":"@KID@","typ":"application/attest+jws"} ')
+
+    def lastbits(d):
+        h, pl, s = d["attestation"]["signature"].split(".")
+        assert len(h) % 4 == 2 and h[-1] in "AQgw"
+        d["attestation"]["signature"] = ".".join([h[:-1] + "B", pl, s])
+    g.edit(A + "header-trailing-space.json", A + "header-segment-trailing-bits.json", lastbits)
+    g.case("header-segment-trailing-bits",
+           "The last character of the header segment has bits set that the bytes do not use (the same bytes, "
+           "written another way): could not check (2).",
+           att(A + "header-segment-trailing-bits.json"), 2, "header_not_base64url", "header is not valid base64url")
+
+    def key_variant(kind):
+        def fn(d):
+            k = d["keys"][0]
+            pub = k["pub"]
+            assert kind == "trailing-bits" and len(pub) % 4 == 3 and B64URL.index(pub[-1]) % 4 == 0
+            k["pub"] = pub[:-1] + B64URL[B64URL.index(pub[-1]) + 1]
+        return fn
+    g.edit(J_ISSUER, "jwks/pub-trailing-bits.json", key_variant("trailing-bits"))
+    g.case("public-key-trailing-bits",
+           "The public key's last character has bits set that the key bytes do not use (the same key, written "
+           "another way): could not check (2).",
+           ["--attestation", A + "valid.json"] + common_with(COMMON, "jwks/pub-trailing-bits.json"),
+           2, "public_key_not_base64url", "public key is not valid base64url")
+    # the status list: the same rules
+    with_char(S + "empty.json", S + "header-segment-bang.json", 0, 10, "!", status=True)
+    g.case("status-header-segment-not-base64url",
+           "The status list's header segment holds a character outside the base64url alphabet: unknown (3).",
+           SL + ["--status", S + "header-segment-bang.json"], 3, "status_unknown_header_not_base64url",
+           "protected header is not valid base64url")
+    with_char(S + "empty.json", S + "signature-segment-plus.json", 2, 100, "+", status=True)
+    g.case("status-signature-segment-plus",
+           "The status list's signature segment holds + (the standard alphabet): unknown (3).",
+           SL + ["--status", S + "signature-segment-plus.json"], 3, "status_unknown_signature_not_base64url",
+           "signature segment is not valid base64url")
+    g.edit(J_STATUS, "jwks/status-pub-trailing-bits.json", key_variant("trailing-bits"))
+    g.case("status-public-key-trailing-bits",
+           "The status public key's last character has bits set that the key bytes do not use: unknown (3).",
+           ["--status-list", "--status-keys", "jwks/status-pub-trailing-bits.json", "--attestation", A + "valid.json"]
+           + COMMON + ["--status", S + "empty.json"], 3, "status_unknown_public_key_not_base64url",
+           "public key is not valid base64url")
 
 
 def write_outputs(g):

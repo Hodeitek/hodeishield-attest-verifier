@@ -40,7 +40,7 @@ name: Pages
 #     (verify-page-<tag>.tar.gz.sigstore.json), checked in release.yml's
 #     "Verify the bundles as a reader would" step;
 #   - its SHA-256 printed in the release notes;
-#   - all 118 cases of tests/vectors/v1 pass in a headless browser, against the
+#   - all 127 cases of tests/vectors/v1 pass in a headless browser, against the
 #     bundle as it will be shipped, in a job the draft release depends on.
 # Until release.yml does that, this workflow fails closed at step 2 for any tag
 # (the bundle is not in SHA256SUMS), which is why it stays gated.

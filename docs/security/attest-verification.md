@@ -205,6 +205,17 @@ and fails, for a posture attestation and for a status list alike. If we ever nee
 to add a header field, that is a new `typ` and a new document version, not a
 silent extension.
 
+**Every segment is base64url exactly.** A JWS segment, a `pub` and a status-list
+segment are checked against the alphabet `A-Z a-z 0-9 - _` before they are
+decoded: no `=` padding, no `+` or `/` (the standard alphabet), no spaces, a
+length that is not 1 modulo 4, and no bits left over in the last character, so
+that the decoded bytes encode back to exactly the text that was read. The
+reference verifier reports a fault as `header_not_base64url`,
+`signature_not_base64url`, `payload_not_base64url` or `public_key_not_base64url`
+(`status_unknown_...` for a status list) instead of decoding it into something
+else; a second implementation should do the same. (The white space of a compact
+JWS file is removed before it is split.)
+
 > **Correction, 2026-07-30.** Between 2026-07-29 and 2026-07-30 this section and
 > `scripts/attest/verify-attestation.sh` documented and implemented only the
 > **inner posture** encoding, while the issuer signed the **envelope**. Anyone
@@ -674,10 +685,12 @@ You do not need our repository.
 
 ```bash
 # A base64url decoder. JWS uses base64url without padding; OpenSSL wants
-# standard base64 with padding.
+# standard base64 with padding. Anything outside the alphabet is refused, as the
+# reference script does (it also refuses bits left over in the last character).
 b64url_decode() {
+  case $1 in *[!A-Za-z0-9_-]*) return 1;; esac
   local s="${1//-/+}"; s="${s//_//}"
-  case $(( ${#s} % 4 )) in 2) s="$s==";; 3) s="$s=";; esac
+  case $(( ${#s} % 4 )) in 1) return 1;; 2) s="$s==";; 3) s="$s=";; esac
   printf '%s' "$s" | openssl base64 -d -A
 }
 b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }

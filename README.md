@@ -48,7 +48,7 @@ document names its own issuer, and only you can say which one you trust.
 [`web/`](web/) is a page that does the same check in the browser, for people who
 do not use a terminal: add the attestation and the issuer's key file, press a
 button, read the result. The files never leave the browser, and it works offline.
-It is built and tested (all 118 cases of `tests/vectors/v1` in headless Chrome and
+It is built and tested (all 127 cases of `tests/vectors/v1` in headless Chrome and
 Firefox; Safari is not tested) but **not deployed yet**, and the script above
 remains the reference verifier. It is released as `verify-page-<tag>.tar.gz`;
 what it does, what it does not do and how to check the files it serves are in

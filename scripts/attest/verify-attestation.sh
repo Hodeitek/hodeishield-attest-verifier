@@ -995,9 +995,19 @@ hex_to_bin() {
   fi
 }
 
+# Strict base64url (RFC 4648 section 5), unpadded. A segment is decoded only if it
+# is exactly what b64url_encode would write for the bytes it decodes to: only the
+# characters A-Z a-z 0-9 - _ (no padding, no + or /, no spaces or line breaks), a
+# length that is not 1 modulo 4, and zero bits left over in the last character.
+# Anything else is a failure (the caller names the segment), never a quiet empty
+# or partial result. The glob classes are spelled out and the C locale is used, so
+# that no locale can widen a range.
 b64url_decode() {
-  local s="${1//-/+}"
-  s="${s//_//}"
+  local LC_ALL=C
+  local s="$1"
+  case "$s" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) return 1 ;;
+  esac
   # Multi-line for the same parser reason as the `case` above: as a one-liner
   # this construct was the largest SAST blind spot in the file, taking the whole
   # of fetch_or_read() down with it.
@@ -1011,10 +1021,26 @@ b64url_decode() {
   pad=${#s}
   pad=$(( pad % 4 ))
   case "$pad" in
-    2) s="${s}==" ;;
-    3) s="${s}=" ;;
     1) return 1 ;;
+    2)
+      # 12 bits for 8: the 4 low bits of the last character must be zero (A Q g w)
+      case "$s" in
+        *[AQgw]) ;;
+        *) return 1 ;;
+      esac
+      s="${s}=="
+      ;;
+    3)
+      # 18 bits for 16: the 2 low bits of the last character must be zero
+      case "$s" in
+        *[AEIMQUYcgkosw048]) ;;
+        *) return 1 ;;
+      esac
+      s="${s}="
+      ;;
   esac
+  s="${s//-/+}"
+  s="${s//_//}"
   printf '%s' "$s" | openssl base64 -d -A
 }
 b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }
