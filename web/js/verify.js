@@ -304,7 +304,7 @@
         try {
           var hdr = J.parse(headerBytes);
           if (J.isObj(hdr)) {
-            if (hdr.dups.length) members = "duplicated";
+            if (J.hasDuplicateMember(hdr)) members = "duplicated";
             else members = hdr.keys().sort().join(",");
           } else members = "(not a JSON object)";
         } catch (e4) { members = "(not JSON)"; }
@@ -564,7 +564,9 @@
       });
 
       var listObj, STATUS_JWS = "";
-      var shapeOk = STATUS_FAILURES === 0 && J.isObj(statusDoc) && statusDoc.has("statusList") && statusDoc.has("signature");
+      // jsonq, the script's reader of the status list, refuses an unpaired high
+      // surrogate and nesting that weighs more than 256 (see J.jsonqRefuses).
+      var shapeOk = STATUS_FAILURES === 0 && J.isObj(statusDoc) && statusDoc.has("statusList") && statusDoc.has("signature") && !J.jsonqRefuses(statusDoc);
       if (shapeOk) {
         listObj = statusDoc.get("statusList");
         STATUS_JWS = stripTrailingNewlines(plain(statusDoc.get("signature")));
@@ -621,7 +623,7 @@
       var hdr = null, hdrOk = false;
       if (STATUS_FAILURES === 0) {
         try { hdr = J.parse(hdrBytes); hdrOk = true; } catch (e) { hdrOk = false; }
-        if (hdrOk && !J.isObj(hdr)) statBad("status_unknown_header_not_object");
+        if (hdrOk && (!J.isObj(hdr) || J.jsonqRefuses(hdr))) statBad("status_unknown_header_not_object");
         else if (!hdrOk) {
           var t0 = B.latin1(hdrBytes).replace(/^(\xef\xbb\xbf)?[ \t\r\n]*/, "");
           if (t0.charAt(0) === "{") statBad("status_unknown_header_not_strict_json"); else statBad("status_unknown_header_not_object");

@@ -10,11 +10,15 @@
 // Differences from the Python reader, all in the direction of refusing more:
 // NaN, Infinity and -Infinity are not accepted, and nesting is limited to 1000
 // levels. A lone surrogate escape (\ud800) is accepted, as Python does; the
-// canonical encoder refuses it later.
+// canonical encoder refuses it later. An integer of more than 4,300 digits is
+// refused, as Python 3.11 and later refuses it (its limit on converting a digit
+// string to an int); the script's readers then say the document is not strict
+// JSON, and so does the page.
 (function (root) {
   "use strict";
   var HV = root.HV || (root.HV = {});
   var MAX_DEPTH = 1000;
+  var MAX_INT_DIGITS = 4300;
 
   // A JSON object: entries in document order, repeated members included.
   function JObj() { this.entries = []; this.map = new Map(); this.dups = []; }
@@ -112,6 +116,7 @@
         NUM.lastIndex = i;
         var m = NUM.exec(t);
         if (!m) fail("bad number");
+        if (/^-?[0-9]+$/.test(m[0]) && m[0].replace("-", "").length > MAX_INT_DIGITS) fail("integer of more than " + MAX_INT_DIGITS + " digits");
         i += m[0].length;
         return new JNum(m[0]);
       }
@@ -165,5 +170,61 @@
     return Array.from(new Set(out.map(vis))).sort();
   }
 
-  HV.json = { parse: parse, parseText: parseText, JObj: JObj, JNum: JNum, isObj: isObj, isNum: isNum, duplicates: duplicates, vis: vis };
+  // Whether any object, at any depth, has a member name twice (the script reads the
+  // protected header's members with a hook that sees every nested object).
+  function hasDuplicateMember(doc) {
+    var stack = [doc], v, i;
+    while (stack.length) {
+      v = stack.pop();
+      if (isObj(v)) {
+        if (v.dups.length) return true;
+        for (i = 0; i < v.entries.length; i++) stack.push(v.entries[i][1]);
+      } else if (Array.isArray(v)) {
+        for (i = 0; i < v.length; i++) stack.push(v[i]);
+      }
+    }
+    return false;
+  }
+
+  function loneHighSurrogate(s) {
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        var d = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+        if (d < 0xdc00 || d > 0xdfff) return true;
+        i++;
+      }
+    }
+    return false;
+  }
+  // The two refusals of jsonq, the script's reader of the status list (JSONQ_PY in
+  // scripts/attest/verify-attestation.sh), that the strict reader does not make:
+  //  - a string, or a member name, with an unpaired high surrogate (a lone low one
+  //    is replaced, not refused);
+  //  - nesting that weighs more than 256, where an array or an object costs 1 and
+  //    one that is the value of an object member costs 2, summed along the open
+  //    containers.
+  // The script then cannot read the document: the status list is UNKNOWN.
+  function jsonqRefuses(root) {
+    var stack = [[root, 0, false]], it, v, w, inObj, i, nw;
+    while (stack.length) {
+      it = stack.pop(); v = it[0]; w = it[1]; inObj = it[2];
+      if (typeof v === "string") { if (loneHighSurrogate(v)) return true; continue; }
+      if (Array.isArray(v) || isObj(v)) {
+        nw = w + (inObj ? 2 : 1);
+        if (nw > 256) return true;
+        if (Array.isArray(v)) {
+          for (i = 0; i < v.length; i++) stack.push([v[i], nw, false]);
+        } else {
+          for (i = 0; i < v.entries.length; i++) {
+            if (loneHighSurrogate(v.entries[i][0])) return true;
+            stack.push([v.entries[i][1], nw, true]);
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  HV.json = { hasDuplicateMember: hasDuplicateMember, jsonqRefuses: jsonqRefuses, parse: parse, parseText: parseText, JObj: JObj, JNum: JNum, isObj: isObj, isNum: isNum, duplicates: duplicates, vis: vis };
 })(typeof globalThis !== "undefined" ? globalThis : this);
