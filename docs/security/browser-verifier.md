@@ -341,9 +341,13 @@ manifest inside the archive is independent of that.
   file, the module is the one pinned in `tools/mldsa-wasm/expected.sha256`, and
   `mldsa/mldsa_wasm.b64.js`, the file the page actually runs, is byte for byte what
   `tools/verify-page/b64js.sh` makes from that pinned module (so nothing can be
-  appended to it or added beside the module, even with the manifest made again).
+  appended to that file, even with the manifest made again).
   `tests/web-bundle.sh` proves that a tampered copy fails. `tests/web-vectors.sh` and
-  `release.yml` run it.
+  `release.yml` run it. It checks the module file only: a copy whose other files
+  were changed (another script tag in `index.html`, code appended to `js/`) passes
+  it once the manifest is made again. What proves a served or downloaded copy is
+  the comparison with the signed release archive, described in "How to check what
+  you are served"; the release builds that archive from `web/` at the tag.
 - The browser page checks also cover a result going stale (changing any file or
   option takes a shown result off the page) and the display of control and
   direction characters in signed or supplied text (shown as "?").
