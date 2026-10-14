@@ -526,6 +526,7 @@ def build(g):
     build_signature_cases(g, A, S, SL, COMMON, issuer_kid)
     build_retired_cases(g, A, S, issuer_kid)
     build_encoding_cases(g, A, S, SL, COMMON, issuer_kid)
+    build_key_size_cases(g, A, S, SL, COMMON, issuer_kid)
 
 
 def common_with(common, jwks):
@@ -944,6 +945,40 @@ def build_encoding_cases(g, A, S, SL, COMMON, issuer_kid):
            ["--status-list", "--status-keys", "jwks/status-pub-trailing-bits.json", "--attestation", A + "valid.json"]
            + COMMON + ["--status", S + "empty.json"], 3, "status_unknown_public_key_not_base64url",
            "public key is not valid base64url")
+
+
+def build_key_size_cases(g, A, S, SL, COMMON, issuer_kid):
+    """A public key that is not 1952 bytes stops the run (exit 2, public_key_size_invalid).
+
+    Added after v1 was first published (the policy in its README: append-only)."""
+    def att(rel):
+        return ["--attestation", rel] + COMMON
+
+    def size_variant(kind):
+        def fn(d):
+            k = d["keys"][0]
+            if kind == "short":
+                k["pub"] = b64e(b64d(k["pub"])[:-1])
+            else:
+                k["pub"] = b64e(b64d(k["pub"]) + b"\x00")
+        return fn
+    g.edit(J_ISSUER, "jwks/pub-1951.json", size_variant("short"))
+    g.case("public-key-1951-bytes",
+           "The public key is one byte short (1951 bytes): the run stops, could not check (2).",
+           ["--attestation", A + "valid.json"] + common_with(COMMON, "jwks/pub-1951.json"),
+           2, "public_key_size_invalid", "public key is 1951 bytes, expected 1952")
+    g.edit(J_ISSUER, "jwks/pub-1953.json", size_variant("long"))
+    g.case("public-key-1953-bytes",
+           "The public key is one byte long (1953 bytes): the run stops, could not check (2).",
+           ["--attestation", A + "valid.json"] + common_with(COMMON, "jwks/pub-1953.json"),
+           2, "public_key_size_invalid", "public key is 1953 bytes, expected 1952")
+
+    g.edit(J_STATUS, "jwks/status-pub-1951.json", size_variant("short"))
+    g.case("status-public-key-1951-bytes",
+           "The status public key is one byte short (1951 bytes): unknown (3).",
+           ["--status-list", "--status-keys", "jwks/status-pub-1951.json", "--attestation", A + "valid.json"]
+           + COMMON + ["--status", S + "empty.json"], 3, "status_unknown_public_key_size",
+           "public key is 1951 bytes, expected 1952")
 
 
 def write_outputs(g):

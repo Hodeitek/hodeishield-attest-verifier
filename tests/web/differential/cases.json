@@ -654,6 +654,67 @@
     "exit": 3,
     "reason": "status_unknown_public_key_not_base64url"
    }
+  },
+  {
+   "id": "key-1951-bytes",
+   "why": "a public key one byte short stops the run with its own reason",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/jwks/pub-1951.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "public_key_size_invalid"
+   }
+  },
+  {
+   "id": "key-1953-bytes",
+   "why": "a public key one byte long stops the run with its own reason",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/jwks/pub-1953.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "public_key_size_invalid"
+   }
+  },
+  {
+   "id": "key-status-1951-bytes",
+   "why": "the status key of the wrong size (unknown, exit 3, as it always was)",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/empty.json",
+    "--status-keys",
+    "{v1}/jwks/status-pub-1951.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_public_key_size"
+   }
   }
  ],
  "templates": {
@@ -676,5 +737,5 @@
    "{v1}/keys/test-only-status-jwks.json"
   ]
  },
- "minimum": 45
+ "minimum": 48
 }

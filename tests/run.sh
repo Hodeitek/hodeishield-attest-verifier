@@ -2527,6 +2527,38 @@ jexpect 3 'a status key with bits left over in its last character is UNKNOWN (3)
 jexpect 0 'a canonical key still verifies after all this' 'o["verdict"] == "verified"' -- \
   --attestation "$T/att.json" --pub-b64url "$PUB" "${B64ARGS[@]}"
 
+# --- a public key that is not 1952 bytes ---------------------------------------------
+# The run stops at once: exit 2 (could not check), reason public_key_size_invalid. The key
+# material is broken, which says nothing about the document.
+echo '# a public key of the wrong size'
+for delta in 1 -1000 1000 -1951 -1; do
+  WRONG="$(python3 -I - "$PUB" "$delta" <<'PY'
+import base64, sys
+raw = base64.urlsafe_b64decode(sys.argv[1] + "=" * (-len(sys.argv[1]) % 4))
+n = int(sys.argv[2])
+raw = raw[:n] if n < 0 else raw + b"\x00" * n
+print(base64.urlsafe_b64encode(raw).rstrip(b"=").decode())
+PY
+)"
+  jexpect 2 "a key of $((1952 + delta)) bytes stops at public_key_size_invalid (2): the last check is that one, and OpenSSL is never asked" \
+    'o["reason"] == "public_key_size_invalid" and o["verdict"] == "could_not_check"
+     and o["checks"][-1]["code"] == "public_key_size_invalid" and o["checks"][-1]["exit_class"] == 2
+     and not any(c["code"] in ("public_key_rejected", "kid_mismatch", "public_key_loaded") for c in o["checks"])' -- \
+    --attestation "$T/att.json" --pub-b64url "$WRONG" "${B64ARGS[@]}"
+  jwks_pub "$T/jwks.json" "$T/jwks-wrong-size.json" "pub = '$WRONG'"
+  jexpect 2 "the same key of $((1952 + delta)) bytes in a key set: public_key_size_invalid (2)" \
+    'o["reason"] == "public_key_size_invalid"' -- \
+    --attestation "$T/att.json" --jwks "$T/jwks-wrong-size.json" "${B64ARGS[@]}"
+done
+expect 2 'public key is 1951 bytes, expected 1952' 'the message says what was found and what is expected' -- \
+  --attestation "$T/att.json" --pub-b64url "$WRONG" "${B64ARGS[@]}"
+# the status key of the wrong size stays UNKNOWN (3), as before
+jwks_pub "$T/status-keys.json" "$T/status-keys-short.json" 'import base64
+pub = base64.urlsafe_b64encode(base64.urlsafe_b64decode(pub + "=" * (-len(pub) % 4))[:-1]).rstrip(b"=").decode()'
+jexpect 3 'a status key of 1951 bytes is UNKNOWN (3), status_unknown_public_key_size' \
+  'o["reason"] == "status_unknown_public_key_size"' -- \
+  --status-list --status-keys "$T/status-keys-short.json" --attestation "$T/att.json" "${COMMON[@]}" --status "$T/list-empty.json"
+
 # --- real cosign: a legacy-format bundle cannot lend the tag a certificate -----------
 # Needs cosign 3.1.3 or later (CI installs it); skipped, never passed, without it.
 # The genuine v1.3.0 bundle is rewritten in cosign's legacy format, which cosign

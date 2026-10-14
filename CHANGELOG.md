@@ -36,7 +36,7 @@ Fixed.
   (`--anchor-file`), which needs Sigstore. Safari is not tested. See
   [docs/security/browser-verifier.md](docs/security/browser-verifier.md)
   (Refs #25).
-- `tests/web-vectors.sh`: all 127 cases of `tests/vectors/v1` on the page as it
+- `tests/web-vectors.sh`: all 130 cases of `tests/vectors/v1` on the page as it
   ships, in headless Google Chrome and Firefox, from http and from disk, with the
   verdict, exit code and reason code of each case (one reason code differs by
   design and is named); `tests/web-static.sh` (the policy, the code and the six
@@ -54,7 +54,7 @@ Fixed.
   also checks that `mldsa_wasm.b64.js`, the file the page runs, is byte for byte what
   the pinned module makes.
 - `tests/web-differential.sh`: the page's logic and the real script must agree on
-  exit code, verdict and reason code on inputs the 127 vectors do not cover (a
+  exit code, verdict and reason code on inputs the 130 vectors do not cover (a
   duplicate member nested in the protected header, an integer of more than 4,300
   digits, the refusals of the script's status-list reader).
 
@@ -76,6 +76,16 @@ Fixed.
   (`signature_invalid`, `unknown_kid`, a header that is not JSON), and a key
   written with bits left over in its last character was read as the same key. The
   page does the same (#104).
+- A public key that is not 1952 bytes stops the run at once with
+  `public_key_size_invalid`, exit 2 (could not check: the key material is broken,
+  which is no evidence about the document). `docs/security/reason-codes.md` listed
+  it as exit 1; the documented exit code is corrected to the behaviour. The script
+  used to record the size and carry on until OpenSSL refused the key, so a key
+  that was too short already ended in exit 2, as `public_key_rejected`; the exit
+  code is the same and the reason is now the exact one. A key one byte too long,
+  which OpenSSL loaded, ended in exit 1 and now ends in exit 2 as well. A status
+  key of the wrong size was already `status_unknown_public_key_size` (exit 3).
+  The page does the same (#105).
 
 ## v1.5.0 - 2026-10-13
 

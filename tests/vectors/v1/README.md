@@ -64,13 +64,13 @@ the reason `expect.code` names. The `code` values are:
   `header_alg_invalid`, `unsigned_member`, `duplicate_key`, `payload_not_envelope`,
   `redaction_violation`, `revoked_key`, `revoked_subject`, `retired_key`
 - `2`: `header_not_base64url`, `signature_not_base64url`, `public_key_not_base64url`,
-  `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
+  `public_key_size_invalid`, `unknown_kid`, `jwks_duplicate_key`, `not_strict_json`, `jwks_retired_at_malformed`,
   `jwks_duplicate_kid`, `jwks_keys_not_array`, `anchor_statement_older`, `anchor_unverified`
 - `3`: `status_unknown_*` (`bad_signature`, `unknown_kid`, `stale`, `rolled_back`,
   `truncated_invalid`, `duplicate_key`, `not_strict_json`, `signature_size`,
   `unsupported_alg`, `retired_key`, `retired_at_malformed`, `duplicate_kid`,
   `keys_not_array`, `header_not_base64url`, `signature_not_base64url`,
-  `public_key_not_base64url`)
+  `public_key_not_base64url`, `public_key_size`)
 
 Where one document breaks several rules at once (a decoy inside an expired
 document, say), `code` names the verdict the reference gives; the case
@@ -225,4 +225,11 @@ files unless given `--force`, and `--extend` adds only new files and cases.
   `header_not_base64url`, `signature_not_base64url`, `public_key_not_base64url`,
   `status_unknown_header_not_base64url`, `status_unknown_signature_not_base64url`,
   `status_unknown_public_key_not_base64url`. The manifest and this README changed; every other existing file keeps its `SHA256SUMS`
+  line byte for byte.
+- 2026-10-14: added 3 cases and their files (nothing existing changed) for a public
+  key that is not 1952 bytes: one byte short or one byte long, in the attestation
+  key set, and one byte short in the status key set. The run stops at the key:
+  "could not check" (2, `public_key_size_invalid`), or unknown (3,
+  `status_unknown_public_key_size`) for the status list. New code:
+  `public_key_size_invalid`. The manifest and this README changed; every other existing file keeps its `SHA256SUMS`
   line byte for byte.

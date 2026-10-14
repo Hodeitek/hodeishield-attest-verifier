@@ -232,13 +232,13 @@
   }
 
   // ---- reason texts ------------------------------------------------------------
-  var STRUCTURE = ["header_alg_invalid", "header_typ_invalid", "header_not_allowed", "header_too_large", "signature_size_invalid", "public_key_size_invalid",
+  var STRUCTURE = ["header_alg_invalid", "header_typ_invalid", "header_not_allowed", "header_too_large", "signature_size_invalid",
     "kid_mismatch", "payload_claims_mismatch", "payload_not_envelope", "date_unparseable", "generated_at_missing", "missing_expiry", "ttl_exceeded",
     "unsupported_version", "duplicate_key", "unsigned_member", "iss_empty", "slug_empty", "overall_band_mismatch", "redaction_violation", "nul_byte"];
   var UNREADABLE = ["attestation_unparseable", "attestation_signature_missing", "claims_posture_missing", "jws_not_compact", "jws_too_many_dots",
     "jws_detached_needs_claims", "header_not_base64url", "signature_not_base64url", "payload_not_base64url", "public_key_not_base64url",
     "canonicalise_failed", "canonicalise_posture_failed", "claims_unreadable", "attestation_unreadable", "jws_unreadable"];
-  var KEYS_UNUSABLE = ["not_strict_json", "jwks_duplicate_key", "jwks_keys_not_array", "jwks_duplicate_kid", "jwks_retired_at_malformed", "public_key_rejected", "jwks_unreadable"];
+  var KEYS_UNUSABLE = ["not_strict_json", "jwks_duplicate_key", "jwks_keys_not_array", "jwks_duplicate_kid", "jwks_retired_at_malformed", "public_key_size_invalid", "public_key_rejected", "jwks_unreadable"];
   var MISSING = ["attestation_missing", "key_source_missing", "status_source_missing", "status_keys_source_missing", "status_list_nothing_to_check", "expect_kid_needs_attestation"];
   var DIRECT = ["signature_invalid", "not_yet_valid", "unexpected_kid", "slug_mismatch", "issuer_mismatch", "nonce_mismatch", "retired_key", "revoked_key", "revoked_subject", "unknown_kid", "engine_unavailable"];
 

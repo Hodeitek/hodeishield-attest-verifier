@@ -2545,7 +2545,11 @@ PUB_LEN="$(wc -c < "$WORKDIR/pub.raw" | tr -d ' ')"
 if [ "$PUB_LEN" -eq 1952 ]; then
   ok public_key_size_valid "public key is 1952 bytes — the ML-DSA-65 size"
 else
-  bad public_key_size_invalid "public key is ${PUB_LEN} bytes, expected 1952"
+  # Stops here (exit 2): the key material is broken, which says nothing about the
+  # document. It used to be recorded and the run went on until OpenSSL refused the
+  # rebuilt key (public_key_rejected); the exit code is the same, the reason is now
+  # the exact one.
+  die public_key_size_invalid "public key is ${PUB_LEN} bytes, expected 1952"
 fi
 
 # The kid is CHECKED, not trusted: it must be derivable from the key bytes, so a

@@ -2957,6 +2957,74 @@
         "code": "status_unknown_public_key_not_base64url",
         "match": "public key is not valid base64url"
       }
+    },
+    {
+      "id": "public-key-1951-bytes",
+      "description": "The public key is one byte short (1951 bytes): the run stops, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "jwks/pub-1951.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "public_key_size_invalid",
+        "match": "public key is 1951 bytes, expected 1952"
+      }
+    },
+    {
+      "id": "public-key-1953-bytes",
+      "description": "The public key is one byte long (1953 bytes): the run stops, could not check (2).",
+      "args": [
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "jwks/pub-1953.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900"
+      ],
+      "expect": {
+        "exit": 2,
+        "code": "public_key_size_invalid",
+        "match": "public key is 1953 bytes, expected 1952"
+      }
+    },
+    {
+      "id": "status-public-key-1951-bytes",
+      "description": "The status public key is one byte short (1951 bytes): unknown (3).",
+      "args": [
+        "--status-list",
+        "--status-keys",
+        "jwks/status-pub-1951.json",
+        "--attestation",
+        "attestations/valid.json",
+        "--jwks",
+        "keys/test-only-issuer-jwks.json",
+        "--expect-slug",
+        "fixture-org",
+        "--expect-issuer",
+        "https://issuer.test",
+        "--now",
+        "1767225900",
+        "--status",
+        "status-lists/empty.json"
+      ],
+      "expect": {
+        "exit": 3,
+        "code": "status_unknown_public_key_size",
+        "match": "public key is 1951 bytes, expected 1952"
+      }
     }
   ]
 }

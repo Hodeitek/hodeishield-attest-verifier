@@ -124,7 +124,7 @@ cannot emit.
 | `jwks_retired_at_malformed` | `hs_retired_at` of the selected key is malformed. | fail | 2 | both | 1: `retired-key-malformed` |
 | `public_key_not_base64url` | The public key is not base64url (the same rules). | fail | 2 | both | 1: `public-key-trailing-bits` |
 | `public_key_size_valid` | The public key is 1952 bytes. | pass | 0 | both |  |
-| `public_key_size_invalid` | The public key is not 1952 bytes. | fail | 1 | both |  |
+| `public_key_size_invalid` | The public key is not 1952 bytes. The run stops here: the key material is broken, which says nothing about the document. | fail | 2 | both | 2: `public-key-1951-bytes`, `public-key-1953-bytes` |
 | `kid_derivable` | The kid derives from the key bytes. | pass | 0 | both |  |
 | `kid_mismatch` | The header kid does not derive from the key bytes, or `claims.kid` differs from the header kid. | fail | 1 | both | 4: `kid-mismatch`, `header-kid-not-derived-from-key`, `claims-kid-differs-from-header-kid`, ... |
 | `kid_pinned` | The key kid is one pinned with `--expect-kid`. | pass | 0 | both |  |
@@ -263,7 +263,7 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `status_unknown_unknown_kid` | The list's kid is not in the status key set. | fail | 3 | status-list | 1: `status-wrong-key` |
 | `status_unknown_public_key_not_base64url` | The status public key is not base64url (the same rules). | fail | 3 | status-list | 1: `status-public-key-trailing-bits` |
 | `status_public_key_size_valid` | The status public key is 1952 bytes. | pass | 0 | status-list |  |
-| `status_unknown_public_key_size` | The status public key is not 1952 bytes. | fail | 3 | status-list |  |
+| `status_unknown_public_key_size` | The status public key is not 1952 bytes. | fail | 3 | status-list | 1: `status-public-key-1951-bytes` |
 | `status_kid_derivable` | The kid derives from the status key bytes. | pass | 0 | status-list |  |
 | `status_unknown_kid_mismatch` | The kid does not derive from the key bytes, or `statusList.kid` differs from the header kid. | fail | 3 | status-list |  |
 | `status_public_key_loaded` | The status key loaded. | pass | 0 | status-list |  |

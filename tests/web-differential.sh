@@ -11,7 +11,7 @@
 # gave a weaker verdict than the script (a duplicate member nested in the protected
 # header, an integer of more than 4,300 digits, the refusals of the script's reader
 # of the status list) and a genuine document with a direction-override character
-# in its organisation name. The 127 vectors of tests/vectors/v1 are run by
+# in its organisation name. The 130 vectors of tests/vectors/v1 are run by
 # tests/web-vectors.sh and are not repeated here.
 #
 # Needs what the script needs (bash, OpenSSL >= 3.5, python3) and Node. --wasm is the

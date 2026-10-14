@@ -328,14 +328,12 @@
         }
         var pubBytes = B.b64urlDecode(pubB64);
         if (pubBytes === null) die("public_key_not_base64url", "the public key is not valid base64url");
-        if (pubBytes.length === 1952) ok("public_key_size_valid"); else bad("public_key_size_invalid");
+        if (pubBytes.length === 1952) ok("public_key_size_valid"); else die("public_key_size_invalid", "the public key is " + pubBytes.length + " bytes, expected 1952");
         DERIVED_KID = kidOf(pubBytes);
         if (DERIVED_KID === KID) ok("kid_derivable"); else bad("kid_mismatch");
         if (expectKids.length) {
           if (expectKids.indexOf(DERIVED_KID) >= 0) ok("kid_pinned"); else bad("unexpected_kid");
         }
-        // OpenSSL loads a key of the wrong size as an error; so does this check
-        if (pubBytes.length !== 1952) die("public_key_rejected", "the public key has the wrong size");
         ok("public_key_loaded");
 
         // --- 4. Payload: the signing envelope ---
