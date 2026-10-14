@@ -12,9 +12,13 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Each major version gets security fixes for five years,
 as [SECURITY.md](SECURITY.md#supported-versions) says.
 
-## Unreleased
+## v1.6.0 - 2026-10-14
 
-The verifier gains an in-browser page, built and tested but not deployed.
+`verify-attestation.sh` changes. sha256
+`3079d8a1cb706826e17a16d8f0f9e6e7e8cf57756c19c4acf1f397973e196602`.
+
+The verifier gains an in-browser page, published with the release as a signed
+bundle (`verify-page-v1.6.0.tar.gz`) that also works offline.
 `verify-attestation.sh` is 1.6.0 and its checks change in the places listed under
 Fixed.
 
