@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Hodeitek S.L.
+
+name: Pages
+
+# Deploys the in-browser verifier page (issue #25) to GitHub Pages, at
+# https://verify.hodeishield.com. Decision record and trust model:
+# docs/security/browser-verifier.md.
+#
+# INERT BY DEFAULT. Both jobs run only when the repository variable
+# PAGES_ENABLED is exactly "true". Until a repository admin sets it, this
+# workflow does nothing, and the page it would deploy does not exist yet.
+#
+# What it does: a release is published by hand (release.yml only drafts it).
+# Publishing it triggers this workflow, which
+#   1. checks the tag is annotated and GitHub reports its signature as verified,
+#      that the workflow is running at that tag, and that the release is public;
+#   2. downloads the release's SHA256SUMS and every file it lists, and checks
+#      the SHA-256 of each and the Sigstore signature of each, pinned to
+#      release.yml at that tag (.github/scripts/fetch-release-assets.sh, the
+#      same script image.yml uses);
+#   3. unpacks verify-page-<tag>.tar.gz with no path traversal;
+#   4. uploads the unpacked files as the Pages artifact and deploys them.
+# Nothing is built here: the served files are the files inside the signed
+# release asset, and nothing else.
+#
+# It never runs on a branch push. A manual run (workflow_dispatch) must be
+# started on the tag itself (gh workflow run pages.yml --ref <tag> -f tag=<tag>);
+# a run on a branch is refused by the check in step 1, and the github-pages
+# environment is also restricted to tags v*.
+#
+# ASSET CONTRACT for release.yml (NOT implemented yet: the page does not exist).
+# The task that adds the page must add this to release.yml, and not before the
+# page passes the checks below:
+#   - a bundle named verify-page-<tag>.tar.gz, built from web/ (index.html at
+#     its root; regular files and directories only, no symlinks or hard links);
+#   - built reproducibly: sorted names, fixed owner and mode, mtime from
+#     SOURCE_DATE_EPOCH, gzip -n, so the same tag gives the same bytes;
+#   - listed in SHA256SUMS, and signed with Sigstore like the other assets
+#     (verify-page-<tag>.tar.gz.sigstore.json), checked in release.yml's
+#     "Verify the bundles as a reader would" step;
+#   - its SHA-256 printed in the release notes;
+#   - all 136 cases of tests/vectors/v1 pass in a headless browser, against the
+#     bundle as it will be shipped, in a job the draft release depends on.
+# Until release.yml does that, this workflow fails closed at step 2 for any tag
+# (the bundle is not in SHA256SUMS), which is why it stays gated.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing published release tag to (re)deploy, e.g. v1.6.0. Run the workflow on this tag."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One deployment at a time; a running deployment is never cancelled half way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  verify:
+    name: verify the release and unpack the bundle
+    if: vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      bundle_sha256: ${{ steps.unpack.outputs.bundle_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The workflow must be running at the tag it deploys, so the deploy logic
+      # itself comes from the signed tag. The tag must be annotated and its
+      # signature verified by GitHub, and the release must be public.
+      - name: The tag is signed and the release is published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
+          [ "$GITHUB_REF" = "refs/tags/$TAG" ] || { echo "this run is on $GITHUB_REF, not on refs/tags/$TAG; start it on the tag" >&2; exit 1; }
+          read -r type sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '[.object.type, .object.sha] | @tsv')
+          [ "$type" = tag ] || { echo "$TAG is a lightweight tag; only annotated, signed tags are deployed" >&2; exit 1; }
+          read -r verified reason commit < <(gh api "repos/$REPO/git/tags/$sha" --jq '[.verification.verified, .verification.reason, .object.sha] | @tsv')
+          [ "$verified" = true ] || { echo "GitHub does not report the signature of $TAG as verified ($reason)" >&2; exit 1; }
+          [ "$commit" = "$GITHUB_SHA" ] || { echo "the tag points at $commit, but this run is at $GITHUB_SHA" >&2; exit 1; }
+          read -r draft pre < <(gh release view "$TAG" --repo "$REPO" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')
+          { [ "$draft" = false ] && [ "$pre" = false ]; } || { echo "the release $TAG is a draft or a pre-release" >&2; exit 1; }
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+
+      # Verifies SHA256SUMS with cosign first, then downloads every file it
+      # lists with its bundle, checks each SHA-256 and each signature, all
+      # pinned to release.yml at this tag.
+      - name: Download the release assets and verify them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ env.TAG }}
+        run: bash .github/scripts/fetch-release-assets.sh dist
+
+      - name: Unpack the bundle
+        id: unpack
+        run: |
+          set -euo pipefail
+          bundle="verify-page-${TAG}.tar.gz"
+          cd dist
+          sha="$(awk -v n="$bundle" '$2 == n { print $1 }' SHA256SUMS)"
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "$bundle is not listed (once) in SHA256SUMS" >&2; exit 1; }
+          if [ ! -f "$bundle" ] || [ -L "$bundle" ]; then
+            echo "$bundle was not downloaded" >&2
+            exit 1
+          fi
+          # Names: no absolute path, no ".." component, no control characters.
+          tar -tzf "$bundle" > ../names.txt
+          if grep -Eq '(^|/)\.\.(/|$)|^/|[[:cntrl:]]' ../names.txt; then
+            echo "the bundle has an absolute path, a '..' component or a control character in a name" >&2
+            exit 1
+          fi
+          # Types: regular files and directories only (no links, no devices).
+          tar -tzvf "$bundle" | grep -v '^[-d]' > ../odd.txt || true
+          [ ! -s ../odd.txt ] || { echo "the bundle has entries that are not plain files or directories" >&2; cat ../odd.txt >&2; exit 1; }
+          mkdir ../site
+          tar -xzf "$bundle" -C ../site --no-same-owner --no-same-permissions
+          cd ..
+          # After the fact: nothing but plain files and directories, all inside site/.
+          [ -z "$(find site ! -type f ! -type d -print -quit)" ] || { echo "the unpacked bundle has an entry that is not a plain file or directory" >&2; exit 1; }
+          [ -f site/index.html ] || { echo "the bundle has no index.html at its root" >&2; exit 1; }
+          echo "bundle_sha256=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Browser verifier bundle"
+            echo
+            echo "- Release: \`$TAG\`"
+            echo "- Bundle: \`$bundle\`"
+            echo "- SHA-256: \`$sha\` (equal to the line in the release's \`SHA256SUMS\`; Sigstore signature checked)"
+            echo "- Files: $(find site -type f | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: verify
+    if: vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write # to deploy to Pages
+      id-token: write # to prove to Pages that the deployment comes from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

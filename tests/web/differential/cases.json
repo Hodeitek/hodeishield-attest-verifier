@@ -1,0 +1,1056 @@
+{
+ "note": "Inputs on which the page once gave a weaker verdict than the script, or that probe a rule the vectors do not. {v1} is tests/vectors/v1, {fx} is tests/web/differential/fixtures (signed with the TEST-ONLY keys of v1). Every case is run through the page's logic and through the real script; exit code, verdict and reason code must be identical.",
+ "defaults": [
+  "--jwks",
+  "{v1}/keys/test-only-issuer-jwks.json",
+  "--expect-slug",
+  "fixture-org",
+  "--expect-issuer",
+  "https://issuer.test",
+  "--now",
+  "1767225900"
+ ],
+ "cases": [
+  {
+   "id": "h0-extra-header-member",
+   "why": "control: a header member beyond alg, kid, typ",
+   "args": [
+    "--attestation",
+    "{fx}/h0-extra.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_not_allowed"
+   }
+  },
+  {
+   "id": "h1-nested-duplicate-in-header",
+   "why": "a member repeated inside a nested object of the protected header (alg is an object, not a string, and the member set fails too): the script's hook sees every object",
+   "args": [
+    "--attestation",
+    "{fx}/h1-nested-dup-header.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "c1-bigint-in-wrapper",
+   "why": "an integer of more than 4,300 digits in the attestation document",
+   "args": [
+    "--attestation",
+    "{fx}/c1-bigint-att.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "attestation_unparseable"
+   }
+  },
+  {
+   "id": "c2-bigint-in-jwks",
+   "why": "the same in the key set",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{fx}/c2-bigint-jwks.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "not_strict_json"
+   }
+  },
+  {
+   "id": "c3-lone-high-surrogate-in-status",
+   "why": "an unpaired high surrogate escape in the status document: jsonq refuses it",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/c3-highsurrogate-status.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_malformed_document"
+   }
+  },
+  {
+   "id": "c4-deep-status",
+   "why": "nesting that weighs more than 256 in the status document: jsonq refuses it",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/c4-deep-status.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_malformed_document"
+   }
+  },
+  {
+   "id": "c5-bigint-in-status",
+   "why": "an integer of more than 4,300 digits in the status document",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/c5-bigint-status.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_not_strict_json"
+   }
+  },
+  {
+   "id": "c6-bigint-in-status-keys",
+   "why": "the same in the status key set",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/empty.json",
+    "--status-keys",
+    "{fx}/c6-bigint-statuskeys.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_not_strict_json"
+   }
+  },
+  {
+   "id": "bidi-in-organisation-name",
+   "why": "a genuine document whose signed organisation name holds a right-to-left override: it verifies; the page must not display the raw character (page check)",
+   "args": [
+    "--attestation",
+    "{fx}/bidi.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/keys/test-only-issuer-jwks.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1791937200"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "x-ones-4300",
+   "why": "an extra member that is an integer of 4,300 digits, written plainly (the limit itself)",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4300}"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-ones-4301",
+   "why": "the same with 4,301 digits",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4301}"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_not_strict_json"
+   }
+  },
+  {
+   "id": "x-4300-e0",
+   "why": "4,300 digits and an exponent of 0",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4300}e0"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-4301-e0",
+   "why": "4,301 digits and an exponent of 0: an integer after the script's rewrite",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4301}e0"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "x-4301-E+0",
+   "why": "the same with a capital E and a plus sign",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4301}E+0"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "x-4301-e0-negative",
+   "why": "the same, negative",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "-{1x4301}e0"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "x-4300-e0-negative",
+   "why": "the limit, negative, with an exponent",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "-{1x4300}e0"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-4300-frac-e1",
+   "why": "a fraction and an exponent that together make 4,301 integer digits",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4300}.1e1"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "x-4300-frac-zero-e0",
+   "why": "a fraction that stays a fraction after the rewrite: a float",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4300}.0e0"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-4301-e-1",
+   "why": "a negative exponent: a float",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4301}e-1"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-4300-e1",
+   "why": "a positive exponent: scientific, a float",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4300}e1"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-4301-e1",
+   "why": "4,301 digits and a positive exponent: scientific, a float",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "{1x4301}e1"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-leading-zero-frac",
+   "why": "a leading zero and a fraction: 4,301 integer digits after the rewrite",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "0.{1x4301}e4301"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "x-zero-e5000",
+   "why": "zero with a large exponent",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "0e5000"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-huge-exponent",
+   "why": "an exponent at the limit of the script's decimal context",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "1e999999999"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "x-beyond-exponent",
+   "why": "an exponent beyond that limit",
+   "template": "status",
+   "generated": {
+    "where": "x",
+    "token": "1e1000000000"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "seq-7e0",
+   "why": "the signed sequence number 7 written as 7e0 (the same number)",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "7e0"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "seq-0.7e1",
+   "why": "the same as 0.7e1",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "0.7e1"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "seq-7E+0",
+   "why": "the same as 7E+0",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "7E+0"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "seq-7e-0",
+   "why": "the same as 7e-0",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "7e-0"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "seq-0.07e2",
+   "why": "the same as 0.07e2",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "0.07e2"
+   },
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "seq-7.0",
+   "why": "7.0: a float after the rewrite, so not an integer",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "7.0"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "seq-70e-1",
+   "why": "70e-1: 7.0, a float",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "70e-1"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "seq-7e1",
+   "why": "7e1: 70, not the signed number (and a float after the rewrite)",
+   "template": "status",
+   "generated": {
+    "where": "seq",
+    "token": "7e1"
+   },
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "n1-e0-in-statuslist-fixture",
+   "why": "reviewer's fixture: 4,301 ones with e0 inside the status list",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/n1-e0-in-statuslist.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "n1b-E+0-fixture",
+   "why": "reviewer's fixture: the same with E+0",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/n1b-E+0.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_encoding_failed"
+   }
+  },
+  {
+   "id": "n2-seq-7e0-fixture",
+   "why": "reviewer's fixture: seq 7e0, signed",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/n2-seq-7e0.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "b64-header-segment-bang",
+   "why": "a header segment with a character outside the base64url alphabet",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-segment-bang.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "header_not_base64url"
+   }
+  },
+  {
+   "id": "b64-signature-segment-plus",
+   "why": "a signature segment with + (the standard alphabet)",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/signature-segment-plus.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-signature-segment-slash",
+   "why": "a signature segment with / (the standard alphabet)",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/signature-segment-slash.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-signature-segment-padded",
+   "why": "a signature segment with = padding",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/signature-segment-padded.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-header-segment-trailing-bits",
+   "why": "a header segment whose last character has bits the bytes do not use",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-segment-trailing-bits.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "header_not_base64url"
+   }
+  },
+  {
+   "id": "b64-public-key-trailing-bits",
+   "why": "the same key written another way: bits left over in the last character",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/jwks/pub-trailing-bits.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "public_key_not_base64url"
+   }
+  },
+  {
+   "id": "b64-status-header-segment-bang",
+   "why": "a status list header segment with a character outside the alphabet",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/header-segment-bang.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_header_not_base64url"
+   }
+  },
+  {
+   "id": "b64-status-signature-segment-plus",
+   "why": "a status list signature segment with +",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/signature-segment-plus.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_signature_not_base64url"
+   }
+  },
+  {
+   "id": "b64-status-public-key-trailing-bits",
+   "why": "a status public key with bits left over in the last character",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/empty.json",
+    "--status-keys",
+    "{v1}/jwks/status-pub-trailing-bits.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_public_key_not_base64url"
+   }
+  },
+  {
+   "id": "key-1951-bytes",
+   "why": "a public key one byte short stops the run with its own reason",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/jwks/pub-1951.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "public_key_size_invalid"
+   }
+  },
+  {
+   "id": "key-1953-bytes",
+   "why": "a public key one byte long stops the run with its own reason",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json"
+   ],
+   "defaults": [
+    "--jwks",
+    "{v1}/jwks/pub-1953.json",
+    "--expect-slug",
+    "fixture-org",
+    "--expect-issuer",
+    "https://issuer.test",
+    "--now",
+    "1767225900"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "public_key_size_invalid"
+   }
+  },
+  {
+   "id": "key-status-1951-bytes",
+   "why": "the status key of the wrong size (unknown, exit 3, as it always was)",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/empty.json",
+    "--status-keys",
+    "{v1}/jwks/status-pub-1951.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_public_key_size"
+   }
+  },
+  {
+   "id": "hdr-alg-escaped-value",
+   "why": "alg written with a JSON escape is ML-DSA-65",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-alg-escaped-value.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-member-name-escaped",
+   "why": "the member name alg written with a JSON escape is alg",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-member-name-escaped.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-typ-escaped-slash",
+   "why": "typ written with an escaped slash is application/attest+jws",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-typ-escaped-slash.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-kid-escaped",
+   "why": "kid with its first character written as a JSON escape finds its key",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-kid-escaped.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-alg-not-a-string",
+   "why": "alg that is an array, not a string",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/header-alg-not-a-string.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "hdr-alg-nul",
+   "why": "alg followed by a NUL character (\\u0000)",
+   "args": [
+    "--attestation",
+    "{fx}/b1-alg-nul.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "hdr-kid-lone-surrogate",
+   "why": "a kid that is an unpaired surrogate escape reads as empty: no key",
+   "args": [
+    "--attestation",
+    "{fx}/b2-kid-lone-surrogate.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-nan-member",
+   "why": "a header with a NaN member is not JSON, so it has no kid: no key (Python's own reader would accept the NaN; the script's header read does not)",
+   "args": [
+    "--attestation",
+    "{fx}/b3-nan-member.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-oversize-kid-late",
+   "why": "a header over 4096 bytes: failed for its size, and its kid past byte 4096 is still found",
+   "args": [
+    "--attestation",
+    "{fx}/b4-oversize-kid-late.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_too_large"
+   }
+  },
+  {
+   "id": "hdr-duplicate-alg",
+   "why": "alg twice at the top level: the member set fails",
+   "args": [
+    "--attestation",
+    "{fx}/b5-duplicate-alg.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_not_allowed"
+   }
+  },
+  {
+   "id": "hdr-typ-number",
+   "why": "typ that is a number",
+   "args": [
+    "--attestation",
+    "{fx}/b6-typ-number.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_typ_invalid"
+   }
+  },
+  {
+   "id": "hdr-kid-number",
+   "why": "kid that is a number reads as empty: no key",
+   "args": [
+    "--attestation",
+    "{fx}/b7-kid-number.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-alg-escaped-quote",
+   "why": "alg that ends in an escaped quote is not ML-DSA-65",
+   "args": [
+    "--attestation",
+    "{fx}/b8-alg-escaped-quote.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_alg_invalid"
+   }
+  },
+  {
+   "id": "hdr-kid-invalid-utf8",
+   "why": "a byte that is not UTF-8 in the header: not JSON, no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b9-kid-invalid-utf8.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-status-alg-escaped-value",
+   "why": "the status header's alg written with a JSON escape",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{v1}/status-lists/header-alg-escaped-value.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "good"
+   }
+  },
+  {
+   "id": "hdr-status-alg-number",
+   "why": "the status header's alg that is a number",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/s1-alg-number.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_unsupported_alg"
+   }
+  },
+  {
+   "id": "hdr-status-kid-number",
+   "why": "the status header's kid that is a number reads as empty: no key",
+   "args": [
+    "--attestation",
+    "{v1}/attestations/valid.json",
+    "--status-list",
+    "--status",
+    "{fx}/s2-kid-number.json",
+    "--status-keys",
+    "{v1}/keys/test-only-status-jwks.json"
+   ],
+   "expect": {
+    "exit": 3,
+    "reason": "status_unknown_unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-split-lines",
+   "why": "a header whose member name, colon and value are on separate lines is read as JSON reads it",
+   "args": [
+    "--attestation",
+    "{fx}/b10-split-lines.json"
+   ],
+   "expect": {
+    "exit": 0,
+    "reason": "verified"
+   }
+  },
+  {
+   "id": "hdr-deep-64-containers",
+   "why": "a header 64 containers deep (typ is an empty array nested in 62 more): read, typ is not a string",
+   "args": [
+    "--attestation",
+    "{fx}/b11-deep-64-containers.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_typ_invalid"
+   }
+  },
+  {
+   "id": "hdr-deep-65-containers",
+   "why": "one container deeper: refused before the reader runs, so no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b12-deep-65-containers.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-deep-66-containers",
+   "why": "two deeper: no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b13-deep-66-containers.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-deep-1001-containers",
+   "why": "1001 containers deep: no kid, on any Python",
+   "args": [
+    "--attestation",
+    "{fx}/b14-deep-1001-containers.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-oversize-deep-64-containers",
+   "why": "a header over 4096 bytes, 64 containers deep: still fails for its size (1)",
+   "args": [
+    "--attestation",
+    "{fx}/b15-oversize-deep-64-containers.json"
+   ],
+   "expect": {
+    "exit": 1,
+    "reason": "header_too_large"
+   }
+  },
+  {
+   "id": "hdr-oversize-deep-65-containers",
+   "why": "a header over 4096 bytes, 65 containers deep: no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b16-oversize-deep-65-containers.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  },
+  {
+   "id": "hdr-oversize-deep-1001-containers",
+   "why": "a header over 4096 bytes, 1001 containers deep: no kid",
+   "args": [
+    "--attestation",
+    "{fx}/b17-oversize-deep-1001-containers.json"
+   ],
+   "expect": {
+    "exit": 2,
+    "reason": "unknown_kid"
+   }
+  }
+ ],
+ "templates": {
+  "status": [
+   "--attestation",
+   "{v1}/attestations/valid.json",
+   "--status-list",
+   "--status",
+   "{gen}",
+   "--status-keys",
+   "{v1}/keys/test-only-status-jwks.json"
+  ],
+  "status-fx": [
+   "--attestation",
+   "{v1}/attestations/valid.json",
+   "--status-list",
+   "--status",
+   "{fx}/__F__",
+   "--status-keys",
+   "{v1}/keys/test-only-status-jwks.json"
+  ]
+ },
+ "minimum": 73
+}

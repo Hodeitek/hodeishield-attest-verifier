@@ -208,7 +208,7 @@ set -euo pipefail
 # The version this script is released as. --anchor-file refuses a key statement
 # from an older release than this (anti-rollback); tests/version-consistency.sh
 # keeps it in step with CHANGELOG.md and, on a release, with the tag.
-VERIFIER_VERSION="1.5.0"
+VERIFIER_VERSION="1.6.0"
 
 JWS_FILE=''; JWKS_FILE=''; POSTURE_FILE=''; PUB_B64URL=''
 ATTESTATION_FILE=''; CLAIMS_FILE=''
@@ -995,9 +995,19 @@ hex_to_bin() {
   fi
 }
 
+# Strict base64url (RFC 4648 section 5), unpadded. A segment is decoded only if it
+# is exactly what b64url_encode would write for the bytes it decodes to: only the
+# characters A-Z a-z 0-9 - _ (no padding, no + or /, no spaces or line breaks), a
+# length that is not 1 modulo 4, and zero bits left over in the last character.
+# Anything else is a failure (the caller names the segment), never a quiet empty
+# or partial result. The glob classes are spelled out and the C locale is used, so
+# that no locale can widen a range.
 b64url_decode() {
-  local s="${1//-/+}"
-  s="${s//_//}"
+  local LC_ALL=C
+  local s="$1"
+  case "$s" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) return 1 ;;
+  esac
   # Multi-line for the same parser reason as the `case` above: as a one-liner
   # this construct was the largest SAST blind spot in the file, taking the whole
   # of fetch_or_read() down with it.
@@ -1011,10 +1021,26 @@ b64url_decode() {
   pad=${#s}
   pad=$(( pad % 4 ))
   case "$pad" in
-    2) s="${s}==" ;;
-    3) s="${s}=" ;;
     1) return 1 ;;
+    2)
+      # 12 bits for 8: the 4 low bits of the last character must be zero (A Q g w)
+      case "$s" in
+        *[AQgw]) ;;
+        *) return 1 ;;
+      esac
+      s="${s}=="
+      ;;
+    3)
+      # 18 bits for 16: the 2 low bits of the last character must be zero
+      case "$s" in
+        *[AEIMQUYcgkosw048]) ;;
+        *) return 1 ;;
+      esac
+      s="${s}="
+      ;;
   esac
+  s="${s//-/+}"
+  s="${s//_//}"
   printf '%s' "$s" | openssl base64 -d -A
 }
 b64url_encode() { openssl base64 -A -in "$1" | tr '+/' '-_' | tr -d '='; }
@@ -1639,6 +1665,10 @@ def fval(d, f):
         elif isinstance(d, list): v = ",".join(str(i) for i in range(len(d)))
         else: raise ValueError("no keys")
     elif re.fullmatch(r"\.[A-Za-z]+", f): v = member(d, f[1:])
+    elif re.fullmatch(r"\.[A-Za-z]+\|str", f):
+        # a member that must be a JSON string: any other value, or none, reads as empty
+        v = member(d, f[1:-4])
+        if not isinstance(v, str): return "", 0
     else: raise ValueError("filter")
     return plain(v).replace("\0", "\\x00"), (3 if isinstance(v, str) and "\0" in v else 0)
 def main(a):
@@ -2394,10 +2424,10 @@ b64url_decode "$H" > "$WORKDIR/header.json" || die header_not_base64url "header 
 HEADER_LEN="$(wc -c < "$WORKDIR/header.json" | tr -d ' ')"
 if [ "$HEADER_LEN" -gt "$HEADER_MAX_BYTES" ]; then
   # A failed check (exit 1), as the same document was before the cap (it had a
-  # member beyond alg, kid, typ). The members are looked up with sed in the whole
-  # header (header.full, see header_field: one pass, as before, so the key is found
-  # wherever the kid lies); the JSON reader, grep and the display see only the first
-  # HEADER_MAX_BYTES bytes, so what the cap bounds is the parsing.
+  # member beyond alg, kid, typ). The member set, grep and the display see only the
+  # first HEADER_MAX_BYTES bytes, so what the cap bounds is that parsing. The whole
+  # header is kept (header.full) for one more read of alg, typ and kid (HEADER_PY),
+  # so that the key is found wherever the kid lies and the run ends as it always did.
   bad header_too_large "protected header is ${HEADER_LEN} bytes, over the ${HEADER_MAX_BYTES} a header of this format can have; \
 only the first ${HEADER_MAX_BYTES} are read"
   cp -- "$WORKDIR/header.json" "$WORKDIR/header.full"
@@ -2413,19 +2443,65 @@ fi
 
 # --- 2. Header ---------------------------------------------------------------
 printf '\n%s[2] Header%s\n' "$BOLD" "$RESET"
-# In the C locale: under a UTF-8 locale, sed's . and [^"] do not match a byte
-# that is not valid UTF-8, so a header kid holding one read as empty, and what
-# the run then reported depended on the locale.
-# An oversized header was cut to HEADER_MAX_BYTES in header.json; the members are
-# looked up in the whole of it (header.full), the one linear pass there ever was.
-header_field() {
-  local f="$1"
-  if [ -e "${f%.json}.full" ]; then f="${f%.json}.full"; fi
-  LC_ALL=C sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$f" | head -1
-}
-ALG="$(header_field "$WORKDIR/header.json" alg)"
-KID="$(header_field "$WORKDIR/header.json" kid)"
-TYP="$(header_field "$WORKDIR/header.json" typ)"
+# The protected header is read as JSON, by the parse that checks the member set
+# (HEADER_PY): `alg`, `typ` and `kid` come from that same parse, so the verdict
+# cannot depend on how a second, text-based reader would see the same bytes. A
+# JSON string is read as JSON says (an escape is decoded: "ML\u002dDSA-65" is
+# ML-DSA-65); a value that is not a string, or is missing, reads as empty, which
+# fails its check. A member repeated at any depth fails the member-set check
+# below. A value holding an unpaired surrogate reads as empty, and a NUL
+# character is shown as \x00 (the shell cannot hold one). Only for a header over
+# the cap, which already failed, the three values are read from the whole header.
+command -v python3 >/dev/null 2>&1 || die python3_missing "python3 is needed to check the protected header's member set."
+HEADER_PY='
+import json, sys
+def no_constant(c): raise ValueError(c)
+def load(path, hook):
+    s = open(path, encoding="utf-8").read()
+    # Nesting is limited here, to 64 containers (the page does the same): a header
+    # holds three strings, so depth carries nothing, and the check is made before the
+    # reader runs, so that no Python version can give up first (the depth at which
+    # its reader raises RecursionError varies with the version).
+    depth, quoted, escaped = 0, False, False
+    for c in s:
+        if quoted:
+            if escaped: escaped = False
+            elif c == "\\": escaped = True
+            elif c == "\"": quoted = False
+        elif c == "\"":
+            quoted = True
+        elif c in "[{":
+            depth += 1
+            if depth > 64: raise ValueError("too deep")
+        elif c in "]}":
+            depth -= 1
+    return json.loads(s, object_pairs_hook=hook, parse_constant=no_constant)
+pairs = []
+try:
+    h = load(sys.argv[1], lambda p: (pairs.append([k for k, _ in p]), dict(p))[1])
+    dups = sorted({k for ks in pairs for k in ks if ks.count(k) > 1})
+    out = "duplicated: " + ",".join(dups) if dups else ",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)"
+except Exception:
+    h, out = None, "(not JSON)"
+if sys.argv[2] != sys.argv[1]:
+    try: h = load(sys.argv[2], dict)
+    except Exception: h = None
+def text(v):
+    if not isinstance(v, str): return ""
+    try: v.encode("utf-8")
+    except UnicodeEncodeError: return ""
+    return v
+vals = [text(h.get(k)) if isinstance(h, dict) else "" for k in ("alg", "typ", "kid")]
+rec = "".join(s.encode("utf-8", "backslashreplace").decode("utf-8").replace("\0", "\\x00") + "\0" for s in [out] + vals)
+sys.stdout.buffer.write(rec.encode("utf-8"))
+'
+HEADER_VALUES="$WORKDIR/header.json"
+if [ -e "$WORKDIR/header.full" ]; then HEADER_VALUES="$WORKDIR/header.full"; fi
+HEADER_MEMBERS='(not JSON)'; ALG=''; TYP=''; KID=''
+if { IFS= read -r -d '' hdr_m && IFS= read -r -d '' hdr_a && IFS= read -r -d '' hdr_t && IFS= read -r -d '' hdr_k; } \
+     < <(python3 -I -X utf8 -c "$HEADER_PY" "$WORKDIR/header.json" "$HEADER_VALUES" 2>/dev/null); then
+  HEADER_MEMBERS="$hdr_m"; ALG="$hdr_a"; TYP="$hdr_t"; KID="$hdr_k"
+fi
 printf '        %s\n' "$(esc "$(cat "$WORKDIR/header.json")")"
 
 # Never dispatch on `alg` — compare it as a constant. The verification primitive
@@ -2448,15 +2524,6 @@ fi
 # The same closed set the platform verifier (jws.ts ALLOWED_HEADER_MEMBERS) and
 # section 8 below enforce: a member nothing examines must not be able to carry
 # meaning. Not a JSON object at all counts as a mismatch too.
-command -v python3 >/dev/null 2>&1 || die python3_missing "python3 is needed to check the protected header's member set."
-HEADER_MEMBERS="$(python3 -I -X utf8 -c '
-import json, sys
-pairs = []
-h = json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=lambda p: (pairs.append([k for k, _ in p]), dict(p))[1])
-dups = sorted({k for ks in pairs for k in ks if ks.count(k) > 1})
-out = "duplicated: " + ",".join(dups) if dups else ",".join(sorted(h)) if isinstance(h, dict) else "(not a JSON object)"
-sys.stdout.buffer.write((out + "\n").encode("utf-8", "backslashreplace"))
-' "$WORKDIR/header.json" 2>/dev/null || printf '(not JSON)')"
 if [ "$HEADER_MEMBERS" = 'alg,kid,typ' ]; then
   ok header_members_valid "header is the closed set {alg, kid, typ}"
 else
@@ -2519,7 +2586,11 @@ PUB_LEN="$(wc -c < "$WORKDIR/pub.raw" | tr -d ' ')"
 if [ "$PUB_LEN" -eq 1952 ]; then
   ok public_key_size_valid "public key is 1952 bytes — the ML-DSA-65 size"
 else
-  bad public_key_size_invalid "public key is ${PUB_LEN} bytes, expected 1952"
+  # Stops here (exit 2): the key material is broken, which says nothing about the
+  # document. It used to be recorded and the run went on until OpenSSL refused the
+  # rebuilt key (public_key_rejected); the exit code is the same, the reason is now
+  # the exact one.
+  die public_key_size_invalid "public key is ${PUB_LEN} bytes, expected 1952"
 fi
 
 # The kid is CHECKED, not trusted: it must be derivable from the key bytes, so a
@@ -2685,7 +2756,7 @@ fi
 printf '\n%s[6] Freshness%s\n' "$BOLD" "$RESET"
 NOW="${NOW_OVERRIDE:-$(date -u +%s)}"
 if [ -n "$POSTURE_FILE" ]; then
-  # Read as JSON, by TOP-LEVEL member — never with header_field(). header_field() takes
+  # Read as JSON, by TOP-LEVEL member — never with a text pattern. A pattern takes
   # the FIRST line anywhere in the file that looks like `"slug": "..."`, nested
   # objects included, and the canonical encoder ignores members it does not
   # read. Before 2026-09-29 that meant an unsigned nested member could decide
@@ -3099,9 +3170,11 @@ if [ "$STATUS_FAILURES" -eq 0 ]; then
   fi
 fi
 if [ "$STATUS_FAILURES" -eq 0 ]; then
-  list_field SALG "$WORKDIR/status_header.json" '.alg'
-  list_field STYP "$WORKDIR/status_header.json" '.typ'
-  list_field STATUS_LIST_KID "$WORKDIR/status_header.json" '.kid'
+  # Each must be a JSON string; any other value (or none) reads as empty and fails
+  # the check that follows (the page reads them the same way).
+  list_field SALG "$WORKDIR/status_header.json" '.alg|str'
+  list_field STYP "$WORKDIR/status_header.json" '.typ|str'
+  list_field STATUS_LIST_KID "$WORKDIR/status_header.json" '.kid|str'
   # Never dispatch on alg — constant comparison only, exactly as jws.ts does.
   if [ "$SALG" = 'ML-DSA-65' ]; then
     ok status_header_alg_valid "alg is ML-DSA-65"

@@ -43,6 +43,17 @@ retired, and then the endpoint answers 404. Substitute the slug of whichever
 organisation's attestation you were given. Always pass `--expect-issuer`; the
 document names its own issuer, and only you can say which one you trust.
 
+### Without a terminal
+
+[`web/`](web/) is a page that does the same check in the browser, for people who
+do not use a terminal: add the attestation and the issuer's key file, press a
+button, read the result. The files never leave the browser, and it works offline.
+It is built and tested (all 136 cases of `tests/vectors/v1` in headless Chrome and
+Firefox; Safari is not tested) but **not deployed yet**, and the script above
+remains the reference verifier. It is released as `verify-page-<tag>.tar.gz`;
+what it does, what it does not do and how to check the files it serves are in
+[docs/security/browser-verifier.md](docs/security/browser-verifier.md).
+
 ## What you are verifying
 
 A posture attestation is a short document, signed by HodeiShield, stating how
@@ -574,6 +585,8 @@ date taken from the tagged commit, so the same tag gives the same file. What cha
 that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
 the reason it is a short, single, readable script.
+
+Planned: an in-browser verifier page, published from this repository only from signed release tags, so that you can check its bytes against the release. See [the decision record](docs/security/browser-verifier.md).
 
 ## Tests and CI
 
