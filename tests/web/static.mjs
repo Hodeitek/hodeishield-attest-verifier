@@ -20,7 +20,7 @@ const read = (p) => fs.readFileSync(path.join(web, p), "utf8");
 const html = read("index.html");
 
 // ---- the policy --------------------------------------------------------------
-const EXPECTED_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'";
+const EXPECTED_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'";
 const m = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(html);
 check("index.html carries the Content-Security-Policy meta tag", !!m);
 check("the policy is exactly the strict one", m && m[1] === EXPECTED_CSP, m && m[1]);
@@ -64,14 +64,29 @@ for (const f of sources) {
   const hits = banned.filter(([re]) => re.test(text)).map(([, n]) => n);
   check(f + " uses none of the banned APIs", hits.length === 0, hits.join(", "));
 }
-check("the CSS imports nothing and loads no URL", !/@import|url\(/.test(read("css/app.css")));
+const css = read("css/app.css");
+const cssUrls = [...css.matchAll(/url\(([^)]*)\)/g)].map((u) => u[1].trim().replace(/^["']|["']$/g, ""));
+check("the CSS imports nothing and loads no URL but the bundled fonts (fonts/*.woff2, present in web/)",
+  !/@import/.test(css) && cssUrls.length > 0 && cssUrls.every((u) => /^\.\.\/fonts\/[a-z0-9-]+\.woff2$/.test(u) && fs.existsSync(path.join(web, "css", u))),
+  cssUrls.join(", "));
 
 // ---- the files ------------------------------------------------------------------
 const all = [];
 (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else all.push(path.relative(web, p)); } })(web);
 check("web/ holds no built file (the module and its loader come from tools/mldsa-wasm/build.sh)", !all.some((f) => /\.wasm$|^mldsa\//.test(f)), all.filter((f) => /\.wasm$|^mldsa\//.test(f)).join(", "));
-const noHeader = all.filter((f) => /\.(js|css|html|svg)$/.test(f) && !/SPDX-License-Identifier: Apache-2\.0/.test(read(f).slice(0, 400)));
-check("every source file carries the SPDX header", noHeader.length === 0, noHeader.join(", "));
+// brand/ holds the HodeiShield logo, a trademark outside the Apache-2.0 licence (see
+// NOTICE); fonts/ holds third-party fonts with their SIL Open Font License texts.
+// Neither gets an Apache-2.0 header.
+const noHeader = all.filter((f) => /\.(js|css|html|svg)$/.test(f) && !/^brand\//.test(f) && !/SPDX-License-Identifier: Apache-2\.0/.test(read(f).slice(0, 400)));
+check("every source file carries the SPDX header (the logo in brand/ excepted)", noHeader.length === 0, noHeader.join(", "));
+const brand = all.filter((f) => /^brand\//.test(f));
+check("brand/ holds only the logo SVG files", brand.length > 0 && brand.every((f) => /^brand\/hodeishield-[a-z0-9-]+\.svg$/.test(f)), brand.join(", "));
+const fonts = all.filter((f) => /^fonts\//.test(f));
+const woff = fonts.filter((f) => /\.woff2$/.test(f));
+check("fonts/ holds only .woff2 files and their OFL licence texts, one licence per font",
+  woff.length > 0 && fonts.every((f) => /^fonts\/([a-z0-9-]+\.woff2|OFL-[A-Za-z]+\.txt)$/.test(f)) && fonts.length === 2 * woff.length
+    && fonts.filter((f) => /\.txt$/.test(f)).every((f) => /SIL Open Font License, Version 1\.1/.test(read(f))),
+  fonts.join(", "));
 const runner = fs.readFileSync(path.join(root, "tests/web/runner.js"), "utf8");
 const listed = JSON.parse("[" + /var PAGE_SCRIPTS = \[([\s\S]*?)\];/.exec(runner)[1] + "]");
 const inPage = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((x) => x[1]).filter((s) => s !== "js/app.js");
