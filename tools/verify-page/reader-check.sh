@@ -22,7 +22,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="${1:?usage: reader-check.sh BUNDLE.tar.gz}"
 fail() { printf 'not ok - %s\n' "$*" >&2; exit 1; }
 
-[ -f "$BUNDLE" ] && [ ! -L "$BUNDLE" ] || fail "$BUNDLE is not a plain file"
+if [ ! -f "$BUNDLE" ] || [ -L "$BUNDLE" ]; then fail "$BUNDLE is not a plain file"; fi
 
 T="$(mktemp -d)"
 trap 'rm -rf -- "$T"' EXIT
