@@ -12,11 +12,14 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Each major version gets security fixes for five years,
 as [SECURITY.md](SECURITY.md#supported-versions) says.
 
-## Unreleased
+## v1.6.2 - 2026-10-15
 
-`verify-attestation.sh` changes only in `VERIFIER_VERSION` (1.6.2). The page
-checks exactly what it checked before and gives the same verdicts and reason
-codes; what changes is how it looks.
+`verify-attestation.sh` changes. sha256
+`0f42748b168242730a05f356040b0f1326722970bb8f5d2097c47661a8f46c3f`.
+
+The script changes only in `VERIFIER_VERSION` (1.6.2). The page checks exactly
+what it checked before and gives the same verdicts and reason codes; what
+changes is how it looks.
 
 ### Changed
 - The in-browser page now uses the hodeishield.com visual identity: a dark page
