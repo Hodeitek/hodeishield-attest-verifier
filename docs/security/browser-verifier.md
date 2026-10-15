@@ -95,6 +95,13 @@ serves is what we released:
 If anything differs, do not use the page, and report it as described in
 [SECURITY.md](../../SECURITY.md).
 
+[`tests/live-page.sh`](../../tests/live-page.sh) runs these steps for the latest
+release, daily and on every push and pull request (`live.yml`): it verifies
+`SHA256SUMS` and the archive with cosign, checks the archive as `pages.yml` does
+before it deploys, and compares every file `MANIFEST.sha256` lists, the manifest
+itself and `/` with what the site serves. It cannot see a file the site serves
+beyond those the manifest names: a static host cannot be listed.
+
 ## The offline copy
 
 The same archive is a download on the release. Unpack it and open `index.html`
