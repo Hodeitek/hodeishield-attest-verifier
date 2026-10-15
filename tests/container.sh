@@ -58,7 +58,7 @@ extract() {
     found && inb { print }
   ' "$ROOT/README.md" > "$2"
   [ -s "$2" ] || fail "no code block after <!-- $1 --> in README.md"
-  head -n1 "$2" | grep -q '^docker ' || fail "the <!-- $1 --> block does not start with 'docker '"
+  grep -q '^docker ' <<< "$(head -n1 "$2")" || fail "the <!-- $1 --> block does not start with 'docker '"
   if [ "$ENGINE" != docker ]; then
     sed -i "1s/^docker /$ENGINE /" "$2"
   fi

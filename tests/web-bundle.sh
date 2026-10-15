@@ -58,7 +58,8 @@ tar -tzf "$T/a/bundle.tar.gz" > "$T/names"
 grep -qx './index.html' "$T/names" || fail "index.html is not at the root of the bundle"
 LC_ALL=C sort -c "$T/names" || fail "the names are not sorted"
 if grep -Eq '(^|/)\.\.(/|$)|^/|[[:cntrl:]]' "$T/names"; then fail "a name is absolute, holds .. or a control character"; fi
-if tar -tzvf "$T/a/bundle.tar.gz" | grep -v '^[-d]' | grep -q .; then fail "the bundle holds something that is not a file or a folder"; fi
+tar -tzvf "$T/a/bundle.tar.gz" > "$T/long"
+if grep -v '^[-d]' "$T/long" > "$T/odd"; then fail "the bundle holds something that is not a file or a folder: $(cat "$T/odd")"; fi
 ok "index.html is at the root; names are sorted and plain; only files and folders"
 
 python3 -I - "$T/a/bundle.tar.gz" "$SDE" <<'PY' || fail "owner, mode or time of an entry is not the fixed one"
@@ -75,7 +76,8 @@ with tarfile.open(path) as t:
 if bad:
     print("\n".join(bad)); sys.exit(1)
 PY
-head -c 10 "$T/a/bundle.tar.gz" | od -An -tx1 | tr -d ' \n' | grep -q '^1f8b0[0-9a-f]00000000' \
+gzhead="$(head -c 10 "$T/a/bundle.tar.gz" | od -An -tx1 | tr -d ' \n')"
+grep -q '^1f8b0[0-9a-f]00000000' <<< "$gzhead" \
   || fail "the gzip header carries a flag, a name or a time (use gzip -n)"
 ok "owner 0:0, modes 0644 and 0755, every mtime is SOURCE_DATE_EPOCH, gzip -n"
 
@@ -139,3 +141,41 @@ cp -r "$T/x" "$T/evil5"
 printf 'x' > "$T/evil5/extra.js"
 if bash "$CHECK" "$T/evil5" > /dev/null 2>&1; then fail "check.sh accepted a file the manifest does not list"; fi
 ok "check.sh refuses: a module appended to or replaced in mldsa_wasm.b64.js (manifest made again), a changed .wasm, a changed file, an unlisted file"
+
+# reader-check.sh: the checks release.yml runs on the bundle before signing it.
+# Each refusal must fire on its own case, and the untouched bundle must pass.
+READER="$ROOT/tools/verify-page/reader-check.sh"
+bash "$READER" "$T/a/bundle.tar.gz" > /dev/null || fail "reader-check.sh refused the untouched bundle"
+python3 -I - "$T/a/bundle.tar.gz" "$T" <<'PY'
+import io, sys, tarfile
+src, out = sys.argv[1], sys.argv[2]
+def remake(name, change):
+    with tarfile.open(src, "r:gz") as a, tarfile.open(f"{out}/{name}.tar.gz", "w:gz") as b:
+        for m in a.getmembers():
+            if change(b, m, a):
+                continue
+            b.addfile(m, a.extractfile(m) if m.isfile() else None)
+def add_file(b, name):
+    i = tarfile.TarInfo(name); data = b"x"; i.size = len(data); b.addfile(i, io.BytesIO(data))
+state = {}
+def dotdot(b, m, a):
+    if not state.get("dotdot"): state["dotdot"] = 1; add_file(b, "./../outside.txt")
+def absolute(b, m, a):
+    if not state.get("abs"): state["abs"] = 1; add_file(b, "/tmp/outside.txt")
+def link(b, m, a):
+    if not state.get("link"):
+        state["link"] = 1; i = tarfile.TarInfo("./linked"); i.type = tarfile.SYMTYPE; i.linkname = "index.html"; b.addfile(i)
+def noindex(b, m, a):
+    return m.name == "./index.html"
+for n, f in [("r-dotdot", dotdot), ("r-abs", absolute), ("r-link", link), ("r-noindex", noindex)]:
+    remake(n, f)
+PY
+expect_refusal() {  # CASE MESSAGE
+  if bash "$READER" "$T/$1.tar.gz" > /dev/null 2> "$T/$1.err"; then fail "reader-check.sh accepted $1"; fi
+  grep -qF "$2" "$T/$1.err" || fail "reader-check.sh refused $1 for another reason: $(cat "$T/$1.err")"
+}
+expect_refusal r-dotdot "an absolute path or a '..' component"
+expect_refusal r-abs "an absolute path or a '..' component"
+expect_refusal r-link "entries that are not plain files or folders"
+expect_refusal r-noindex "index.html is not at the root of the bundle"
+ok "reader-check.sh passes the untouched bundle and refuses a '..' path, an absolute path, a link and a missing index.html, each for its own reason"

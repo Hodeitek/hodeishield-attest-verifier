@@ -1283,8 +1283,9 @@ fi
 # --expect-kid is judged in the C locale: an accented letter is not in A-Z (#13).
 # A locale with real collation rules is the one that used to accept them.
 KID_LOCALE=C
+LOCALES="$(locale -a 2>/dev/null || true)"
 for cand in en_US.utf8 en_GB.utf8 C.utf8; do
-  if locale -a 2>/dev/null | grep -qix "$cand"; then KID_LOCALE="$cand"; break; fi
+  if grep -qix "$cand" <<< "$LOCALES"; then KID_LOCALE="$cand"; break; fi
 done
 LC_ALL="$KID_LOCALE" expect 2 'is not a kid' "an accented letter in --expect-kid is a usage error (2) under $KID_LOCALE" -- \
   --attestation "$T/att.json" "${COMMON[@]}" --expect-kid 'ééééééééééééééééééééé'
