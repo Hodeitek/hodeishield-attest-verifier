@@ -12,13 +12,46 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Each major version gets security fixes for five years,
 as [SECURITY.md](SECURITY.md#supported-versions) says.
 
-## v1.6.0 - 2026-10-14
+## v1.6.1 - 2026-10-14
 
 `verify-attestation.sh` changes. sha256
-`3079d8a1cb706826e17a16d8f0f9e6e7e8cf57756c19c4acf1f397973e196602`.
+`6ee68950b4c715359c8b1af33f37dc4ccc5acd034a9be8890457867f1c2b6b09`.
+
+v1.6.0 was tagged but never released. Before it signs anything, the release
+job checks the page bundle as a reader would, and its first check read the
+archive's listing through a pipe into `grep -q`. Under `pipefail` that pipeline
+fails when grep stops reading early, so the job refused a good bundle, and
+nothing was signed or published. v1.6.1 is v1.6.0 with those checks fixed. The
+script differs from v1.6.0's in `VERIFIER_VERSION` and in how it asks OpenSSL
+for ML-DSA-65 (below). Everything listed under v1.6.0 below is released for the
+first time in v1.6.1.
+
+### Fixed
+- The release job's bundle checks read `tar` listings through `| grep -q` under
+  `pipefail`. The first one refused the good v1.6.0 bundle; the other two (a
+  name that is absolute or holds `..`, an entry that is not a plain file or a
+  folder) could pass a bad bundle when grep found a match early. The checks are
+  now `tools/verify-page/reader-check.sh`, which reads the listings from files,
+  and `tests/web-bundle.sh` proves that each refusal fires on its own case and
+  that a good bundle passes.
+- `verify-attestation.sh` asked OpenSSL whether it offers ML-DSA-65 with
+  `openssl list -signature-algorithms | grep -q` under `pipefail`. When the list
+  took more than one write and grep stopped reading early, the pipeline could
+  fail, and the script would report `openssl_mldsa65_missing` (exit 2) on an
+  OpenSSL that has ML-DSA-65. It now reads the whole list first. This never
+  accepted anything: the failure was always "could not check".
+- The same pattern is gone from the tests and the CI checks (`tests/run.sh`,
+  `tests/image-assets.sh`, `tests/container.sh`, `tests/web-bundle.sh`,
+  `ci.yml`, `attribution.yml`).
+
+## v1.6.0 - 2026-10-14
+
+Tagged, not released: see v1.6.1. The tag's `verify-attestation.sh` (sha256
+`3079d8a1cb706826e17a16d8f0f9e6e7e8cf57756c19c4acf1f397973e196602`) was never
+signed or published.
 
 The verifier gains an in-browser page, published with the release as a signed
-bundle (`verify-page-v1.6.0.tar.gz`) that also works offline.
+bundle (`verify-page-<tag>.tar.gz`) that also works offline.
 `verify-attestation.sh` is 1.6.0 and its checks change in the places listed under
 Fixed.
 

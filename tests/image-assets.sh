@@ -44,15 +44,16 @@ for w in "${words[@]}"; do
   files+=("$w")
 done
 [ "${#files[@]}" -ge 2 ] || fail "release.yml lists fewer than 2 files"
-printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh || fail "release.yml does not list verify-attestation.sh"
+listed="$(printf '%s\n' "${files[@]}")"
+grep -qx verify-attestation.sh <<< "$listed" || fail "release.yml does not list verify-attestation.sh"
 # The SPDX SBOM of the script is part of every release (issue #78): it must be
 # in SHA256SUMS, which puts it under the same keyless signature, and the
 # staging step must generate it.
-printf '%s\n' "${files[@]}" | grep -qx verify-attestation.sh.spdx.json \
+grep -qx verify-attestation.sh.spdx.json <<< "$listed" \
   || fail "release.yml does not list verify-attestation.sh.spdx.json (the SBOM) in SHA256SUMS"
 # The in-browser verifier page (issue #25) is part of every release, under the
 # same signature: pages.yml deploys only what SHA256SUMS lists.
-printf '%s\n' "${files[@]}" | grep -qx 'verify-page-v0.0.0.tar.gz' \
+grep -qx 'verify-page-v0.0.0.tar.gz' <<< "$listed" \
   || fail "release.yml does not list verify-page-<tag>.tar.gz (the page bundle) in SHA256SUMS"
 grep -qF 'tools/verify-page/build.sh' "$RELEASE" || fail "release.yml does not build the page bundle with tools/verify-page/build.sh"
 grep -qF '.github/scripts/generate-sbom.sh' "$RELEASE" || fail "release.yml does not run the SBOM generator"

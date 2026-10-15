@@ -36,7 +36,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh tests/web-vectors.sh tests/web-static.sh tests/web-bundle.sh tests/web-differential.sh tools/verify-page/build.sh tools/verify-page/check.sh
+          shellcheck scripts/attest/verify-attestation.sh tests/run.sh tests/vectors.sh tests/mutants.sh tests/live.sh tests/container.sh tests/keys-consistency.sh tests/keys-drift.sh tests/image-smoke.sh tests/version-consistency.sh tests/image-assets.sh tests/spdx-headers.sh tests/test-deps-parity.sh .github/scripts/install-test-deps.sh tests/live-image.sh tests/live-image-modes.sh .github/scripts/fetch-release-assets.sh .github/scripts/semgrep-parses.sh tests/sbom.sh .github/scripts/generate-sbom.sh tests/web-vectors.sh tests/web-static.sh tests/web-bundle.sh tests/web-differential.sh tools/verify-page/build.sh tools/verify-page/check.sh tools/verify-page/reader-check.sh
 
   # Semgrep's bash parser is stricter than bash: one construct it does not read
   # (10# in $(( )), a case with a pattern on the line of `in`) makes it drop the
@@ -230,7 +230,8 @@ jobs:
         run: |
           set -uo pipefail
           openssl version
-          if openssl list -signature-algorithms | grep -qi ml-dsa; then
+          algs="$(openssl list -signature-algorithms || true)"
+          if grep -qi ml-dsa <<< "$algs"; then
             echo "::notice title=old-openssl::this runner's OpenSSL supports ML-DSA; nothing to check"
             exit 0
           fi
