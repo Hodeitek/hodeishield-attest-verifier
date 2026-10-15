@@ -12,6 +12,27 @@ either format that older verifiers cannot read is announced at least 90 days
 before it takes effect. Each major version gets security fixes for five years,
 as [SECURITY.md](SECURITY.md#supported-versions) says.
 
+## Unreleased
+
+`verify-attestation.sh` changes only in `VERIFIER_VERSION` (1.6.2). The page
+checks exactly what it checked before and gives the same verdicts and reason
+codes; what changes is how it looks.
+
+### Changed
+- The in-browser page now uses the hodeishield.com visual identity: a dark page
+  only (no light variant; printing a result still gives black on white), the
+  HodeiShield logo and wordmark in the header and as the browser icon, and the
+  site's fonts, Plus Jakarta Sans for text and JetBrains Mono for codes and
+  hashes. The fonts are bundled with the page under the SIL Open Font License
+  (`web/fonts/`, with their licence texts); nothing is fetched from another
+  site. A result keeps its word and its glyph, and its colour now appears only
+  on the border, the glyph and the word.
+- The page's Content-Security-Policy gains `font-src 'self'`, so the browser
+  may load the bundled fonts from the page's own origin. Nothing else in the
+  policy changes.
+- `NOTICE` states that the HodeiShield name and logo are trademarks of
+  Hodeitek S.L. and are not covered by the Apache License.
+
 ## v1.6.1 - 2026-10-14
 
 `verify-attestation.sh` changes. sha256

@@ -143,9 +143,10 @@ function pngColourShare(file, rgb, tol) {
   return n / (w * h);
 }
 // Firefox cannot be looked into from disk: open the real index.html once and
-// look at the picture. The primary button is filled with the accent colour only
-// when the page has started (its scripts ran under its policy and the signature
-// engine passed its self-check); until then it is an empty outline.
+// look at the picture. The primary button is filled with the page's violet
+// (--primary in css/app.css, #704ee8) only when the page has started (its scripts
+// ran under its policy and the signature engine passed its self-check); until
+// then it is an empty outline.
 async function firefoxDiskSmoke() {
   const prof = fs.mkdtempSync(path.join(os.tmpdir(), "hv-ffshot-"));
   const url = pathToFileURL(path.join(pageDir, "index.html")).href + "?lang=en";
@@ -159,7 +160,7 @@ async function firefoxDiskSmoke() {
       const t = setTimeout(() => { try { process.kill(-c.pid, "SIGKILL"); } catch (e) { /* gone */ } resolve(); }, 90000);
       c.on("exit", () => { clearTimeout(t); resolve(); });
     });
-    try { share = pngColourShare(shot, [10, 92, 99], 6); } catch (e) { share = -1; }
+    try { share = pngColourShare(shot, [112, 78, 232], 6); } catch (e) { share = -1; }
   }
   try { fs.rmSync(prof, { recursive: true, force: true }); } catch (e) { /* ignore */ }
   return { name: "firefox from disk: the real index.html starts under its policy (primary button filled: " + (share * 100).toFixed(2) + "% accent pixels)", ok: share > 0.004, why: share < 0 ? "no readable screenshot" : "the button is not filled: the page did not start" };

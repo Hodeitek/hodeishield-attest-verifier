@@ -132,10 +132,21 @@ and the setting is what counts.
 ## The page
 
 `web/index.html`, `web/css/app.css` and `web/js/*.js`, plain HTML, CSS and
-JavaScript. No framework, no runtime npm dependency, no CDN, no web font, no
-analytics. The scripts are classic scripts, not ES modules, so that the page also
-works when opened from disk. Every string the reader sees is in
-`web/locales/*.js`; the only text in the markup is a `<noscript>` note.
+JavaScript. No framework, no runtime npm dependency, no CDN, no font or image
+from another site, no analytics. The scripts are classic scripts, not ES modules,
+so that the page also works when opened from disk. Every string the reader sees is
+in `web/locales/*.js`; the only text in the markup is a `<noscript>` note.
+
+The page uses the hodeishield.com visual identity and is dark only (there is no
+light variant; a printed result is black on white). Its two fonts are bundled in
+`web/fonts/`, Plus Jakarta Sans for text and JetBrains Mono for codes and hashes,
+each a `.woff2` file with its SIL Open Font License text next to it; every
+character of the six languages is in both fonts, and the system fonts take over if
+a font cannot load. The header mark and the browser icon are
+`web/brand/hodeishield-isotipo.svg`. The HodeiShield name and logo are trademarks
+of Hodeitek S.L. and are not covered by the Apache License (see `NOTICE`). A result
+shows its colour only on its border, its glyph and its word, and each result has a
+glyph of its own shape, so colour is never the only signal.
 
 What a reader does: adds the attestation and the issuer's key file (drag and drop,
 the file picker, or pasted text), optionally fills in what they were told to
@@ -238,7 +249,7 @@ the page says "Safari: not tested" and so does this document.
 `web/index.html` carries the policy as a `<meta>` tag:
 
 ```
-default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'
+default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'
 ```
 
 with `<meta name="referrer" content="no-referrer">`. No `'unsafe-inline'`, no
@@ -248,7 +259,10 @@ scripts or styles and no inline event handlers (`tests/web/static.mjs` checks th
 markup and the code, including that nothing calls `fetch`, `eval`, `localStorage`
 or `crypto.subtle`). `connect-src 'none'` means the page cannot open a connection;
 it does not need one, because the page does not fetch the issuer's key set or a
-status list: the reader supplies them as files.
+status list: the reader supplies them as files. `font-src 'self'` lets the
+browser load the two bundled fonts from the page's own origin and from nowhere
+else; `tests/web/static.mjs` also checks that the stylesheet loads no URL other
+than those font files.
 
 A `<meta>` policy cannot set `frame-ancestors` (browsers ignore it there), and
 GitHub Pages does not let a site set response headers. So the page cannot forbid
@@ -275,7 +289,8 @@ speaker.
 `verify-page-<tag>.tar.gz` is made by `tools/verify-page/build.sh` from `web/` and
 the files built by `tools/mldsa-wasm/build.sh` (nothing built is committed):
 
-- `index.html` at the root, then `css/`, `js/`, `locales/`, `icon.svg`, `CNAME`;
+- `index.html` at the root, then `brand/` (the logo), `css/`, `fonts/` (the two
+  fonts and their licence texts), `js/`, `locales/`, `CNAME`;
 - `mldsa/mldsa_wasm.wasm` and `mldsa/mldsa_wasm.js`, as built, and
   `mldsa/mldsa_wasm.b64.js`, the same module bytes as base64 in a script;
 - `MANIFEST.sha256`, the SHA-256 of every other file.
@@ -329,7 +344,8 @@ manifest inside the archive is independent of that.
 - The browser page checks also cover a result going stale (changing any file or
   option takes a shown result off the page) and the display of control and
   direction characters in signed or supplied text (shown as "?").
-- `bash tests/web-static.sh`: the policy and the code, and the six languages.
+- `bash tests/web-static.sh`: the policy and the code, the bundled fonts and logo,
+  and the six languages.
 - `bash tests/web-bundle.sh`: the bundle.
 - CI runs them on every pull request (`wasm-build`, `web-static`, `web-vectors`).
 
