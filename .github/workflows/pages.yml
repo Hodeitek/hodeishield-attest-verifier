@@ -7,9 +7,8 @@ name: Pages
 # https://verify.hodeishield.com. Decision record and trust model:
 # docs/security/browser-verifier.md.
 #
-# INERT BY DEFAULT. Both jobs run only when the repository variable
-# PAGES_ENABLED is exactly "true". Until a repository admin sets it, this
-# workflow does nothing, and the page it would deploy does not exist yet.
+# GATED. Both jobs run only when the repository variable PAGES_ENABLED is
+# exactly "true" (set since v1.6.1). If it is unset, this workflow does nothing.
 #
 # What it does: a release is published by hand (release.yml only drafts it).
 # Publishing it triggers this workflow, which
@@ -29,9 +28,8 @@ name: Pages
 # a run on a branch is refused by the check in step 1, and the github-pages
 # environment is also restricted to tags v*.
 #
-# ASSET CONTRACT for release.yml (NOT implemented yet: the page does not exist).
-# The task that adds the page must add this to release.yml, and not before the
-# page passes the checks below:
+# ASSET CONTRACT for release.yml (implemented since v1.6.0; any change to the
+# bundle step must keep it):
 #   - a bundle named verify-page-<tag>.tar.gz, built from web/ (index.html at
 #     its root; regular files and directories only, no symlinks or hard links);
 #   - built reproducibly: sorted names, fixed owner and mode, mtime from
@@ -42,8 +40,8 @@ name: Pages
 #   - its SHA-256 printed in the release notes;
 #   - all 136 cases of tests/vectors/v1 pass in a headless browser, against the
 #     bundle as it will be shipped, in a job the draft release depends on.
-# Until release.yml does that, this workflow fails closed at step 2 for any tag
-# (the bundle is not in SHA256SUMS), which is why it stays gated.
+# A tag whose release lacks the bundle fails closed at step 2 (the bundle is not
+# in SHA256SUMS).
 
 on:
   release:

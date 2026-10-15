@@ -1,6 +1,7 @@
 # Decision record: hosting the in-browser verifier
 
-- Status: Accepted. Built; **not deployed yet** (see [Status](#status)).
+- Status: Accepted. Deployed at <https://verify.hodeishield.com> since v1.6.1
+  (see [Status](#status)).
 - Date: 2026-10-14
 - Scope: where an in-browser version of the verifier is published, who can
   publish it, and how a reader checks that the bytes they are served are the
@@ -339,7 +340,8 @@ module of `tools/mldsa-wasm` (`mldsa_wasm.wasm` SHA-256 `4a3c6a43...87da`): 136 
 ## Enabling the deployment (one time)
 
 A repository administrator does this once, and only after the page passes all
-136 vectors and the release workflow builds the archive. The order matters.
+136 vectors and the release workflow builds the archive. The order matters. It
+was done before v1.6.1 was published.
 
 1. Verify `hodeishield.com` for the GitHub organisation (organisation settings,
    Pages, Verified domains; a DNS TXT record). This step has no API.
@@ -383,12 +385,15 @@ it works only for tags that already contain `.github/workflows/pages.yml`.
 
 ## Status
 
-Built, not deployed. The page, the bundle step of `release.yml` and the web tests
-exist, and the page passes all 136 vectors in Chrome and Firefox. The deployment
-workflow is committed but inert (`PAGES_ENABLED` is not set), and the first release
-that carries `verify-page-<tag>.tar.gz` is the next one after this change. Nothing
-is served at `verify.hodeishield.com` until a repository administrator has done
-the steps above and a release with the bundle is published
-([#25](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/25)).
+Deployed. Since v1.6.1 (published 2026-10-15), <https://verify.hodeishield.com>
+serves the files of the signed release asset `verify-page-v1.6.1.tar.gz`
+(SHA-256 `765bddda50431e137226627c1a18b7ad9e7c7f387ba9bf9241fb1bbf2309723f`),
+deployed by `pages.yml` from the signed tag. After the deployment, each of the 21
+files listed in the bundle's `MANIFEST.sha256` was fetched from the site and had
+the SHA-256 the manifest gives, and the served `MANIFEST.sha256` is the bundle's
+own ([#25](https://github.com/Hodeitek/hodeishield-attest-verifier/issues/25)).
+Each later release is deployed the same way when it is published; to check what
+you are served, see [How to check what you are served](#how-to-check-what-you-are-served).
+
 The page's version is the script's `VERIFIER_VERSION`; `tests/web/static.mjs` fails
 if the two differ.
