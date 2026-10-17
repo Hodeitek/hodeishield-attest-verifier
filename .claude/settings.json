@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch)",
+      "Bash(git fetch *)",
+      "Bash(gh label list *)"
+    ]
+  },
+  "enabledPlugins": {
+    "claude-security@claude-plugins-official": true
+  }
+}
