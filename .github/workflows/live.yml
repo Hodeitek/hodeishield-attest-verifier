@@ -14,6 +14,12 @@ name: Live check
 # release predates images (before v1.4.2; v1.4.1 was never released) and during
 # an outage; a missing or private image for a release that has one, a signature
 # or SBOM attestation that does not verify and a wrong verdict fail.
+#
+# A third job, live-page, checks that https://verify.hodeishield.com serves the
+# latest release's signed page bundle file for file (tests/live-page.sh). It
+# skips, with a warning, while the latest release predates the bundle (before
+# v1.6.1) and during an outage; a 404, a file that differs from the bundle or a
+# signature that does not verify fail.
 on:
   push:
     branches: [dev, main]
@@ -82,3 +88,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash tests/live-image.sh
+
+  # On the runner: cosign from the installer, as in live-image. Read-only; it
+  # signs and deploys nothing.
+  live-page:
+    name: live check (served page)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.1.3"
+      # GITHUB_TOKEN (read-only) is for the GitHub API rate limit.
+      - name: tests/live-page.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash tests/live-page.sh
