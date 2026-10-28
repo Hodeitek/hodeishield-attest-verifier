@@ -84,6 +84,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Node 26 for the page's test tooling
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Node is v26.x
+        run: |
+          node --version
+          case "$(node --version)" in v26.*) ;; *) echo "expected Node 26" >&2; exit 1 ;; esac
       - name: tests/web-static.sh
         run: bash tests/web-static.sh
       - name: The page bundle is reproducible and has the shape pages.yml needs
@@ -101,6 +109,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Node 26 for the page's test tooling
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Node is v26.x
+        run: |
+          node --version
+          case "$(node --version)" in v26.*) ;; *) echo "expected Node 26" >&2; exit 1 ;; esac
       - name: Fetch the module
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -126,8 +142,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install the script's dependencies, and Node for the page's logic
-        run: bash .github/scripts/install-test-deps.sh nodejs
+      - name: Install the script's dependencies
+        run: bash .github/scripts/install-test-deps.sh
+      - name: Node 26 for the page's test tooling
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Node is v26.x
+        run: |
+          node --version
+          case "$(node --version)" in v26.*) ;; *) echo "expected Node 26" >&2; exit 1 ;; esac
       - name: Fetch the module
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
