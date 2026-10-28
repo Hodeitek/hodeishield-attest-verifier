@@ -14,6 +14,9 @@
 # here, not in a workflow; tests/test-deps-parity.sh fails if a test job
 # installs packages of its own.
 #
+# A job that runs the official Node 26 build (actions/setup-node) passes
+# libatomic1: the slim image lacks it and node exits 127 without it.
+#
 # It also makes the en_US.ISO-8859-1 locale, for the test that the verdict does
 # not depend on the locale (VERIFIER_REQUIRE_LATIN1=1 makes tests/run.sh
 # require it).
