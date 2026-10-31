@@ -34,14 +34,15 @@ answered by email.
 We rate severity with
 [CVSS v3.1](https://www.first.org/cvss/v3.1/specification-document) and use its
 qualitative ratings. You can comment on the rating in the advisory or by email.
-The targets below are for shipping a fixed release, counted from the first
-assessment.
+The targets below are for shipping a fixed release. For Critical and High they
+count from the first assessment. For Medium they count from your report, so a
+fix never lands after the disclosure period ends.
 
 | Severity | CVSS v3.1 base score | Target to ship a fix |
 |---|---|---|
 | Critical | 9.0 - 10.0 | 7 days |
 | High | 7.0 - 8.9 | 30 days |
-| Medium | 4.0 - 6.9 | 90 days |
+| Medium | 4.0 - 6.9 | 90 days from your report |
 | Low | 0.1 - 3.9 | The next release |
 
 A fix is a new release of a supported major version, as described under
@@ -51,12 +52,13 @@ A fix is a new release of a supported major version, as described under
 
 We ask you to keep the vulnerability confidential until the advisory is
 published, and we agree the publication date with you. The coordinated
-disclosure period is at most 90 days from your report. If a fix is not released
-by then, we publish the advisory with the workarounds we know of, unless we
-agree a short extension with you.
+disclosure period is 90 days from your report. It ends earlier if a fix is
+released or if the vulnerability is being actively exploited. We can extend it
+by mutual agreement. If no fix is released by the end of the period, we publish
+the advisory with the workarounds we know of.
 
 If the vulnerability is being actively exploited, we publish earlier, with the
-workarounds we know of, and we expedite the fix and the advisory.
+workarounds we know of, and we expedite the fix.
 
 ### Safe harbour
 
