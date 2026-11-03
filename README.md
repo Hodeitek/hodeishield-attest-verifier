@@ -391,8 +391,9 @@ the signature is post-quantum (ML-DSA-65, FIPS 204).
 containing a wrong claim is a signed wrong claim. It does not prove the key
 belongs to Hodeitek (you are trusting the Web PKI for that one binding — pin the
 key's `kid`, see [Pinning the key](#pinning-the-key)). It does not prove anything about accredited certification bodies.
-And §6 item 8 states, without softening, that the signing key is held in
-software rather than in an HSM, and what that means for you.
+Attestations are signed with dedicated, verifiable keys; see
+[Pinning the key](#pinning-the-key) and the verification steps in
+[§4 of the verification document](docs/security/attest-verification.md) for how to check them.
 
 ### Pinning the key
 
