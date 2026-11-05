@@ -30,7 +30,14 @@ bash tools/mldsa-wasm/build.sh OUT_DIR
 
 Needs docker (or `DOCKER=podman`) and network access to crates.io and
 static.rust-lang.org. It writes `mldsa_wasm.wasm`, `mldsa_wasm.js` (the
-Emscripten loader) and `SHA256SUMS` to `OUT_DIR`.
+Emscripten loader) and `SHA256SUMS` to `OUT_DIR`. `IMAGE` sets the tag of the
+build image (default `mldsa-wasm-build:local`); like `DOCKER`, `RUN_USER` and
+`SRC_MOUNT` it must not change the output.
+
+`expected.sha256` in this directory holds the SHA-256 of `mldsa_wasm.wasm` and
+`mldsa_wasm.js` that this recipe gives. CI's `wasm-build` job compares a fresh
+build with it, and `tools/verify-page/check.sh` refuses a page whose module
+files differ from it.
 
 Pinned:
 
