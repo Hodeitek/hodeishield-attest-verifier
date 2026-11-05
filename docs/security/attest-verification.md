@@ -179,7 +179,8 @@ against each other when you supply both. Given an attached JWS **alone**, the
 script decodes the embedded envelope back into the claims it encodes and holds
 them to every check a detached document gets: freshness, `--expect-slug`,
 `--expect-issuer`, `--expect-nonce` and revocation. A payload that does not
-decode as the envelope is "could not check" (exit 2), never a pass. The
+decode as the envelope is a failed check (exit 1, `payload_not_envelope`), never
+a pass. The
 signature is over `protected.payload` in both forms, so anyone holding a
 detached document can re-serialise it as attached; neither form is weaker.
 
