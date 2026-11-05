@@ -284,7 +284,8 @@ and cannot tell you is in
 ## What the output shows
 
 The checks print as `PASS`, `WARN` and `FAIL` lines, in numbered sections, with
-the last line giving the verdict. What the document *says* (its overall band
+the last line giving the verdict. Colour is used only when stdout is a terminal
+and `NO_COLOR` is unset or empty. What the document *says* (its overall band
 and, for each framework, its name and band, plus the subject, `generatedAt`,
 `lastCheckedAt` and visibility) is printed in an "Attested content" block just
 before the verdict, and only when the run ends `VERIFIED` (or `GOOD` in
