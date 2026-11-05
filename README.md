@@ -541,10 +541,15 @@ The verifier checks two document formats, and no other version of either:
 
 ## Verifying a release
 
-Download these eight files from the GitHub release you are using:
-`verify-attestation.sh`, `keys-statement.json`, `verify-attestation.sh.spdx.json`,
-`SHA256SUMS`, `SHA256SUMS.sigstore.json`, `verify-attestation.sh.sigstore.json`,
-`keys-statement.json.sigstore.json` and `verify-attestation.sh.spdx.json.sigstore.json`.
+A release has ten files: `verify-attestation.sh`, `keys-statement.json`,
+`verify-attestation.sh.spdx.json`, `verify-page-<TAG>.tar.gz` (the
+[browser page](#without-a-terminal)), `SHA256SUMS`, and one Sigstore bundle
+for each of those five: `verify-attestation.sh.sigstore.json`,
+`keys-statement.json.sigstore.json`, `verify-attestation.sh.spdx.json.sigstore.json`,
+`verify-page-<TAG>.tar.gz.sigstore.json` and `SHA256SUMS.sigstore.json`.
+`SHA256SUMS` lists the first four, so download all ten (for example
+`gh release download <TAG> -R Hodeitek/hodeishield-attest-verifier`), or run
+`sha256sum -c SHA256SUMS --ignore-missing` if you leave the page bundle out.
 Then:
 
 ```bash
@@ -569,6 +574,11 @@ cosign verify-blob --bundle verify-attestation.sh.spdx.json.sigstore.json \
   --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   verify-attestation.sh.spdx.json
+
+cosign verify-blob --bundle verify-page-<TAG>.tar.gz.sigstore.json \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  verify-page-<TAG>.tar.gz
 ```
 
 Replace `<TAG>` with the release tag. `keys-statement.json` is the signed list of
@@ -586,7 +596,9 @@ that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
 the reason it is a short, single, readable script.
 
-Planned: an in-browser verifier page, published from this repository only from signed release tags, so that you can check its bytes against the release. See [the decision record](docs/security/browser-verifier.md).
+`verify-page-<TAG>.tar.gz` is the in-browser page served at
+<https://verify.hodeishield.com>; how to compare what the site serves with it is
+in [docs/security/browser-verifier.md](docs/security/browser-verifier.md#how-to-check-what-you-are-served).
 
 ## Tests and CI
 

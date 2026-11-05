@@ -56,8 +56,8 @@ workflow has `contents: read`. Every action is pinned by its full commit SHA.
 The release asset is the reference. To check that what `verify.hodeishield.com`
 serves is what we released:
 
-1. Download `verify-page-<tag>.tar.gz`, `SHA256SUMS` and
-   `verify-page-<tag>.tar.gz.sigstore.json` from the
+1. Download `verify-page-<tag>.tar.gz`, `SHA256SUMS`,
+   `verify-page-<tag>.tar.gz.sigstore.json` and `SHA256SUMS.sigstore.json` from the
    [release](https://github.com/Hodeitek/hodeishield-attest-verifier/releases).
 2. Compare the hash. It must match the line in `SHA256SUMS` and the hash in the
    release notes:
