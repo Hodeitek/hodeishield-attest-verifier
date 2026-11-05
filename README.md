@@ -529,7 +529,7 @@ The verifier checks two document formats, and no other version of either:
 
 | Verifier version | Attestation | Status list |
 |---|---|---|
-| every release so far (v1.0.0 to v1.2.1) | `attest.attestation.v1` | `attest.statuslist.v1` |
+| every release so far (v1.0.0 to v1.6.2) | `attest.attestation.v1` | `attest.statuslist.v1` |
 
 - A change to either format that older verifiers cannot read is announced at
   least 90 days before it takes effect.
