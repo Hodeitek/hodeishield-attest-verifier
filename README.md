@@ -157,9 +157,13 @@ Releases after v1.4.0 also publish a ready-made image,
 `ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
 (`:vX.Y.Z`). There is no `latest` tag, and v1.4.0 and earlier
 releases have no image. It has `openssl` and `python3` built in, runs as a non-root user,
-and its entrypoint is the verifier, so it needs no network to run. Take its
-digest from the release page, and pin that digest, not the tag. Check the
-signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
+and its entrypoint is the verifier, so it needs no network to run. The release
+notes do not carry the image digest: read it from the registry for the tag, with
+`docker buildx imagetools inspect ghcr.io/hodeitek/hodeishield-attest-verifier:<TAG>`
+(the `Digest:` line; the run summary of the "Container image" workflow shows it
+too), and pin that digest, not the tag. Check the signature first, with
+[cosign](https://docs.sigstore.dev/cosign/installation/): it ties the digest to
+the image workflow at that tag.
 
 ```bash
 cosign verify ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
@@ -189,9 +193,9 @@ docker run --rm --entrypoint sha256sum \
 
 The image label `com.hodeitek.verifier.script-sha256` records the same value
 (`docker inspect`). Treat the label as information: the signed digest and this
-command are the evidence. The release workflow also checks the script against
-the release's signed `SHA256SUMS` before it builds the image, and again inside
-the build. The image carries a signed SBOM; fetch and check it with
+command are the evidence. The image workflow (`image.yml`) also checks the
+script against the release's signed `SHA256SUMS` before it builds the image, and
+again inside the build. The image carries a signed SBOM; fetch and check it with
 `gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier --predicate-type https://spdx.dev/Document/v2.3`.
 The SBOM is the only attestation; without `--predicate-type`, `gh` looks for
 SLSA provenance and reports HTTP 404.
