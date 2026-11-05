@@ -200,9 +200,12 @@ The protected header is a **closed set** of exactly three members:
 | `kid`  | 22 base64url chars       | Names which key signed. Derivable from the key bytes (§4.2), so a key document cannot mislabel itself.                                                                                                                                                                                                          |
 | `typ`  | `application/attest+jws` | RFC 8725 §3.11 explicit typing. It stops an attestation being replayed into any other JWS-consuming surface.                                                                                                                                                                                                    |
 
-A `crit` member, or any fourth member, is a rejection: the verifier reports
-`malformed_document` (the header members it found, against exactly `alg,kid,typ`)
-and fails, for a posture attestation and for a status list alike. If we ever need
+A `crit` member, or any fourth member, is a rejection: the verifier prints a
+`FAIL` line starting `malformed_document —` (the header members it found, against
+exactly `alg,kid,typ`), and for `crit` a second one, for a posture attestation and
+for a status list alike. The reason codes are `header_not_allowed` (exit 1) for an
+attestation, and `status_unknown_unsupported_crit` or
+`status_unknown_header_not_allowed` (exit 3) for a status list. If we ever need
 to add a header field, that is a new `typ` and a new document version, not a
 silent extension.
 

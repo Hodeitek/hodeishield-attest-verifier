@@ -4,8 +4,11 @@ Every check the verifier makes has a stable, machine-readable reason code. The
 codes are part of the public interface **from v1.4.0**: they are only ever
 added, never renamed or removed, so a program can rely on them.
 
-The text output does not print the codes. With `--json` the verifier emits
-them: each entry of `checks`, and `reason`, the code that decided the exit
+The text output does not print the codes as such. Many `FAIL` lines start with
+a label and ` —`, but the label is not always the code: `retired_key —` is printed
+for both `retired_key` and `status_unknown_retired_key`, and `malformed_document —`
+for `header_not_allowed` and `payload_not_envelope`. With `--json` the verifier
+emits the codes: each entry of `checks`, and `reason`, the code that decided the exit
 code, are codes from this file (see
 [json-output.md](json-output.md)).
 
