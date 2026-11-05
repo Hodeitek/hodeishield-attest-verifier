@@ -610,7 +610,8 @@ in [docs/security/browser-verifier.md](docs/security/browser-verifier.md#how-to-
 - `shellcheck` runs on the shell scripts.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
-  printed. It needs bash, OpenSSL ≥ 3.5 and `python3` ≥ 3.7, and no network.
+  printed. It needs bash, OpenSSL ≥ 3.5, `python3` ≥ 3.7 and `curl` (its URL
+  cases fetch from a local server), and no network.
   The anchor cases use a test double in place of cosign.
 - `bash tests/sbom.sh` generates the release SBOM for the current script and
   checks it: valid SPDX JSON, the script's sha256 and version, the licence, the
@@ -643,6 +644,9 @@ in [docs/security/browser-verifier.md](docs/security/browser-verifier.md#how-to-
 - A pull request that changes the Dockerfile builds the signed-image
   candidate without pushing it and runs `tests/image-smoke.sh` in it
   (`--help`, a non-root user, and the published `valid-detached` vector).
+- The browser page has its own tests (`tests/web-static.sh`, `tests/web-bundle.sh`,
+  `tests/web-vectors.sh`, `tests/web-differential.sh`), described in
+  [docs/security/browser-verifier.md](docs/security/browser-verifier.md#tests).
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document

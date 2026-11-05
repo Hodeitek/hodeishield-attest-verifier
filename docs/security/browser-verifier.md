@@ -317,7 +317,7 @@ manifest inside the archive is independent of that.
 
 ## Tests
 
-- `bash tests/web-vectors.sh [--wasm DIR]`: all 136 cases of `tests/vectors/v1`, with
+- `bash tests/web-vectors.sh [--wasm DIR] [--browsers chrome,firefox] [--keep]`: all 136 cases of `tests/vectors/v1`, with
   the fixed time of each case (`--now`), in headless Chrome and Firefox, from
   `http://127.0.0.1` and from disk, on the page as the bundle ships it. Each case
   must give the verdict, exit code and reason code of the case (with the one
@@ -353,8 +353,11 @@ manifest inside the archive is independent of that.
   direction characters in signed or supplied text (shown as "?").
 - `bash tests/web-static.sh`: the policy and the code, the bundled fonts and logo,
   and the six languages.
-- `bash tests/web-bundle.sh`: the bundle.
-- CI runs them on every pull request (`wasm-build`, `web-static`, `web-vectors`).
+- `bash tests/web-bundle.sh [WASM_DIR]`: the bundle (without `WASM_DIR`, stand-in
+  files take the place of the module).
+- CI (`ci.yml`, on pushes to and pull requests against `dev` and `main`) runs them
+  in the jobs `wasm-build`, `web-static` (which also runs `tests/web-bundle.sh`),
+  `web-vectors` and `web-differential`.
 
 Result, 2026-10-14, Chrome 155.0.8059.39 and Firefox 153.4.0esr on Linux, with the
 module of `tools/mldsa-wasm` (`mldsa_wasm.wasm` SHA-256 `4a3c6a43...87da`): 136 of
