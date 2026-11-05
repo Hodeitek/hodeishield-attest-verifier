@@ -1480,9 +1480,12 @@ scripts/attest/verify-attestation.sh --status-list \
   --check-kid "<the kid you are checking>"
 ```
 
-(You can also pass `--status` / `--status-keys` as `http(s)://` URLs directly —
-the script fetches them itself with `curl` — and add `--check-subject <slug>`
-with `--check-generated-at <RFC3339>` to test the subject dimension too.)
+(You can also pass `--status` / `--status-keys` as URLs directly — the script
+fetches them itself with `curl`. `https://` is expected: an `http://` status list
+is fetched with a warning, and an `http://` status key set is refused, exit 2
+(`status_keys_cleartext_refused`), unless the host is loopback. You can also add
+`--check-subject <slug>` with `--check-generated-at <RFC3339>` to test the
+subject dimension too.)
 
 **Combined — verify a document AND its revocation status in one run**, which is
 the §7 step-2 workflow above and the recommended default when you hold the
