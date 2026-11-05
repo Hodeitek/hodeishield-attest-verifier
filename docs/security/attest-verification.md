@@ -752,6 +752,8 @@ roeFReafBOA_WF3cqfilHA
 #    bytes are a constant of the algorithm, not a HodeiShield value — derive
 #    them yourself from any ML-DSA-65 key with `openssl pkey -pubout -outform DER`.
 printf '308207b2300b0609608648016503040312038207a100' | xxd -r -p > pub.der
+#    Without xxd, the same 22 bytes with python3:
+#    python3 -I -c "import sys;sys.stdout.buffer.write(bytes.fromhex('308207b2300b0609608648016503040312038207a100'))" > pub.der
 cat pub.raw >> pub.der
 openssl pkey -pubin -inform DER -in pub.der -out pub.pem
 openssl pkey -pubin -in pub.pem -noout -text | head -1
