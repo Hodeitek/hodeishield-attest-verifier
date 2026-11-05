@@ -158,7 +158,9 @@ glyph of its own shape, so colour is never the only signal.
 What a reader does: adds the attestation and the issuer's key file (drag and drop,
 the file picker, or pasted text), optionally fills in what they were told to
 expect (organisation, issuer, challenge, oldest age accepted, key identifier) and
-adds the withdrawal list and its key set, and presses one button. The page shows
+adds the withdrawal list and its key set, and presses one button. The oldest age
+accepted is given in minutes (the script's `--max-age-seconds` takes seconds), and
+each file may be at most 5,000,000 bytes (`MAX_BYTES` in `web/js/app.js`). The page shows
 one of seven results, each with what it means and what to do next, a plain list of
 what was looked at, and, behind a disclosure, the technical details: the reason
 code, the exit code the script would give, every check in order, the SHA-256 of the
@@ -205,9 +207,18 @@ another message) and gives no verdict if it answers any of them wrongly.
   verified certificate; the page gives `anchor_unverified` for it. Exit code and
   verdict agree. This is the one reason-code difference of the 136 cases, and
   `tests/web/args.js` names it.
-- `--posture` (deprecated), `--json`, `--raw` and `--help` are about a terminal and
-  are not offered. `--now` is not offered in the page (the library takes it, and
-  the tests use it).
+- `--posture` (deprecated), `--json`, `--raw`, `--help` and `--version` are about a
+  terminal and are not offered. `--now` is not offered in the page (the library
+  takes it, and the tests use it).
+- The page takes the attestation as the endpoint serves it, the equivalent of
+  `--attestation`. There is no input for `--jws` with `--claims`, nor for
+  `--pub-b64url` in place of a key set.
+- One key identifier can be pinned, not several (`--expect-kid` repeated for a
+  rotation overlap), and an empty challenge field means "no challenge given", not
+  `--expect-nonce ''` (require none).
+- `--check-kid`, `--check-subject`, `--check-generated-at` and `--min-seq` have no
+  field: with a withdrawal list, the page applies it to the document's own kid,
+  subject and `generatedAt`, as the script always does.
 - The page never fetches a status list or a key set from a URL. The reader gives
   files. The link "Where to get the keys" is an ordinary link to the issuer's
   published key set.
