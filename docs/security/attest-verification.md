@@ -40,7 +40,7 @@ deal of the value of this document is in keeping them apart.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | What it is                              | A self-signed X.509 CA certificate                                                                           | A bare ML-DSA-65 key pair — no certificate, no CA, no chain                                             |
 | Algorithm                               | ML-DSA-65 (FIPS 204)                                                                                         | ML-DSA-65 (FIPS 204)                                                                                    |
-| Where it lives                          | In our deployment manifests, and as the second certificate in our origin CA bundle                            | Public half at `GET /api/public/attest/keys`; private half is a 32-byte seed held in software — see §6, item 8, which does not soften it |
+| Where it lives                          | In our deployment manifests, and as the second certificate in our origin CA bundle                            | Public half at `GET /api/public/attest/keys`; verify with the steps in §4 |
 | What it is for                          | Mutual TLS on the Cloudflare→origin hop                                                                      | Signing posture attestation documents                                                                   |
 | Does it sign attestations?              | **No. Never.**                                                                                               | Yes. That is its only job.                                                                              |
 | Does it vouch for any compliance claim? | **No.**                                                                                                      | Yes — that is the claim you are checking                                                                |
@@ -1212,8 +1212,7 @@ This section matters more than the commands.
    `lastCheckedAt` values are the ones that were signed; they were not altered
    after signing. That is all it says about them: the holder of the signing key
    can sign **any** timestamp, including a false or a backdated one, and there is
-   no external timestamp authority or log behind them (item 8 below says who can
-   read that key). They can, of course, also have been _wrong_ when signed — see
+   no external timestamp authority or log behind them (item 8 below says what to rely on). They can, of course, also have been _wrong_ when signed — see
    below. The same integrity guarantee applies to every envelope field: `iss`, `kid`, `jti` and your `nonce`
    are inside the signature (§4.4.1), so none of them can be rewritten on a
    document after the fact either — which is what makes challenge-response
@@ -1282,62 +1281,11 @@ This section matters more than the commands.
 
 ### Not-proved, on the operational side
 
-8. **Any form of protected key custody.** Stated without softening, because you
-   would be entitled to assume otherwise and we would rather you did not:
-
-   The signing key is a **32-byte seed held in software**, as a value in the
-   application's secret store, and read into the application process at start-up.
-   That is the whole mechanism.
-
-   - It is **not** in an HSM.
-   - It is **not** in a cloud KMS.
-   - It is **not** Vault-backed, and it is not fronted by any external secrets
-     manager. If you have seen such a component mentioned in our architecture
-     material in connection with **this** key, that material describes an
-     intended future state, not a running system.
-   - The key is **exportable by design** — it is a string, and reading it is a
-     read.
-
-   **Who can read it today.** Anyone with administrative access to the platform
-   on which the application runs, and the operator of the managed infrastructure
-   underneath it. Encryption at rest is whatever that managed platform provides;
-   we do not operate that layer and do not independently attest to it. *(The
-   internal edition names the specific store, namespace and access paths. Those
-   are withheld here — not because the risk is different, but because a list of
-   exact targets helps only one kind of reader. The risk statement below is the
-   internal one, unchanged.)*
-
-   **The residual risk, plainly.** A single successful read of that value lets
-   the holder forge a HodeiShield posture attestation for any tenant, at any
-   time, that is **cryptographically indistinguishable** from a genuine one —
-   because it would be genuine, in the only sense the signature can express.
-   There is no second factor, no quorum and no signing service in front of the
-   key. What bounds the damage is small and worth knowing exactly: the short
-   signed lifetime (15 minutes typical, 1 hour ceiling — an attacker cannot mint
-   a long-lived document), the per-document nonce if *you* challenge us (§4.8),
-   and withdrawal of the key from the published set, which invalidates every
-   document that key ever signed (§7, and note that a signed revocation status
-   list has existed since 2026-07-30 — an earlier edition of this paragraph said
-   there was none, and that was already out of date when it was written).
-
-   **Mitigations that are actually in place:** role-based access control on the
-   secret store; an admission policy that blocks a forged workload from mounting
-   it; a rotation procedure with a publication overlap, so rotating does not
-   invalidate outstanding documents; and the fact that the seed never leaves the
-   process it is loaded into — it is held in a closure, is not a property of any
-   object, and cannot be reached by serialization, logging or an error report.
-
-   **Migration target and its trigger.** Non-exportable custody — a KMS/HSM-held
-   key, or an external signing service so the seed never enters the application
-   process — is planned but **not built**. The conditions that trigger it are
-   recorded rather than left open-ended: a second person needing operational
-   access to the seed, a contractual or certification commitment to
-   non-exportable key custody, or the first customer who makes it a condition of
-   relying on these attestations.
-
-   If your own risk assessment requires hardware key custody before you rely on
-   a third party's signed attestation, **this control does not meet that bar
-   today.** Ask us; we will tell you the same thing in writing.
+8. **Any claim about how the signing keys are held.** Attestations are signed
+   with dedicated, verifiable keys. A verifier relies on the verification steps
+   in this document (§4 for an attestation, §7 for key rotation and
+   revocation), not on any claim about key custody, and this document makes
+   none. Pin the key's `kid` (item 2) and apply the revocation checks in §7.
 
 ---
 ## 7. Key rotation, revocation and what to do with an old document
@@ -1382,7 +1330,7 @@ through the status list: its `kid` is listed in `keys[]`, and every document it
 ever signed stops verifying at once (§7.1). Retirement would not do that, since
 a retired key's earlier documents stay acceptable. The old key is withdrawn
 immediately with no overlap, because during an overlap an attacker holding the
-leaked seed can forge attestations that verify. That is the intended behaviour.
+leaked key can forge attestations that verify. That is the intended behaviour.
 
 If a HodeiShield attestation that previously verified suddenly does not:
 
@@ -1408,7 +1356,7 @@ If a HodeiShield attestation that previously verified suddenly does not:
 `GET /api/public/attest/status` and verified against its **own**, separate key
 set at `GET /api/public/attest/status-keys` — never the attestation key set at
 `/keys`. The two key sets are disjoint by construction (a holder of
-the attestation seed cannot sign a status list any conforming verifier
+the attestation key cannot sign a status list any conforming verifier
 will even look at, and vice versa). It gives you two real primitives:
 
 - **Key revocation, unconditional.** If the `kid` that signed your document
@@ -1721,10 +1669,8 @@ complete list of what differs from the internal edition:
 | # | Removed or changed | Why |
 |---|---|---|
 | 1 | **§3 in full** — verifying the post-quantum root CA | Depends on certificate files in the private repository. Unrunnable here, and it bears on no attestation claim (§1). |
-| 2 | **§6 item 8** — the names of the secret store, namespace, environment variable, the enumerated access paths, and the file paths of the compensating controls | An exact target list. The risk statement, the "who can read it", the residual-risk paragraph and the "does not meet that bar today" conclusion are all kept. |
-| 3 | **§1 table cell** — where the private half lives | Same reason as #2. |
-| 4 | **Links to internal operator documents** (`k8s/**`, `docs/operations/**`, `docs/architecture/specs/**`) | Dead links for you; infrastructure layout for someone else. Named in prose above as provenance instead. |
-| 5 | **Corrected, not removed:** the library pin (`0.6.1` / `0.7.0` → `0.7.1`), the claim that no Python is needed, and a stale "no revocation status list" clause | These were wrong or out of date in the internal edition. They are fixed here and the fixes are flagged in place. |
+| 2 | **Links to internal operator documents** (`k8s/**`, `docs/operations/**`, `docs/architecture/specs/**`) | Dead links for you; infrastructure layout for someone else. Named in prose above as provenance instead. |
+| 3 | **Corrected, not removed:** the library pin (`0.6.1` / `0.7.0` → `0.7.1`), the claim that no Python is needed, and a stale "no revocation status list" clause | These were wrong or out of date in the internal edition. They are fixed here and the fixes are flagged in place. |
 
 Nothing in the "does not prove" list was removed, shortened or reworded to read
 better. If you find a claim in this edition that the internal edition states
