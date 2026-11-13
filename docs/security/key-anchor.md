@@ -217,7 +217,7 @@ a key set whose key is not one the issuer published through this repository: the
 `kid` of the signing key must be in a statement signed by this repository's
 release workflow.
 
-**The anchor trusts any `v*` tag built by `release.yml` in this repository.**
+**The anchor trusts any `vN.N.N` tag built by `release.yml` in this repository.**
 The release workflow signs the statement as soon as a `v*` tag is pushed, for
 whatever commit the tag points to, before the draft release exists and whether
 or not it is ever published. The signature and its certificate are in the public

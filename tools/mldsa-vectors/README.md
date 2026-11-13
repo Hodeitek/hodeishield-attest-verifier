@@ -48,7 +48,8 @@ when vectors are added; never lower it.
 
 The workflow `.github/workflows/mldsa-vectors.yml` runs it in the official Rust
 image (pinned by version and digest) on changes to this directory, to
-`tests/vectors/**` or to the workflow, and by hand.
+`tests/vectors/**`, to `scripts/attest/verify-attestation.sh` or to the workflow,
+and by hand.
 
 ## How a case is mapped to a verdict
 
@@ -78,9 +79,9 @@ key is the entry of the case's key set (`--jwks`, or `--status-keys` for a
 status list) whose `kid` equals the header `kid`; its `pub` member (base64url) is
 the raw FIPS 204 public key. The ML-DSA context string is empty.
 
-Result on 2026-10-11 (aws-lc-rs 1.18.1, aws-lc-sys 0.45.0): 118 cases, 47
-checked and agreed (50 signature verdicts: 3 status-list cases also check the
-attestation signature), 0 disagreed, 71 skipped (3 anchor, 68 with no
+Result on 2026-11-04 (aws-lc-rs 1.18.1, aws-lc-sys 0.45.0, rustc 1.97.0, built
+with `cargo build --release --locked`): 136 cases, 52 checked and agreed (56
+signature verdicts compared), 0 disagreed, 84 skipped (3 anchor, 81 with no
 signature verdict in the manifest).
 
 ## Dependencies

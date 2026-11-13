@@ -4,8 +4,11 @@ Every check the verifier makes has a stable, machine-readable reason code. The
 codes are part of the public interface **from v1.4.0**: they are only ever
 added, never renamed or removed, so a program can rely on them.
 
-The text output does not print the codes. With `--json` the verifier emits
-them: each entry of `checks`, and `reason`, the code that decided the exit
+The text output does not print the codes as such. Many `FAIL` lines start with
+a label and ` —`, but the label is not always the code: `retired_key —` is printed
+for both `retired_key` and `status_unknown_retired_key`, and `malformed_document —`
+for `header_not_allowed` and `payload_not_envelope`. With `--json` the verifier
+emits the codes: each entry of `checks`, and `reason`, the code that decided the exit
 code, are codes from this file (see
 [json-output.md](json-output.md)).
 
@@ -46,7 +49,7 @@ cannot emit.
 | Code | Meaning | Result | Exit | Mode | Vectors |
 |---|---|---|---|---|---|
 | `usage` | An argument error, found before any check ran. Only ever the `reason` of a `--json` result, never an entry of `checks`. | fail | 2 | both |  |
-| `status_source_missing` | `--status-list` without `--status`. | fail | 2 | both |  |
+| `status_source_missing` | `--status-list` without `--status`. | fail | 2 | status-list |  |
 | `status_keys_source_missing` | `--status-list` without `--status-keys`. | fail | 2 | status-list |  |
 | `status_list_nothing_to_check` | `--status-list` with no document, `--check-kid` or `--check-subject`. | fail | 2 | status-list |  |
 | `expect_kid_needs_attestation` | `--expect-kid` without `--attestation` or `--jws`. | fail | 2 | both |  |
@@ -64,7 +67,7 @@ cannot emit.
 | `openssl_mldsa65_missing` | This OpenSSL does not offer ML-DSA-65. | fail | 2 | both |  |
 | `openssl_mldsa65_available` | OpenSSL offers ML-DSA-65. | pass | 0 | both |  |
 | `python3_missing` | `python3` is needed for this step and is not installed. | fail | 2 | both |  |
-| `jq_missing` | Retired in v1.4.1: never emitted, and the code is not reused. It meant `jq` was not installed; `--status-list` no longer needs it. | fail | 2 | status-list |  |
+| `jq_missing` | Retired in v1.5.0: never emitted, and the code is not reused. It meant `jq` was not installed; `--status-list` no longer needs it. | fail | 2 | status-list |  |
 | `tools_present` | `python3` is present. | pass | 0 | status-list |  |
 | `curl_missing` | `curl` is needed to fetch a URL and is not installed. | fail | 2 | status-list |  |
 | `spki_tool_missing` | Neither `xxd` nor `python3` is available to build the key header. | fail | 2 | both |  |
@@ -189,11 +192,11 @@ signed would otherwise be accepted. A reader who runs an OLD verifier can still 
 | `anchor_statement_older` | The statement is from a release older than this verifier (`VERIFIER_VERSION`), compared numerically. Checked before the content is read. | fail | 2 | both | 1: `anchor-statement-older-than-verifier` |
 | `anchor_malformed` | The verified statement is not strict JSON, has a duplicate member, or is not a well-formed `hodeishield.keys.statement.v1`. | fail | 2 | both |  |
 | `anchor_verified` | cosign verified the statement under the fixed identity. | pass | 0 | both |  |
-| `anchor_issuer_matches` | `iss` is the issuer the statement names. | pass | 0 | attestation |  |
-| `anchor_issuer_mismatch` | `iss` is not the issuer the statement names (an empty `iss` included). | fail | 1 | attestation |  |
+| `anchor_issuer_matches` | `iss` is the issuer the statement names. | pass | 0 | both |  |
+| `anchor_issuer_mismatch` | `iss` is not the issuer the statement names (an empty `iss` included). | fail | 1 | both |  |
 | `anchor_kid_absent` | The kid recomputed from the key bytes is not listed. | fail | 1 | both |  |
 | `anchor_role_mismatch` | The kid is listed with a role other than `attestation`. | fail | 1 | both |  |
-| `anchor_retired_mismatch` | The statement's `retired_at` and the key set's `hs_retired_at` disagree. | fail | 1 | attestation |  |
+| `anchor_retired_mismatch` | The statement's `retired_at` and the key set's `hs_retired_at` disagree. | fail | 1 | both |  |
 | `anchor_kid_listed` | The statement lists the kid as an attestation key. | pass | 0 | both |  |
 | `anchor_status_kid_absent` | The status-list key's recomputed kid is not listed. | fail | 3 | status-list |  |
 | `anchor_status_role_mismatch` | The status-list kid is listed with a role other than `status-list`. | fail | 3 | status-list |  |

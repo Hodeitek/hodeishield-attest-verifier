@@ -159,7 +159,7 @@ A verified document (`checks` shortened):
 ```json
 {
   "schema": "hodeishield.verifier.result.v1",
-  "verifier": {"version": "1.4.0"},
+  "verifier": {"version": "1.6.2"},
   "mode": "attestation",
   "exit_code": 0,
   "verdict": "verified",
@@ -201,7 +201,7 @@ with `--raw`):
 ```json
 {
   "schema": "hodeishield.verifier.result.v1",
-  "verifier": {"version": "1.4.0"},
+  "verifier": {"version": "1.6.2"},
   "mode": "attestation",
   "exit_code": 1,
   "verdict": "failed",
@@ -232,7 +232,7 @@ An argument error:
 ```json
 {
   "schema": "hodeishield.verifier.result.v1",
-  "verifier": {"version": "1.4.0"},
+  "verifier": {"version": "1.6.2"},
   "mode": "attestation",
   "exit_code": 2,
   "verdict": "could_not_check",

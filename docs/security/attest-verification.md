@@ -179,7 +179,8 @@ against each other when you supply both. Given an attached JWS **alone**, the
 script decodes the embedded envelope back into the claims it encodes and holds
 them to every check a detached document gets: freshness, `--expect-slug`,
 `--expect-issuer`, `--expect-nonce` and revocation. A payload that does not
-decode as the envelope is "could not check" (exit 2), never a pass. The
+decode as the envelope is a failed check (exit 1, `payload_not_envelope`), never
+a pass. The
 signature is over `protected.payload` in both forms, so anyone holding a
 detached document can re-serialise it as attached; neither form is weaker.
 
@@ -199,9 +200,12 @@ The protected header is a **closed set** of exactly three members:
 | `kid`  | 22 base64url chars       | Names which key signed. Derivable from the key bytes (§4.2), so a key document cannot mislabel itself.                                                                                                                                                                                                          |
 | `typ`  | `application/attest+jws` | RFC 8725 §3.11 explicit typing. It stops an attestation being replayed into any other JWS-consuming surface.                                                                                                                                                                                                    |
 
-A `crit` member, or any fourth member, is a rejection: the verifier reports
-`malformed_document` (the header members it found, against exactly `alg,kid,typ`)
-and fails, for a posture attestation and for a status list alike. If we ever need
+A `crit` member, or any fourth member, is a rejection: the verifier prints a
+`FAIL` line starting `malformed_document —` (the header members it found, against
+exactly `alg,kid,typ`), and for `crit` a second one, for a posture attestation and
+for a status list alike. The reason codes are `header_not_allowed` (exit 1) for an
+attestation, and `status_unknown_unsupported_crit` or
+`status_unknown_header_not_allowed` (exit 3) for a status list. If we ever need
 to add a header field, that is a new `typ` and a new document version, not a
 silent extension.
 
@@ -748,6 +752,8 @@ roeFReafBOA_WF3cqfilHA
 #    bytes are a constant of the algorithm, not a HodeiShield value — derive
 #    them yourself from any ML-DSA-65 key with `openssl pkey -pubout -outform DER`.
 printf '308207b2300b0609608648016503040312038207a100' | xxd -r -p > pub.der
+#    Without xxd, the same 22 bytes with python3:
+#    python3 -I -c "import sys;sys.stdout.buffer.write(bytes.fromhex('308207b2300b0609608648016503040312038207a100'))" > pub.der
 cat pub.raw >> pub.der
 openssl pkey -pubin -inform DER -in pub.der -out pub.pem
 openssl pkey -pubin -in pub.pem -noout -text | head -1
@@ -1422,9 +1428,12 @@ scripts/attest/verify-attestation.sh --status-list \
   --check-kid "<the kid you are checking>"
 ```
 
-(You can also pass `--status` / `--status-keys` as `http(s)://` URLs directly —
-the script fetches them itself with `curl` — and add `--check-subject <slug>`
-with `--check-generated-at <RFC3339>` to test the subject dimension too.)
+(You can also pass `--status` / `--status-keys` as URLs directly — the script
+fetches them itself with `curl`. `https://` is expected: an `http://` status list
+is fetched with a warning, and an `http://` status key set is refused, exit 2
+(`status_keys_cleartext_refused`), unless the host is loopback. You can also add
+`--check-subject <slug>` with `--check-generated-at <RFC3339>` to test the
+subject dimension too.)
 
 **Combined — verify a document AND its revocation status in one run**, which is
 the §7 step-2 workflow above and the recommended default when you hold the

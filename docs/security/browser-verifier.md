@@ -56,8 +56,8 @@ workflow has `contents: read`. Every action is pinned by its full commit SHA.
 The release asset is the reference. To check that what `verify.hodeishield.com`
 serves is what we released:
 
-1. Download `verify-page-<tag>.tar.gz`, `SHA256SUMS` and
-   `verify-page-<tag>.tar.gz.sigstore.json` from the
+1. Download `verify-page-<tag>.tar.gz`, `SHA256SUMS`,
+   `verify-page-<tag>.tar.gz.sigstore.json` and `SHA256SUMS.sigstore.json` from the
    [release](https://github.com/Hodeitek/hodeishield-attest-verifier/releases).
 2. Compare the hash. It must match the line in `SHA256SUMS` and the hash in the
    release notes:
@@ -158,7 +158,9 @@ glyph of its own shape, so colour is never the only signal.
 What a reader does: adds the attestation and the issuer's key file (drag and drop,
 the file picker, or pasted text), optionally fills in what they were told to
 expect (organisation, issuer, challenge, oldest age accepted, key identifier) and
-adds the withdrawal list and its key set, and presses one button. The page shows
+adds the withdrawal list and its key set, and presses one button. The oldest age
+accepted is given in minutes (the script's `--max-age-seconds` takes seconds), and
+each file may be at most 5,000,000 bytes (`MAX_BYTES` in `web/js/app.js`). The page shows
 one of seven results, each with what it means and what to do next, a plain list of
 what was looked at, and, behind a disclosure, the technical details: the reason
 code, the exit code the script would give, every check in order, the SHA-256 of the
@@ -205,9 +207,18 @@ another message) and gives no verdict if it answers any of them wrongly.
   verified certificate; the page gives `anchor_unverified` for it. Exit code and
   verdict agree. This is the one reason-code difference of the 136 cases, and
   `tests/web/args.js` names it.
-- `--posture` (deprecated), `--json`, `--raw` and `--help` are about a terminal and
-  are not offered. `--now` is not offered in the page (the library takes it, and
-  the tests use it).
+- `--posture` (deprecated), `--json`, `--raw`, `--help` and `--version` are about a
+  terminal and are not offered. `--now` is not offered in the page (the library
+  takes it, and the tests use it).
+- The page takes the attestation as the endpoint serves it, the equivalent of
+  `--attestation`. There is no input for `--jws` with `--claims`, nor for
+  `--pub-b64url` in place of a key set.
+- One key identifier can be pinned, not several (`--expect-kid` repeated for a
+  rotation overlap), and an empty challenge field means "no challenge given", not
+  `--expect-nonce ''` (require none).
+- `--check-kid`, `--check-subject`, `--check-generated-at` and `--min-seq` have no
+  field: with a withdrawal list, the page applies it to the document's own kid,
+  subject and `generatedAt`, as the script always does.
 - The page never fetches a status list or a key set from a URL. The reader gives
   files. The link "Where to get the keys" is an ordinary link to the issuer's
   published key set.
@@ -317,7 +328,7 @@ manifest inside the archive is independent of that.
 
 ## Tests
 
-- `bash tests/web-vectors.sh [--wasm DIR]`: all 136 cases of `tests/vectors/v1`, with
+- `bash tests/web-vectors.sh [--wasm DIR] [--browsers chrome,firefox] [--keep]`: all 136 cases of `tests/vectors/v1`, with
   the fixed time of each case (`--now`), in headless Chrome and Firefox, from
   `http://127.0.0.1` and from disk, on the page as the bundle ships it. Each case
   must give the verdict, exit code and reason code of the case (with the one
@@ -353,8 +364,11 @@ manifest inside the archive is independent of that.
   direction characters in signed or supplied text (shown as "?").
 - `bash tests/web-static.sh`: the policy and the code, the bundled fonts and logo,
   and the six languages.
-- `bash tests/web-bundle.sh`: the bundle.
-- CI runs them on every pull request (`wasm-build`, `web-static`, `web-vectors`).
+- `bash tests/web-bundle.sh [WASM_DIR]`: the bundle (without `WASM_DIR`, stand-in
+  files take the place of the module).
+- CI (`ci.yml`, on pushes to and pull requests against `dev` and `main`) runs them
+  in the jobs `wasm-build`, `web-static` (which also runs `tests/web-bundle.sh`),
+  `web-vectors` and `web-differential`.
 
 Result, 2026-10-14, Chrome 155.0.8059.39 and Firefox 153.4.0esr on Linux, with the
 module of `tools/mldsa-wasm` (`mldsa_wasm.wasm` SHA-256 `4a3c6a43...87da`): 136 of

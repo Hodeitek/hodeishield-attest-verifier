@@ -157,9 +157,13 @@ Releases after v1.4.0 also publish a ready-made image,
 `ghcr.io/hodeitek/hodeishield-attest-verifier`, tagged with the version
 (`:vX.Y.Z`). There is no `latest` tag, and v1.4.0 and earlier
 releases have no image. It has `openssl` and `python3` built in, runs as a non-root user,
-and its entrypoint is the verifier, so it needs no network to run. Take its
-digest from the release page, and pin that digest, not the tag. Check the
-signature first, with [cosign](https://docs.sigstore.dev/cosign/installation/):
+and its entrypoint is the verifier, so it needs no network to run. The release
+notes do not carry the image digest: read it from the registry for the tag, with
+`docker buildx imagetools inspect ghcr.io/hodeitek/hodeishield-attest-verifier:<TAG>`
+(the `Digest:` line; the run summary of the "Container image" workflow shows it
+too), and pin that digest, not the tag. Check the signature first, with
+[cosign](https://docs.sigstore.dev/cosign/installation/): it ties the digest to
+the image workflow at that tag.
 
 ```bash
 cosign verify ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> \
@@ -189,9 +193,9 @@ docker run --rm --entrypoint sha256sum \
 
 The image label `com.hodeitek.verifier.script-sha256` records the same value
 (`docker inspect`). Treat the label as information: the signed digest and this
-command are the evidence. The release workflow also checks the script against
-the release's signed `SHA256SUMS` before it builds the image, and again inside
-the build. The image carries a signed SBOM; fetch and check it with
+command are the evidence. The image workflow (`image.yml`) also checks the
+script against the release's signed `SHA256SUMS` before it builds the image, and
+again inside the build. The image carries a signed SBOM; fetch and check it with
 `gh attestation verify oci://ghcr.io/hodeitek/hodeishield-attest-verifier@sha256:<digest> --repo Hodeitek/hodeishield-attest-verifier --predicate-type https://spdx.dev/Document/v2.3`.
 The SBOM is the only attestation; without `--predicate-type`, `gh` looks for
 SLSA provenance and reports HTTP 404.
@@ -280,7 +284,8 @@ and cannot tell you is in
 ## What the output shows
 
 The checks print as `PASS`, `WARN` and `FAIL` lines, in numbered sections, with
-the last line giving the verdict. What the document *says* (its overall band
+the last line giving the verdict. Colour is used only when stdout is a terminal
+and `NO_COLOR` is unset or empty. What the document *says* (its overall band
 and, for each framework, its name and band, plus the subject, `generatedAt`,
 `lastCheckedAt` and visibility) is printed in an "Attested content" block just
 before the verdict, and only when the run ends `VERIFIED` (or `GOOD` in
@@ -466,9 +471,10 @@ bash scripts/attest/verify-attestation.sh --attestation att.json --jwks jwks.jso
   from the certificate cosign verified. That certificate must also carry this
   repository's numeric GitHub ID (Fulcio's Source Repository Identifier), so a
   repository that took over the name is not accepted.
-- The anchor accepts a statement signed for any `v*` tag that `release.yml` of
-  this repository built, published or not: the workflow signs when the tag is
-  pushed. See "Consequences" in [the decision record](docs/security/key-anchor.md).
+- The anchor accepts a statement signed for any `vN.N.N` tag that `release.yml`
+  of this repository built, published or not (`release.yml` also runs for other
+  `v*` tags, but the identity the script requires names a `vN.N.N` tag): the
+  workflow signs when the tag is pushed. See "Consequences" in [the decision record](docs/security/key-anchor.md).
 - Exit 2, "anchor could not be checked", when cosign is missing or older, the
   bundle is not v0.3, or the statement does not verify (wrong identity, altered
   statement, unreadable bundle, no trust root), or is not a well-formed statement. This is by design:
@@ -525,7 +531,7 @@ The verifier checks two document formats, and no other version of either:
 
 | Verifier version | Attestation | Status list |
 |---|---|---|
-| every release so far (v1.0.0 to v1.2.1) | `attest.attestation.v1` | `attest.statuslist.v1` |
+| every release so far (v1.0.0 to v1.6.2) | `attest.attestation.v1` | `attest.statuslist.v1` |
 
 - A change to either format that older verifiers cannot read is announced at
   least 90 days before it takes effect.
@@ -542,10 +548,15 @@ The verifier checks two document formats, and no other version of either:
 
 ## Verifying a release
 
-Download these eight files from the GitHub release you are using:
-`verify-attestation.sh`, `keys-statement.json`, `verify-attestation.sh.spdx.json`,
-`SHA256SUMS`, `SHA256SUMS.sigstore.json`, `verify-attestation.sh.sigstore.json`,
-`keys-statement.json.sigstore.json` and `verify-attestation.sh.spdx.json.sigstore.json`.
+A release has ten files: `verify-attestation.sh`, `keys-statement.json`,
+`verify-attestation.sh.spdx.json`, `verify-page-<TAG>.tar.gz` (the
+[browser page](#without-a-terminal)), `SHA256SUMS`, and one Sigstore bundle
+for each of those five: `verify-attestation.sh.sigstore.json`,
+`keys-statement.json.sigstore.json`, `verify-attestation.sh.spdx.json.sigstore.json`,
+`verify-page-<TAG>.tar.gz.sigstore.json` and `SHA256SUMS.sigstore.json`.
+`SHA256SUMS` lists the first four, so download all ten (for example
+`gh release download <TAG> -R Hodeitek/hodeishield-attest-verifier`), or run
+`sha256sum -c SHA256SUMS --ignore-missing` if you leave the page bundle out.
 Then:
 
 ```bash
@@ -570,6 +581,11 @@ cosign verify-blob --bundle verify-attestation.sh.spdx.json.sigstore.json \
   --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   verify-attestation.sh.spdx.json
+
+cosign verify-blob --bundle verify-page-<TAG>.tar.gz.sigstore.json \
+  --certificate-identity "https://github.com/Hodeitek/hodeishield-attest-verifier/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  verify-page-<TAG>.tar.gz
 ```
 
 Replace `<TAG>` with the release tag. `keys-statement.json` is the signed list of
@@ -587,14 +603,17 @@ that tag of this repository by its release workflow, and that the signing was
 logged in Rekor. The tag itself is signed; GitHub shows it as Verified. It does **not** prove the verifier is correct. Read it; that is
 the reason it is a short, single, readable script.
 
-Planned: an in-browser verifier page, published from this repository only from signed release tags, so that you can check its bytes against the release. See [the decision record](docs/security/browser-verifier.md).
+`verify-page-<TAG>.tar.gz` is the in-browser page served at
+<https://verify.hodeishield.com>; how to compare what the site serves with it is
+in [docs/security/browser-verifier.md](docs/security/browser-verifier.md#how-to-check-what-you-are-served).
 
 ## Tests and CI
 
 - `shellcheck` runs on the shell scripts.
 - `bash tests/run.sh` runs the offline acceptance suite: every case mints its own
   documents with a throwaway key and asserts both the exit code and the reason
-  printed. It needs bash, OpenSSL ≥ 3.5 and `python3` ≥ 3.7, and no network.
+  printed. It needs bash, OpenSSL ≥ 3.5, `python3` ≥ 3.7 and `curl` (its URL
+  cases fetch from a local server), and no network.
   The anchor cases use a test double in place of cosign.
 - `bash tests/sbom.sh` generates the release SBOM for the current script and
   checks it: valid SPDX JSON, the script's sha256 and version, the licence, the
@@ -627,6 +646,9 @@ Planned: an in-browser verifier page, published from this repository only from s
 - A pull request that changes the Dockerfile builds the signed-image
   candidate without pushing it and runs `tests/image-smoke.sh` in it
   (`--help`, a non-root user, and the published `valid-detached` vector).
+- The browser page has its own tests (`tests/web-static.sh`, `tests/web-bundle.sh`,
+  `tests/web-vectors.sh`, `tests/web-differential.sh`), described in
+  [docs/security/browser-verifier.md](docs/security/browser-verifier.md#tests).
 - On every push, pull request and once a day (the "Live check" badge above),
   `bash tests/live.sh` runs the verifier against the production
   `talmaren-payments` attestation and the status list, exactly as above. A network outage is reported as a warning; a document
